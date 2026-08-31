@@ -307,3 +307,40 @@ func TestTheDefaultTokenIsUnderTheHome(t *testing.T) {
 		t.Errorf("error = %q", errb.String())
 	}
 }
+
+// Every spelling git writes a remote in, including the one that used to be
+// refused: `ssh://git@github.com/owner/repo.git`, which is what `git remote add`
+// produces from an ssh:// URL and what every repository in this fleet has.
+func TestRepoFromRemote(t *testing.T) {
+	for _, c := range []struct {
+		url, want string
+	}{
+		{"ssh://git@github.com/go-crdt/crdt.git", "go-crdt/crdt"},
+		{"ssh://git@github.com/go-crdt/crdt", "go-crdt/crdt"},
+		{"git@github.com:go-crdt/crdt.git", "go-crdt/crdt"},
+		{"https://github.com/go-crdt/crdt.git", "go-crdt/crdt"},
+		{"https://github.com/go-crdt/crdt", "go-crdt/crdt"},
+		{"  ssh://git@github.com/go-crdt/crdt.git\n", "go-crdt/crdt"},
+	} {
+		got, err := repoFromRemote(c.url)
+		if err != nil {
+			t.Errorf("repoFromRemote(%q): %v", c.url, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("repoFromRemote(%q) = %q, want %q", c.url, got, c.want)
+		}
+	}
+
+	// And what is not a repository is still refused rather than guessed at.
+	for _, url := range []string{
+		"",
+		"ssh://git@github.com/",
+		"ssh://git@github.com/one/two/three",
+		"https://example.com/go-crdt/crdt.git",
+	} {
+		if got, err := repoFromRemote(url); err == nil {
+			t.Errorf("repoFromRemote(%q) = %q, want an error", url, got)
+		}
+	}
+}
