@@ -190,10 +190,19 @@ func originRepo() (string, error) {
 	if err != nil {
 		return "", errors.New("no repository given and no origin remote to ask")
 	}
+	return repoFromRemote(url)
+}
+
+// repoFromRemote reads owner/repo out of a remote URL, in every spelling git
+// writes one: scp-like (git@github.com:owner/repo), https, and ssh:// with the
+// userinfo in front. The third is what `git remote add` writes when it is given
+// an ssh:// URL and it is not a rare shape -- every repository in this fleet has
+// one -- so a parser that handles only the first two refuses the common case.
+func repoFromRemote(url string) (string, error) {
 	url = strings.TrimSuffix(strings.TrimSpace(url), ".git")
-	url = strings.TrimPrefix(url, "https://github.com/")
-	if i := strings.Index(url, "github.com:"); i >= 0 {
-		url = url[i+len("github.com:"):]
+	// Everything after the host, whichever separator follows it.
+	if i := strings.Index(url, "github.com"); i >= 0 {
+		url = strings.TrimLeft(url[i+len("github.com"):], ":/")
 	}
 	if strings.Count(url, "/") != 1 || url == "" {
 		return "", fmt.Errorf("cannot read owner/repo out of the origin remote")
