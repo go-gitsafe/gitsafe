@@ -185,9 +185,17 @@ func TestTheNumberAndRepositoryAreRead(t *testing.T) {
 	if _, _, err := target([]string{"7"}); err == nil {
 		t.Error("no origin remote and no repository was accepted")
 	}
+	// A deeper path keeps its LAST TWO elements rather than being refused: a
+	// GitHub Enterprise remote carries a prefix before owner/repo, and
+	// refusing those would be strictness that helps nobody. What is refused is
+	// a URL with no owner/repo in it at all, which the cases below cover.
 	gitOutput = func(...string) (string, error) { return "https://example.invalid/one/two/three", nil }
+	if repo, _, err := target([]string{"7"}); err != nil || repo != "two/three" {
+		t.Errorf("a deeper path gave %q, %v", repo, err)
+	}
+	gitOutput = func(...string) (string, error) { return "https://github.com", nil }
 	if _, _, err := target([]string{"7"}); err == nil {
-		t.Error("a remote that is not owner/repo was accepted")
+		t.Error("a URL with no repository in it was accepted")
 	}
 }
 
@@ -341,6 +349,33 @@ func TestRepoFromRemote(t *testing.T) {
 	} {
 		if got, err := repoFromRemote(url); err == nil {
 			t.Errorf("repoFromRemote(%q) = %q, want an error", url, got)
+		}
+	}
+}
+
+// TestEveryShapeOfRemote is a defect this tool hit on its first real day: it
+// knew the https shape and refused every repository reached another way.
+//
+// The one that broke it is the last: ssh over port 443, which is what a machine
+// behind a firewall that blocks port 22 uses, and which most of this fleet's
+// clones are set to.
+func TestEveryShapeOfRemote(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://github.com/go-widgets/toolkit.git":           "go-widgets/toolkit",
+		"https://github.com/go-widgets/toolkit":               "go-widgets/toolkit",
+		"git@github.com:go-widgets/toolkit.git":               "go-widgets/toolkit",
+		"ssh://git@github.com/go-widgets/toolkit.git":         "go-widgets/toolkit",
+		"ssh://git@ssh.github.com:443/go-widgets/toolkit.git": "go-widgets/toolkit",
+		"  https://github.com/go-widgets/toolkit.git\n":       "go-widgets/toolkit",
+	} {
+		got, err := repoFromURL(raw)
+		if err != nil || got != want {
+			t.Errorf("repoFromURL(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "   ", "https://github.com", "nonsense", "https://github.com/only-one-part"} {
+		if got, err := repoFromURL(bad); err == nil {
+			t.Errorf("repoFromURL(%q) = %q, want an error", bad, got)
 		}
 	}
 }
