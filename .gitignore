@@ -3,6 +3,7 @@
 # clone for ever. That has happened in this fleet: 22 MB, and the history had
 # to be rewritten to get it out.
 /gitpush
+/ghmerge
 /ghscopes
 /git-pre-push-guard
 /git-credential-tokenfile
