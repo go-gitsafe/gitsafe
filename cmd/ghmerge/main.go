@@ -185,12 +185,60 @@ func target(args []string) (repo string, number int, err error) {
 }
 
 // originRepo reads owner/repo out of the origin remote.
+//
+// GitHub is reached by more shapes than one, and a tool that knows only the
+// https one refuses to work in half the repositories on this machine:
+//
+//	https://github.com/owner/repo.git
+//	git@github.com:owner/repo.git
+//	ssh://git@github.com/owner/repo.git
+//	ssh://git@ssh.github.com:443/owner/repo.git    (port 443, for a firewall)
+//
+// The last one is why this was rewritten: it is what a machine behind a
+// firewall that blocks port 22 uses, and it was the shape this tool met on its
+// first real day.
+//
+// So the parsing is done by structure rather than by prefix: take everything
+// after the host, and keep the last two path elements.
 func originRepo() (string, error) {
-	url, err := gitOutput("remote", "get-url", "origin")
+	raw, err := gitOutput("remote", "get-url", "origin")
 	if err != nil {
 		return "", errors.New("no repository given and no origin remote to ask")
 	}
-	return repoFromRemote(url)
+	return repoFromURL(raw)
+}
+
+// repoFromURL is originRepo's arithmetic, so it can be tested against every
+// shape without a repository for each.
+func repoFromURL(raw string) (string, error) {
+	s := strings.TrimSuffix(strings.TrimSpace(raw), ".git")
+	if s == "" {
+		return "", errors.New("the origin remote has no URL")
+	}
+	// scp-like: git@host:owner/repo
+	if i := strings.Index(s, ":"); i >= 0 && !strings.Contains(s[:i], "/") {
+		if j := strings.Index(s, "://"); j < 0 {
+			s = s[i+1:]
+		}
+	}
+	// Anything with a scheme: drop it and the host, port and all.
+	if i := strings.Index(s, "://"); i >= 0 {
+		rest := s[i+3:]
+		j := strings.Index(rest, "/")
+		if j < 0 {
+			return "", fmt.Errorf("cannot read owner/repo out of the origin remote")
+		}
+		s = rest[j+1:]
+	}
+	parts := strings.Split(strings.Trim(s, "/"), "/")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("cannot read owner/repo out of the origin remote")
+	}
+	owner, repo := parts[len(parts)-2], parts[len(parts)-1]
+	if owner == "" || repo == "" {
+		return "", fmt.Errorf("cannot read owner/repo out of the origin remote")
+	}
+	return owner + "/" + repo, nil
 }
 
 // repoFromRemote reads owner/repo out of a remote URL, in every spelling git
