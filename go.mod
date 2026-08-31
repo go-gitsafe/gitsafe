@@ -1,3 +1,3 @@
-module github.com/tannevaled/gitsafe
+module github.com/go-gitsafe/gitsafe
 
 go 1.25
