@@ -1,0 +1,49 @@
+name: ci
+on: { push: { branches: [main] }, pull_request: {} }
+permissions: { contents: read }
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      - name: nothing big is tracked
+        shell: bash
+        run: |
+          # A repository carries what it is given for ever, and `go build` with
+          # no -o writes an executable into the working tree named after the
+          # package. One sweeping add later it is in the history of every
+          # clone. That has happened in this fleet: 22 MB, and the history had
+          # to be rewritten to get it out.
+          big=$(git ls-files -z | xargs -0 -I{} find {} -size +1M 2>/dev/null || true)
+          if [ -n "$big" ]; then
+            echo "::error::tracked files over 1 MB:"; echo "$big"; exit 1
+          fi
+      - run: gofmt -l . | tee /tmp/fmt.txt; test ! -s /tmp/fmt.txt
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test -count=1 ./...
+      - run: CGO_ENABLED=1 go test -race -count=1 ./...
+  cross:
+    name: cross ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      - run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build ./...

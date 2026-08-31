@@ -1,0 +1,12 @@
+# Built binaries. `go build` with no -o writes one named after the package into
+# the working tree, and one sweeping add later it is in the history of every
+# clone for ever. That has happened in this fleet: 22 MB, and the history had
+# to be rewritten to get it out.
+/gitpush
+/ghscopes
+/git-pre-push-guard
+/git-credential-tokenfile
+/cmd/*/gitpush
+/cmd/*/ghscopes
+/cmd/*/git-pre-push-guard
+/cmd/*/git-credential-tokenfile
