@@ -18,6 +18,7 @@ Documentation asks. A hook refuses. These are the tools that refuse.
 | `git-pre-push-guard` | The **global** pre-push hook. Refuses a URL that carries a credential, and refuses a write to the branch pull requests land on — whoever runs git, and whatever they run it with. |
 | `gitpush` | Pushes without a token ever reaching a command line: it **names** a credential helper rather than reading the secret, refuses a remote URL that carries one, and redacts what it prints by shape. Takes the same arguments as the command it replaces. |
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
+| `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. |
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
 
 `redact` and `protect` are the two libraries under them: one hides secrets by
@@ -28,6 +29,7 @@ branch pull requests land on".
 
 ```
 go install github.com/go-gitsafe/gitsafe/cmd/gitpush@latest
+go install github.com/go-gitsafe/gitsafe/cmd/ghmerge@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/git-pre-push-guard@latest
 ```
