@@ -22,8 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tannevaled/gitsafe/protect"
-	"github.com/tannevaled/gitsafe/redact"
+	"github.com/go-gitsafe/gitsafe/protect"
+	"github.com/go-gitsafe/gitsafe/redact"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }

@@ -27,9 +27,9 @@ branch pull requests land on".
 ## Installing
 
 ```
-go install github.com/tannevaled/gitsafe/cmd/gitpush@latest
-go install github.com/tannevaled/gitsafe/cmd/ghscopes@latest
-go install github.com/tannevaled/gitsafe/cmd/git-pre-push-guard@latest
+go install github.com/go-gitsafe/gitsafe/cmd/gitpush@latest
+go install github.com/go-gitsafe/gitsafe/cmd/ghscopes@latest
+go install github.com/go-gitsafe/gitsafe/cmd/git-pre-push-guard@latest
 ```
 
 The hook goes where git looks for hooks in every repository:

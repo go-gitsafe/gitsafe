@@ -21,7 +21,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/tannevaled/gitsafe/redact"
+	"github.com/go-gitsafe/gitsafe/redact"
 )
 
 // helperName is the credential helper this asks git to use. It is looked up on
