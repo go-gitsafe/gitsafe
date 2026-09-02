@@ -11,6 +11,33 @@ no checks run against it, read by nobody.
 
 Documentation asks. A hook refuses. These are the tools that refuse.
 
+## `ghrelease` — merge and tag as one thing
+
+    ghrelease [owner/repo] <pr-number> <tag>
+
+Merging and tagging were two commands, and three times in one day the tag
+landed on a commit that did not contain the merge. Every time the shape was the
+same:
+
+    ghmerge 21 | tail -2 && git tag v0.12.0 origin/main && gitpush origin v0.12.0
+
+`ghmerge` refuses correctly and exits non-zero. The PIPE throws that away: a
+pipeline's status is its LAST command's, and `tail` always succeeds. So the
+refusal printed, the chain carried on, and a version tag was published pointing
+at a `main` that did not have the fix in it. A published tag cannot be moved --
+the module proxy has it -- so each mistake cost a version number permanently.
+
+A rule against this did not work. It was written down and broken three times in
+one day. So the two steps became one command, with one exit status and nothing
+between them to drop it.
+
+It tags the pull request's **merge commit**, by hash, never a branch name:
+tagging `origin/main` is what went wrong, and a merge commit cannot be the wrong
+one. It refuses a tag that already exists, and it checks that BEFORE merging, so
+a refusal never leaves a merged pull request with no release. It runs `ghmerge`
+rather than copying its rules, because two answers to "may this be merged" is
+how one of them ends up wrong.
+
 ## What is here
 
 | | |
