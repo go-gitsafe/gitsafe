@@ -11,3 +11,4 @@
 /cmd/*/ghscopes
 /cmd/*/git-pre-push-guard
 /cmd/*/git-credential-tokenfile
+/ghrelease
