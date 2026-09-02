@@ -20,6 +20,7 @@ Documentation asks. A hook refuses. These are the tools that refuse.
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
 | `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. |
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
+| `guard-bash` | Refuses a shell command that would put a secret on a command line, **before it runs**. An agent harness hook: it reads the command on stdin and answers with a deny. The rule it enforces was written down in three places and broken anyway — see below. |
 
 `redact` and `protect` are the two libraries under them: one hides secrets by
 their shape wherever they appear, the other answers "does this push write the
@@ -80,3 +81,47 @@ consulted. That is not theory: it is what sent somebody to a URL in the first
 place. `gitpush` clears the list at both scopes before naming its own.
 
 Pure Go, no cgo, no dependencies outside the standard library. BSD-3-Clause.
+
+
+## `guard-bash`, and why a written rule was not enough
+
+The rule against a secret on a command line is in this README, in the machine's
+instructions, and in a memory file. It was read, understood, and broken anyway:
+the same operator typed
+
+    curl -H "Authorization: Bearer $(cat ~/.github-token)" ...
+
+about thirty times in one session, hours after re-reading the rule and writing
+it down again. It reads as careful, because the secret is never typed. It is
+not: the substitution runs first, so what reaches `execve` — and the process
+list, and every log of what ran — is the token itself.
+
+A rule that has to be remembered is a rule that will eventually be forgotten.
+
+    # ~/.claude/settings.json
+    {"hooks": {"PreToolUse": [{"matcher": "Bash",
+      "hooks": [{"type": "command", "command": "guard-bash", "timeout": 10}]}]}}
+
+### What it refuses, and what it must not
+
+The decision is in `secretarg`, as a package, so it can be held to a table of
+cases — and the half that matters most is the one it must **allow**:
+
+    gh api repos/o/r --jq .full_name        # the tool holds its own credential
+    { printf 'header = "A: '; tr -d '\n' < ~/.token; } | curl -K -
+    wc -c < ~/.github-token                 # a property, never the value
+
+A guard that refuses harmless commands is one people learn to work around, and
+then it protects nothing at all. This machine has already had that happen to a
+rule that matched the word `push` too broadly and refused `git stash push`.
+
+The first version of this rule proved the point within five minutes: it refused
+the command that was **writing the note about it**, because the prose quotes the
+forbidden form. The fix is a distinction the shell already makes — the body of a
+heredoc whose tag is quoted (`<<'EOF'`) is never expanded, so text that quotes
+the form is not the form. An unquoted `<<EOF` does expand, and is still scanned.
+
+### It fails open, on purpose
+
+Input it cannot read means *no opinion*, not approval and not a block. A guard
+that failed closed on its own bug would stop every command on the machine.
