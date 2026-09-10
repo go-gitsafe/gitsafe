@@ -37,6 +37,8 @@ package secretarg
 import (
 	"regexp"
 	"strings"
+
+	"github.com/go-gitsafe/gitsafe/shellcmd"
 )
 
 // Finding is why a command line was refused. The zero value means nothing was
@@ -68,14 +70,11 @@ var (
 
 	// Commands that read a file's CONTENTS. `wc -c < f` and `ls f` do not.
 	readers = regexp.MustCompile(`(?i)(^|[|;&\s(])(cat|head|tail|tr|cut|sed|awk|xargs|printf|echo|base64|jq|openssl|<)\b|^\s*<`)
-
-	// A quoted heredoc tag: <<'EOF', <<"EOF", <<\EOF, with an optional dash.
-	heredocOpen = regexp.MustCompile(`<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|\\([A-Za-z_][A-Za-z0-9_]*))`)
 )
 
 // Check reports whether cmd discloses a secret on the command line.
 func Check(cmd string) Finding {
-	scanned := stripQuotedHeredocs(cmd)
+	scanned := shellcmd.StripQuotedHeredocs(cmd)
 	if m := literal.FindString(scanned); m != "" {
 		return Finding{
 			Rule:  "literal",
@@ -102,38 +101,6 @@ func Check(cmd string) Finding {
 		}
 	}
 	return Finding{}
-}
-
-// stripQuotedHeredocs removes the body of every heredoc whose tag is quoted.
-//
-// `<<'EOF'` is literal — the shell expands nothing inside it — so text that
-// QUOTES the forbidden form is not the forbidden form. Documentation, a commit
-// message and a note all need to say what not to do. An unquoted `<<EOF` does
-// expand, and its body is left in place to be scanned.
-func stripQuotedHeredocs(cmd string) string {
-	lines := strings.Split(cmd, "\n")
-	var out []string
-	tag := ""
-	for _, line := range lines {
-		if tag != "" {
-			if strings.TrimSpace(line) == tag {
-				tag = ""
-			}
-			continue
-		}
-		if m := heredocOpen.FindStringSubmatch(line); m != nil {
-			for _, g := range m[1:] {
-				if g != "" {
-					tag = g
-					break
-				}
-			}
-			// The opening line itself is kept: a command may both open a heredoc
-			// and carry a substitution of its own.
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
 }
 
 // Advice is what to do instead, printed with a refusal.
