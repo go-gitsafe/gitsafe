@@ -178,3 +178,36 @@ the form is not the form. An unquoted `<<EOF` does expand, and is still scanned.
 
 Input it cannot read means *no opinion*, not approval and not a block. A guard
 that failed closed on its own bug would stop every command on the machine.
+
+## Discarding uncommitted work
+
+`guard-bash` refuses a command that throws away what exists only in the working
+tree. There is no reflog for a file that was never committed.
+
+It happened three times here, in three spellings, and the written rule stopped
+none of them: `git checkout -q -- .` slipped into a chain that prepared a commit
+and erased the fix, leaving only the untracked test — the commit, the push and
+the pull request were all green and the content was wrong; `git checkout <branch>
+-- <file>` destroyed uncommitted tests twice in one session; and `git checkout
+main` in a background watcher took an edit away with the branch it had just
+deleted.
+
+The rule names the **act**, not one spelling of it — `git checkout -- …`,
+`git checkout .`, `git restore …`, `git reset --hard`, `git clean -f`. A guard
+that refused only the first would send whoever hit it to the next one.
+
+What goes through, because a guard that refuses ordinary work is one people learn
+to route around:
+
+```
+git checkout -b a-branch     # switching and creating: git protects those itself
+git checkout main            # and refuses when it would lose data
+git restore --staged f.go    # unstages; the working tree is untouched
+git reset --soft HEAD~       # moves the branch, keeps the tree
+git stash push -- f.go       # the safe equivalent, which the refusal names
+```
+
+Writing *about* the forbidden form is not the forbidden form: the body of a
+heredoc whose tag is quoted is never expanded, so a commit message or a note that
+quotes it goes through. `GITSAFE_ALLOW_DISCARD=1` in front of one command is the
+deliberate way past.
