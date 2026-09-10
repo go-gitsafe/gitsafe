@@ -73,12 +73,24 @@ func segments(cmd string) []string {
 	return strings.FieldsFunc(cmd, f)
 }
 
+// Escape is the assignment that says a discard is meant. It is honoured as a
+// PREFIX ON THE COMMAND — `GITSAFE_ALLOW_DISCARD=1 git restore …` — and not only
+// in the guard's own environment, because the guard runs as a pre-tool hook and
+// reads the command as TEXT: the variable the command would run with never
+// reaches the guard's process. Written the other way round, the documented escape
+// would open nothing, and a refusal that names a way out that does not work is
+// worse than one that names none.
+const Escape = "GITSAFE_ALLOW_DISCARD"
+
 func checkOne(part string) Finding {
 	fields := strings.Fields(part)
 	// Find the git invocation: it may be preceded by env assignments or by a
 	// wrapper that takes the same arguments.
 	i := 0
 	for i < len(fields) && strings.Contains(fields[i], "=") && !strings.HasPrefix(fields[i], "-") {
+		if name, value, _ := strings.Cut(fields[i], "="); name == Escape && value != "" && value != "0" {
+			return Finding{} // said on purpose, on this very command
+		}
 		i++
 	}
 	if i >= len(fields) || base(fields[i]) != "git" {
