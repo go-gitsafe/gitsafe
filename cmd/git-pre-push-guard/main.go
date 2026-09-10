@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-gitsafe/gitsafe/gitlink"
 	"github.com/go-gitsafe/gitsafe/protect"
 	"github.com/go-gitsafe/gitsafe/redact"
 )
@@ -49,6 +50,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// own hook reading nothing and deciding on it.
 	refs, _ := io.ReadAll(stdin)
 	if code := judgeBranches(args, refs, stderr); code != 0 {
+		return code
+	}
+	if code := judgeGitlinks(args, refs, stderr); code != 0 {
 		return code
 	}
 	return chain(args, bytes.NewReader(refs), stdout, stderr)
@@ -91,6 +95,132 @@ func judgeBranches(args []string, refs []byte, stderr io.Writer) int {
 	fmt.Fprintf(stderr, "  If this really has to go on the default branch, say so on purpose:\n")
 	fmt.Fprintf(stderr, "      GITSAFE_ALLOW_DEFAULT_BRANCH=1 gitpush %s ...\n\n", remote)
 	return 1
+}
+
+// judgeGitlinks refuses a push that would publish a nested git repository nobody
+// declared.
+//
+// `git add -A` records a gitlink for every directory that is itself a repository
+// — a per-session agent worktree, an editor's scratch clone, a dependency
+// checked out in place — and it does so in one stroke and without a word.
+// Nineteen went up in a single commit here, and had to be rewritten and
+// force-pushed back out.
+//
+// It is judged in the hook rather than in the wrapper because the mistake is not
+// made by whoever remembered to use the wrapper. It is judged per REF, against
+// what the remote already has, so the refusal names the push that introduces the
+// gitlink and not every push into a repository that already carried one.
+func judgeGitlinks(args []string, refs []byte, stderr io.Writer) int {
+	if os.Getenv("GITSAFE_ALLOW_GITLINK") != "" {
+		return 0
+	}
+	remote := "origin"
+	if len(args) >= 1 && args[0] != "" {
+		remote = args[0]
+	}
+	found := map[string][]string{} // ref -> paths
+	var order []string
+	for _, u := range protect.Parse(bytes.NewReader(refs)) {
+		if u.Deleting() {
+			continue // a deletion publishes nothing
+		}
+		bad := undeclaredIn(u, remote)
+		if len(bad) == 0 {
+			continue
+		}
+		if _, seen := found[u.RemoteRef]; !seen {
+			order = append(order, u.RemoteRef)
+		}
+		found[u.RemoteRef] = append(found[u.RemoteRef], bad...)
+	}
+	if len(order) == 0 {
+		return 0
+	}
+	fmt.Fprintf(stderr, "\ngit: refusing to push — this publishes a nested git repository that nothing declares.\n\n")
+	for _, ref := range order {
+		fmt.Fprintf(stderr, "  %s adds:\n", ref)
+		for _, p := range found[ref] {
+			fmt.Fprintf(stderr, "      %s\n", p)
+		}
+	}
+	fmt.Fprintf(stderr, "\n  A directory that is itself a repository is recorded as a GITLINK: a commit\n")
+	fmt.Fprintf(stderr, "  id and nothing else. `git add -A` records one for every such directory it\n")
+	fmt.Fprintf(stderr, "  finds, silently and all at once — agent worktrees, an editor's scratch\n")
+	fmt.Fprintf(stderr, "  clone, a dependency checked out in place. Nineteen went up here once.\n\n")
+	fmt.Fprintf(stderr, "  Take them out of the commit and ignore the directory:\n")
+	fmt.Fprintf(stderr, "      git rm -r --cached %s\n", order0(found, order))
+	fmt.Fprintf(stderr, "      git commit --amend --no-edit\n")
+	fmt.Fprintf(stderr, "      echo /%s/ >> .gitignore\n\n", topDir(order0(found, order)))
+	fmt.Fprintf(stderr, "  A real submodule is declared in .gitmodules and is not refused. If this one\n")
+	fmt.Fprintf(stderr, "  really belongs in the tree, say so on purpose:\n")
+	fmt.Fprintf(stderr, "      GITSAFE_ALLOW_GITLINK=1 gitpush %s ...\n\n", remote)
+	return 1
+}
+
+// order0 is the first offending path, for the example command in the message.
+func order0(found map[string][]string, order []string) string {
+	if len(order) == 0 || len(found[order[0]]) == 0 {
+		return "<path>"
+	}
+	return found[order[0]][0]
+}
+
+// topDir is the first path segment, which is what a .gitignore line wants.
+func topDir(p string) string {
+	if i := strings.IndexByte(p, '/'); i > 0 {
+		return p[:i]
+	}
+	return p
+}
+
+// undeclaredIn returns the gitlinks this one ref update would add.
+//
+// The base is what the remote already has for this ref; for a ref being created
+// it is the remote's default branch, so that branching off a tree that already
+// holds a submodule does not read as introducing one. When there is no base at
+// all — a repository being pushed for the first time — every gitlink in the tip
+// is genuinely being published, and every one is reported.
+func undeclaredIn(u protect.Update, remote string) []string {
+	tip, err := lsGitlinks(u.LocalSHA)
+	if err != nil || len(tip) == 0 {
+		return nil // cannot read it, or there is nothing of the kind: say nothing
+	}
+	base := u.RemoteSHA
+	if u.Creating() {
+		base = remoteHead(remote)
+	}
+	var was []string
+	if base != "" {
+		was, _ = lsGitlinks(base)
+	}
+	declared := map[string]bool{}
+	if out, err := gitOutput("show", u.LocalSHA+":.gitmodules"); err == nil {
+		declared = gitlink.Declared(strings.NewReader(out))
+	}
+	return gitlink.Undeclared(tip, was, declared)
+}
+
+// lsGitlinks lists the nested repositories recorded in a commit's tree.
+func lsGitlinks(commit string) ([]string, error) {
+	out, err := gitOutput("ls-tree", "-r", commit)
+	if err != nil {
+		return nil, err
+	}
+	return gitlink.Paths(strings.NewReader(out)), nil
+}
+
+// remoteHead is the commit the remote's default branch points at locally, or ""
+// when there is none to compare against.
+func remoteHead(remote string) string {
+	ref, err := gitOutput("symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD")
+	if err != nil {
+		return ""
+	}
+	sha, err := gitOutput("rev-parse", ref)
+	if err != nil {
+		return ""
+	}
+	return sha
 }
 
 // remoteDefault asks the remote what its default branch is called, and answers

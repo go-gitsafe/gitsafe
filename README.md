@@ -42,7 +42,7 @@ how one of them ends up wrong.
 
 | | |
 |---|---|
-| `git-pre-push-guard` | The **global** pre-push hook. Refuses a URL that carries a credential, and refuses a write to the branch pull requests land on — whoever runs git, and whatever they run it with. |
+| `git-pre-push-guard` | The **global** pre-push hook. Refuses a URL that carries a credential, a write to the branch pull requests land on, and a push that publishes an undeclared nested repository — whoever runs git, and whatever they run it with. |
 | `gitpush` | Pushes without a token ever reaching a command line: it **names** a credential helper rather than reading the secret, refuses a remote URL that carries one, and redacts what it prints by shape. Takes the same arguments as the command it replaces. |
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
 | `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. |
@@ -91,6 +91,32 @@ go through untouched:
 `main`, `master`, and whatever the remote's own HEAD points at are protected.
 The remote not answering is not fatal: the two usual names are defended anyway,
 so this still works on a train.
+
+**A nested git repository nobody declared.** A directory that is itself a
+repository is recorded as a GITLINK — a tree entry holding a commit id and
+nothing else — and `git add -A` records one for every such directory it finds,
+silently and all at once. Nineteen per-session agent worktrees under `.claude/`
+went up to a public repository in a single commit that way, and had to be
+rewritten and force-pushed back out.
+
+The rule is structural rather than a list of directory names, because a list
+would have to guess at `.claude`, `.idea`, `node_modules`, a checkout somebody
+made in place — and would be blind to the twentieth. What is actually wrong is
+narrower: **a gitlink that no `.gitmodules` declares is not a submodule, it is an
+accident.** A real submodule is always declared, since that is the only way a
+clone can restore it.
+
+Three things go through untouched:
+
+- **A declared submodule.** It is in `.gitmodules`, so it is deliberate.
+- **A gitlink the remote already has.** A repository that has always carried one
+  is not made worse by the next push; only the push that INTRODUCES one is
+  refused. A guard that refused every push in such a repository would be
+  switched off within the hour.
+- `GITSAFE_ALLOW_GITLINK=1` in front of **one** command.
+
+The refusal names each path and prints the recovery: `git rm -r --cached`, an
+amend, and the `.gitignore` line that stops it coming back.
 
 ## Chaining
 
