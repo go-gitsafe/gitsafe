@@ -33,6 +33,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 )
 
@@ -67,16 +68,32 @@ func run(stdin io.Reader, stdout io.Writer) int {
 	if err := json.Unmarshal(b, &p); err != nil || p.ToolInput.Command == "" {
 		return 0
 	}
-	f := secretarg.Check(p.ToolInput.Command)
-	if !f.Found() {
-		return 0
+	if f := secretarg.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\nIt matched %s\n\n%s\n\nIf the value is NOT a secret, name the file something that does not read as one.",
+			f.Why, f.Match, secretarg.Advice))
 	}
+	// Work that exists only in the working tree is gone the moment it is
+	// overwritten: there is no reflog for a file that was never committed. The
+	// escape is read here rather than inside the rule so that the rule stays a
+	// pure question about the text.
+	if os.Getenv("GITSAFE_ALLOW_DISCARD") == "" {
+		if f := discard.Check(p.ToolInput.Command); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s\n\nIt matched %s\n\n%s",
+				f.Why, f.Match, discard.Advice))
+		}
+	}
+	return 0
+}
+
+// deny writes the harness's deny decision and returns 0 — the exit code says
+// whether the guard itself worked, not whether it allowed the command.
+func deny(stdout io.Writer, reason string) int {
 	var d decision
 	d.HookSpecificOutput.HookEventName = "PreToolUse"
 	d.HookSpecificOutput.PermissionDecision = "deny"
-	d.HookSpecificOutput.PermissionDecisionReason = fmt.Sprintf(
-		"Refused: %s.\n\nIt matched %s\n\n%s\n\nIf the value is NOT a secret, name the file something that does not read as one.",
-		f.Why, f.Match, secretarg.Advice)
+	d.HookSpecificOutput.PermissionDecisionReason = reason
 	out, err := json.Marshal(d)
 	if err != nil {
 		return 0
