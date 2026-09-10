@@ -96,3 +96,25 @@ func TestProtectedWithNoRemoteDefault(t *testing.T) {
 		t.Error("the empty branch name is protected")
 	}
 }
+
+// Deleting is the question judging a push's CONTENT has to ask first: a deletion
+// has no local commit to read, so anything that reads one must skip it.
+func TestDeletingIsNotCreating(t *testing.T) {
+	const zero = "0000000000000000000000000000000000000000"
+	ups := Parse(strings.NewReader(
+		"(delete) " + zero + " refs/heads/gone bbbb\n" +
+			"refs/heads/new aaaa refs/heads/new " + zero + "\n" +
+			"refs/heads/ord aaaa refs/heads/ord bbbb\n"))
+	if len(ups) != 3 {
+		t.Fatalf("Parse gave %d updates, want 3", len(ups))
+	}
+	if !ups[0].Deleting() || ups[0].Creating() {
+		t.Error("a deletion should read as deleting and not as creating")
+	}
+	if !ups[1].Creating() || ups[1].Deleting() {
+		t.Error("a creation should read as creating and not as deleting")
+	}
+	if ups[2].Creating() || ups[2].Deleting() {
+		t.Error("an ordinary update is neither")
+	}
+}

@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -102,5 +105,109 @@ func TestTheEscapeIsAnAct(t *testing.T) {
 	if code := run([]string{"origin", "https://github.com/x/y.git"},
 		strings.NewReader(refs), &out, &errb); code != 0 {
 		t.Errorf("the escape did not work, exit %d: %s", code, errb.String())
+	}
+}
+
+// gitIn runs git in dir and fails the test if it will not.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@t")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A repository inside a repository, committed by `git add -A` — which is exactly
+// how nineteen agent worktrees were pushed to a public repository in one stroke.
+// The guard reads the real trees git wrote, so the test builds real ones.
+func TestRefusesAnUndeclaredNestedRepository(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "README.md")
+	gitIn(t, dir, "commit", "-qm", "first")
+	base := gitIn(t, dir, "rev-parse", "HEAD")
+
+	nested := filepath.Join(dir, ".claude", "worktrees", "session-a")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, nested, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(nested, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, nested, "add", "f.txt")
+	gitIn(t, nested, "commit", "-qm", "nested")
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "ordinary work")
+	tip := gitIn(t, dir, "rev-parse", "HEAD")
+
+	// The guard runs git in the CURRENT directory, as a hook does.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	refs := "refs/heads/work " + tip + " refs/heads/work " + base + "\n"
+	var errb bytes.Buffer
+	if code := judgeGitlinks([]string{"origin"}, []byte(refs), &errb); code != 1 {
+		t.Fatalf("exit %d, want 1 — the nested repository was not refused:\n%s", code, errb.String())
+	}
+	msg := errb.String()
+	for _, want := range []string{".claude/worktrees/session-a", "git rm -r --cached", "GITSAFE_ALLOW_GITLINK"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, msg)
+		}
+	}
+
+	// The escape is deliberate and loud rather than absent.
+	t.Setenv("GITSAFE_ALLOW_GITLINK", "1")
+	var errb2 bytes.Buffer
+	if code := judgeGitlinks([]string{"origin"}, []byte(refs), &errb2); code != 0 {
+		t.Errorf("GITSAFE_ALLOW_GITLINK did not let it through: %s", errb2.String())
+	}
+}
+
+// The push that changes nothing of the kind is not the guard's business, and a
+// deletion has no commit to read at all.
+func TestGitlinkGuardIgnoresWhatItShould(t *testing.T) {
+	const zero = "0000000000000000000000000000000000000000"
+	for name, refs := range map[string]string{
+		"a deletion":        "(delete) " + zero + " refs/heads/gone bbbb\n",
+		"an unreadable sha": "refs/heads/x notasha refs/heads/x alsonot\n",
+		"nothing at all":    "",
+	} {
+		var errb bytes.Buffer
+		if code := judgeGitlinks([]string{"origin"}, []byte(refs), &errb); code != 0 {
+			t.Errorf("%s: exit %d, want 0:\n%s", name, code, errb.String())
+		}
+	}
+}
+
+func TestTopDir(t *testing.T) {
+	for in, want := range map[string]string{
+		".claude/worktrees/a": ".claude",
+		"vendor/sub":          "vendor",
+		"bare":                "bare",
+		"/leading":            "/leading",
+	} {
+		if got := topDir(in); got != want {
+			t.Errorf("topDir(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := order0(nil, nil); got != "<path>" {
+		t.Errorf("order0 with nothing = %q, want a placeholder", got)
 	}
 }

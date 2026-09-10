@@ -37,6 +37,12 @@ type Update struct {
 // first push to a new repository.
 func (u Update) Creating() bool { return u.RemoteSHA == zeroSHA }
 
+// Deleting reports whether this update removes a ref.
+//
+// A deletion publishes no content, so anything that judges what a push CONTAINS
+// has nothing to look at and must not try: there is no local commit to read.
+func (u Update) Deleting() bool { return u.LocalSHA == zeroSHA }
+
 // Parse reads the ref updates git writes to a pre-push hook's stdin.
 //
 // Anything that is not four fields is skipped rather than guessed at: a hook
