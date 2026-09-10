@@ -72,6 +72,34 @@ func TestWritingAboutItIsNotDoingIt(t *testing.T) {
 	}
 }
 
+// The escape the refusal names must actually open. It is honoured as a PREFIX on
+// the command, because the guard runs as a pre-tool hook and reads the command as
+// text: the environment the command would run with never reaches it. Shipped the
+// other way round, the escape did nothing and the refusal could not be got past —
+// found the first time a legitimate discard needed it.
+func TestTheEscapeTheMessageNamesActuallyWorks(t *testing.T) {
+	for _, cmd := range []string{
+		`GITSAFE_ALLOW_DISCARD=1 git restore playground/x.png`,
+		`GITSAFE_ALLOW_DISCARD=yes git checkout -- .`,
+		`GITSAFE_ALLOW_DISCARD=1 git reset --hard`,
+	} {
+		if f := Check(cmd); f.Found() {
+			t.Errorf("the escape did not open (%s): %s", f.Rule, cmd)
+		}
+	}
+	// And it is an ACT, not a word: an empty or zero value is not saying yes, and
+	// the escape on one command in a chain does not cover the next.
+	for _, cmd := range []string{
+		`GITSAFE_ALLOW_DISCARD= git reset --hard`,
+		`GITSAFE_ALLOW_DISCARD=0 git reset --hard`,
+		`GITSAFE_ALLOW_DISCARD=1 git status; git reset --hard`,
+	} {
+		if f := Check(cmd); !f.Found() {
+			t.Errorf("the escape leaked: %s", cmd)
+		}
+	}
+}
+
 func TestAdviceNamesTheSafeThing(t *testing.T) {
 	for _, want := range []string{"git stash push", "GITSAFE_ALLOW_DISCARD"} {
 		if !strings.Contains(Advice, want) {
