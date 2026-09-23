@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // green is a pull request GitHub says is mergeable.
@@ -448,5 +449,86 @@ func TestASuccessfulCommitStatusStillMerges(t *testing.T) {
 	}
 	if !strings.Contains(out, "1 check(s), 1 status(es), all green") {
 		t.Errorf("the count must show both lists, got %q", out)
+	}
+}
+
+// pending is a pull request GitHub has not finished thinking about: it
+// computes mergeability lazily, and reports null until it has.
+func pending() map[string]any {
+	return map[string]any{
+		"state": "open", "merged": false, "mergeable": nil,
+		"head": map[string]any{"sha": "abc", "ref": "a-branch"},
+	}
+}
+
+// TestNullMergeableIsWaitedOutNotMergedThrough: null is GitHub still working,
+// and it only refuses an explicit false, so null used to sail past the gate --
+// and the merge came back "405 Method Not Allowed" naming no cause. That cost
+// fifteen merges in one afternoon's sweep, always in a repository where
+// several dependency pull requests merged in sequence, because a sibling merge
+// resets every other one to null.
+func TestNullMergeableIsWaitedOutNotMergedThrough(t *testing.T) {
+	was := mergeableWait
+	mergeableWait = time.Millisecond
+	t.Cleanup(func() { mergeableWait = was })
+
+	// null on the first ask, decided on the second -- which is what GitHub
+	// actually does, and what a retry by hand saw every time.
+	asked := 0
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged := false
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			merged = true
+			fmt.Fprint(w, `{"merged":true}`)
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": runs})
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": []map[string]any{}})
+		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusNoContent)
+		case strings.Contains(r.URL.Path, "/pulls/"):
+			asked++
+			if asked == 1 {
+				_ = json.NewEncoder(w).Encode(pending())
+				return
+			}
+			_ = json.NewEncoder(w).Encode(green())
+		default:
+			t.Errorf("the fake GitHub was asked for %q, which it does not serve", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(s.Close)
+	wasBase := apiBase
+	apiBase = s.URL
+	t.Cleanup(func() { apiBase = wasBase })
+
+	code, _, errb := try(t, "go-gitsafe/gitsafe", "1")
+	if code != 0 || !merged {
+		t.Fatalf("a pull request GitHub had merely not decided on yet was not merged: code=%d %s", code, errb)
+	}
+	if asked < 2 {
+		t.Errorf("GitHub was asked %d time(s); a null answer must be asked again", asked)
+	}
+}
+
+// TestNullMergeableForeverRefusesAndSaysWhy: if it never decides, the refusal
+// has to name that, rather than handing over a bare 405 from the merge call.
+func TestNullMergeableForeverRefusesAndSaysWhy(t *testing.T) {
+	was := mergeableWait
+	mergeableWait = time.Millisecond
+	t.Cleanup(func() { mergeableWait = was })
+
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged, _ := server(t, pending(), runs)
+
+	code, _, errb := try(t, "go-gitsafe/gitsafe", "1")
+	if code == 0 || *merged {
+		t.Fatal("merged a pull request GitHub never said was mergeable")
+	}
+	if !strings.Contains(errb, "has not decided") || !strings.Contains(errb, "sibling merge resets it") {
+		t.Errorf("the refusal must explain the null, got:\n%s", errb)
 	}
 }

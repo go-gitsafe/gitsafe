@@ -48,6 +48,11 @@ var (
 	// apiBase is a variable so a test can answer as GitHub would. What this
 	// tool does with the answer is the whole of it.
 	apiBase = "https://api.github.com"
+
+	// mergeableWait is how long to pause between asking GitHub again whether a
+	// pull request can be merged. A variable so a test can shorten it; nothing
+	// else changes it.
+	mergeableWait = 3 * time.Second
 	// gitOutput asks git something, as a seam.
 	gitOutput = func(args ...string) (string, error) {
 		out, err := exec.Command("git", args...).Output()
@@ -101,6 +106,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if pr.State != "open" {
 		fmt.Fprintf(stderr, "ghmerge: %s#%d is %s\n", repo, number, pr.State)
+		return 1
+	}
+
+	// ⛔ mergeable: null is GitHub still THINKING, not an answer.
+	//
+	// It computes mergeability lazily, and the request that asks for it is
+	// what starts the job. Right after a sibling pull request in the same
+	// repository merges, every other one goes back to null -- and null sails
+	// past the check below, which only refuses an explicit false. The merge
+	// then fails with a bare "405 Method Not Allowed" that names no cause.
+	//
+	// That happened fifteen times in one afternoon's sweep across this fleet,
+	// always in a repository where several dependency pull requests were
+	// merged in sequence. Waiting a few seconds and asking again is the whole
+	// fix; the answer arrived on the first retry every time it was done by
+	// hand.
+	for try := 0; pr.Mergeable == nil && try < 5; try++ {
+		time.Sleep(mergeableWait)
+		if pr, err = pullRequest(token, repo, number); err != nil {
+			fmt.Fprintf(stderr, "ghmerge: %v\n", err)
+			return 1
+		}
+	}
+	if pr.Mergeable == nil {
+		fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — GitHub has not decided "+
+			"whether it can be merged (mergeable is still null after 15s). It computes that "+
+			"lazily and a sibling merge resets it; try again shortly.\n", repo, number)
 		return 1
 	}
 
