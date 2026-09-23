@@ -22,7 +22,8 @@ func green() map[string]any {
 }
 
 // server answers as GitHub would, and records what it was asked to do.
-func server(t *testing.T, prBody map[string]any, runs []map[string]any) (merged *bool, deleted *bool) {
+// sts, when given, is the Status API's answer. Most callers pass none.
+func server(t *testing.T, prBody map[string]any, runs []map[string]any, sts ...map[string]any) (merged *bool, deleted *bool) {
 	t.Helper()
 	m, d := false, false
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,11 +34,21 @@ func server(t *testing.T, prBody map[string]any, runs []map[string]any) (merged 
 			fmt.Fprint(w, `{"merged":true}`)
 		case strings.Contains(r.URL.Path, "/check-runs"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": runs})
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": sts})
 		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
 			d = true
 			w.WriteHeader(http.StatusNoContent)
-		default:
+		case strings.Contains(r.URL.Path, "/pulls/"):
 			_ = json.NewEncoder(w).Encode(prBody)
+		default:
+			// ⛔ This used to be `default: encode(prBody)`, and that is how the
+			// Status API went unnoticed: a new endpoint got the pull request
+			// back, decoded into a struct with none of those fields, and came
+			// out as a valid empty answer. A fixture that agrees with any path
+			// cannot tell you that you asked for one it has never heard of.
+			t.Errorf("the fake GitHub was asked for %q, which it does not serve", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(s.Close)
@@ -139,7 +150,7 @@ func TestGreenMergesAndDeletesTheBranch(t *testing.T) {
 	if !*deleted {
 		t.Error("the branch was left behind")
 	}
-	if !strings.Contains(out, "2 check(s), all green") {
+	if !strings.Contains(out, "2 check(s), 0 status(es), all green") {
 		t.Errorf("it did not say what it saw:\n%s", out)
 	}
 }
@@ -377,5 +388,65 @@ func TestEveryShapeOfRemote(t *testing.T) {
 		if got, err := repoFromURL(bad); err == nil {
 			t.Errorf("repoFromURL(%q) = %q, want an error", bad, got)
 		}
+	}
+}
+
+// TestAFailingCommitStatusRefuses covers the half of the signal this tool used
+// to read past. GitHub keeps two independent lists against a commit: check
+// runs, which Actions writes, and the Status API, which everything else does.
+// ghmerge read only the first, so a pull request whose Actions lane was green
+// merged while a failing status sat beside it saying otherwise.
+//
+// The one that actually turns up is renovate/artifacts, and it means Renovate
+// could not update the lock files -- the stale go.sum that makes the NEXT
+// build fail. Sampling thirty open pull requests across the fleet, two carried
+// any commit status at all, and both were that one, failing.
+func TestAFailingCommitStatusRefuses(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	sts := []map[string]any{{"context": "renovate/artifacts", "state": "failure"}}
+	merged, _ := server(t, green(), runs, sts...)
+
+	code, out, errOut := try(t, "go-gitsafe/gitsafe", "1")
+
+	if code == 0 || *merged {
+		t.Fatalf("merged over a failing commit status: code=%d merged=%v out=%q", code, *merged, out)
+	}
+	if !strings.Contains(errOut, "renovate/artifacts failure") {
+		t.Errorf("the refusal must name the status and its state, got %q", errOut)
+	}
+}
+
+// TestAPendingCommitStatusRefuses: a status has no separate "status" field --
+// it is created in its final state, or in "pending" and replaced later. So
+// pending is judged the same way an incomplete check run is.
+func TestAPendingCommitStatusRefuses(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	sts := []map[string]any{{"context": "deploy/preview", "state": "pending"}}
+	merged, _ := server(t, green(), runs, sts...)
+
+	code, _, errOut := try(t, "go-gitsafe/gitsafe", "1")
+
+	if code == 0 || *merged {
+		t.Fatal("merged while a commit status was still pending")
+	}
+	if !strings.Contains(errOut, "deploy/preview pending") {
+		t.Errorf("got %q", errOut)
+	}
+}
+
+// TestASuccessfulCommitStatusStillMerges keeps the change from being a blanket
+// refusal: a status that passed is a pass.
+func TestASuccessfulCommitStatusStillMerges(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	sts := []map[string]any{{"context": "renovate/artifacts", "state": "success"}}
+	merged, _ := server(t, green(), runs, sts...)
+
+	code, out, errOut := try(t, "go-gitsafe/gitsafe", "1")
+
+	if code != 0 || !*merged {
+		t.Fatalf("a green status must not block: code=%d err=%q", code, errOut)
+	}
+	if !strings.Contains(out, "1 check(s), 1 status(es), all green") {
+		t.Errorf("the count must show both lists, got %q", out)
 	}
 }

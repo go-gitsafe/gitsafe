@@ -109,12 +109,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 		return 1
 	}
-	if why := refuse(pr, runs); why != "" {
+	// GitHub has TWO of these and they are different APIs. check-runs is what
+	// Actions writes; the Status API is what everything else writes, and a
+	// gate that reads one of them reports "all green" over a red half.
+	sts, err := statuses(token, repo, pr.Head.SHA)
+	if err != nil {
+		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
+		return 1
+	}
+	if why := refuse(pr, runs, sts); why != "" {
 		fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — %s\n", repo, number, why)
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "%s#%d: %d check(s), all green\n", repo, number, len(runs))
+	fmt.Fprintf(stdout, "%s#%d: %d check(s), %d status(es), all green\n", repo, number, len(runs), len(sts))
 	if err := merge(token, repo, number, *squash); err != nil {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 		return 1
@@ -138,7 +146,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 // The order is deliberate: mergeability first, because a pull request that
 // cannot be merged is ALSO the one that never gets checks, and reporting the
 // silence rather than the cause would send a reader looking at the wrong thing.
-func refuse(pr *pr, runs []checkRun) string {
+func refuse(pr *pr, runs []checkRun, sts []status) string {
 	if pr.Mergeable != nil && !*pr.Mergeable {
 		return "GitHub says it cannot be merged (conflicts, most likely) — " +
 			"and that is also why it has no checks: with no merge ref, no workflow runs"
@@ -154,6 +162,20 @@ func refuse(pr *pr, runs []checkRun) string {
 			bad = append(bad, fmt.Sprintf("%s is %s", r.Name, r.Status))
 		case r.Conclusion != "success" && r.Conclusion != "neutral" && r.Conclusion != "skipped":
 			bad = append(bad, fmt.Sprintf("%s %s", r.Name, r.Conclusion))
+		}
+	}
+	// A commit status is written by whatever wrote it -- Renovate, a bot, a
+	// deploy -- and carries no Status field: state is the whole answer.
+	//
+	// The one that actually turns up here is renovate/artifacts, and it means
+	// Renovate could not update the lock files it was asked to. That is the
+	// stale-go.sum failure, arriving as a signal this gate used to drop on
+	// the floor: two of thirty open pull requests sampled across the fleet
+	// carried a commit status at all, and both were that one, failing, on a
+	// pull request whose check runs were green.
+	for _, st := range sts {
+		if st.State != "success" {
+			bad = append(bad, fmt.Sprintf("%s %s", st.Context, st.State))
 		}
 	}
 	if len(bad) > 0 {
@@ -280,6 +302,27 @@ func pullRequest(token, repo string, number int) (*pr, error) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// status is an entry from the Status API, which predates check runs and is
+// still what a non-Actions reporter writes. It has no Status field at all: a
+// status is created in its final state, or in "pending" and replaced later.
+type status struct {
+	Context string `json:"context"`
+	State   string `json:"state"`
+}
+
+// statuses reads the COMBINED status for a commit, which already collapses
+// repeated postings of one context down to the latest.
+func statuses(token, repo, sha string) ([]status, error) {
+	var out struct {
+		Statuses []status `json:"statuses"`
+	}
+	url := fmt.Sprintf("%s/repos/%s/commits/%s/status?per_page=100", apiBase, repo, sha)
+	if err := get(token, url, &out); err != nil {
+		return nil, err
+	}
+	return out.Statuses, nil
 }
 
 func checks(token, repo, sha string) ([]checkRun, error) {
