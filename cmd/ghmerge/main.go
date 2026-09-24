@@ -122,14 +122,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// merged in sequence. Waiting a few seconds and asking again is the whole
 	// fix; the answer arrived on the first retry every time it was done by
 	// hand.
-	for try := 0; pr.Mergeable == nil && try < 5; try++ {
+	for try := 0; (pr.Mergeable == nil || pr.MergeableState == "unknown") && try < 5; try++ {
 		time.Sleep(mergeableWait)
 		if pr, err = pullRequest(token, repo, number); err != nil {
 			fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 			return 1
 		}
 	}
-	if pr.Mergeable == nil {
+	if pr.Mergeable == nil || pr.MergeableState == "unknown" {
 		fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — GitHub has not decided "+
 			"whether it can be merged (mergeable is still null after 15s). It computes that "+
 			"lazily and a sibling merge resets it; try again shortly.\n", repo, number)
@@ -182,6 +182,37 @@ func refuse(pr *pr, runs []checkRun, sts []status) string {
 	if pr.Mergeable != nil && !*pr.Mergeable {
 		return "GitHub says it cannot be merged (conflicts, most likely) — " +
 			"and that is also why it has no checks: with no merge ref, no workflow runs"
+	}
+	if pr.Draft {
+		return "it is a draft. GitHub will not merge one, and saying so here is " +
+			"better than a 405 that names nothing"
+	}
+	// ⛔ mergeable:true does NOT mean "may be merged now".
+	//
+	// The two fields answer different questions and this tool read only the
+	// first. A pull request held by branch protection -- a required review, a
+	// required check that has not reported -- is mergeable:true with
+	// mergeable_state:"blocked", passes every test above, and comes back from
+	// the merge call as a bare "405 Method Not Allowed" that names no cause
+	// and reads like a token problem.
+	//
+	// Only the states that MEAN something are named. "clean" is the ordinary
+	// yes. "unstable" is a yes with a non-required check failing, and this
+	// tool judges checks itself a few lines down, so it is left to that rather
+	// than refused twice with different words. Anything else unknown is
+	// allowed through, because inventing a refusal for a state GitHub adds
+	// later would block work over a word this code has never seen.
+	switch pr.MergeableState {
+	case "blocked":
+		return "branch protection is holding it: mergeable is true but " +
+			"mergeable_state is \"blocked\", which means a required review or a " +
+			"required check has not been satisfied. Merging it is a person's call"
+	case "behind":
+		return "the branch is behind its base and this repository requires them " +
+			"up to date. Update it first — its checks ran against an older base " +
+			"than the one it would land on"
+	case "draft":
+		return "GitHub reports it as a draft"
 	}
 	if len(runs) == 0 {
 		return "no check has run against it. Nothing failing is not everything passing: " +
@@ -315,8 +346,14 @@ func repoFromRemote(url string) (string, error) {
 type pr struct {
 	State     string `json:"state"`
 	Merged    bool   `json:"merged"`
+	Draft     bool   `json:"draft"`
 	Mergeable *bool  `json:"mergeable"`
-	Head      struct {
+	// MergeableState answers a different question from Mergeable, on the same
+	// object this tool already fetches. Mergeable is "does it apply cleanly";
+	// MergeableState is "may it be merged right now". A pull request behind a
+	// required review is mergeable:true, mergeable_state:"blocked".
+	MergeableState string `json:"mergeable_state"`
+	Head           struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
 	} `json:"head"`

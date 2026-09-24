@@ -18,7 +18,11 @@ func green() map[string]any {
 	yes := true
 	return map[string]any{
 		"state": "open", "merged": false, "mergeable": yes,
-		"head": map[string]any{"sha": "abc", "ref": "a-branch"},
+		// GitHub always sets this, so the fixture does too: a fixture that
+		// leaves a field empty tests the code's handling of a shape the server
+		// never sends.
+		"mergeable_state": "clean",
+		"head":            map[string]any{"sha": "abc", "ref": "a-branch"},
 	}
 }
 
@@ -457,7 +461,8 @@ func TestASuccessfulCommitStatusStillMerges(t *testing.T) {
 func pending() map[string]any {
 	return map[string]any{
 		"state": "open", "merged": false, "mergeable": nil,
-		"head": map[string]any{"sha": "abc", "ref": "a-branch"},
+		"mergeable_state": "unknown",
+		"head":            map[string]any{"sha": "abc", "ref": "a-branch"},
 	}
 }
 
@@ -530,5 +535,95 @@ func TestNullMergeableForeverRefusesAndSaysWhy(t *testing.T) {
 	}
 	if !strings.Contains(errb, "has not decided") || !strings.Contains(errb, "sibling merge resets it") {
 		t.Errorf("the refusal must explain the null, got:\n%s", errb)
+	}
+}
+
+// held returns a pull request GitHub will not merge although it applies
+// cleanly: state is the field that says so, and it is not the one this tool
+// used to read.
+func held(state string) map[string]any {
+	b := green()
+	b["mergeable_state"] = state
+	return b
+}
+
+// TestBranchProtectionIsNamedNotLeftAsA405 covers the gap that turned up in
+// the field: nano-container-linux/dnsd#1 was mergeable:true,
+// mergeable_state:"blocked", passed every gate, and the merge came back as a
+// bare "405 Method Not Allowed" — which names nothing and reads like a token
+// problem. It is a person's call, and the refusal should say so.
+func TestBranchProtectionIsNamedNotLeftAsA405(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged, _ := server(t, held("blocked"), runs)
+
+	code, _, errb := try(t, "go-gitsafe/gitsafe", "1")
+
+	if code == 0 || *merged {
+		t.Fatal("merged a pull request branch protection is holding")
+	}
+	if !strings.Contains(errb, "branch protection") || !strings.Contains(errb, "person's call") {
+		t.Errorf("the refusal must name branch protection, got:\n%s", errb)
+	}
+}
+
+// TestBehindIsRefusedBecauseItsChecksRanElsewhere: "behind" means the base
+// moved and this repository requires branches up to date. Its green checks
+// were run against a base it will not land on.
+func TestBehindIsRefusedBecauseItsChecksRanElsewhere(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged, _ := server(t, held("behind"), runs)
+
+	code, _, errb := try(t, "go-gitsafe/gitsafe", "1")
+
+	if code == 0 || *merged {
+		t.Fatal("merged a branch whose checks ran against an older base")
+	}
+	if !strings.Contains(errb, "behind") || !strings.Contains(errb, "older base") {
+		t.Errorf("got:\n%s", errb)
+	}
+}
+
+// TestADraftIsRefused: GitHub will not merge one, and a named refusal beats
+// discovering it from the merge call.
+func TestADraftIsRefused(t *testing.T) {
+	body := green()
+	body["draft"] = true
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged, _ := server(t, body, runs)
+
+	code, _, errb := try(t, "go-gitsafe/gitsafe", "1")
+
+	if code == 0 || *merged {
+		t.Fatal("merged a draft")
+	}
+	if !strings.Contains(errb, "draft") {
+		t.Errorf("got:\n%s", errb)
+	}
+}
+
+// TestUnstableIsLeftToTheCheckGate: "unstable" is a yes with a non-required
+// check failing. This tool judges checks itself, so refusing here as well
+// would answer one fact twice in different words — and, worse, would refuse a
+// pull request whose checks are all green because one of them is not required.
+func TestUnstableIsLeftToTheCheckGate(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged, _ := server(t, held("unstable"), runs)
+
+	code, _, errb := try(t, "go-gitsafe/gitsafe", "1")
+
+	if code != 0 || !*merged {
+		t.Fatalf("unstable with every check green must merge: code=%d %s", code, errb)
+	}
+}
+
+// TestAnUnknownStateIsNotInventedInto A Refusal: GitHub may add a word this
+// code has never seen, and blocking work over it would be a refusal this tool
+// made up rather than one GitHub stated.
+func TestAnUnknownStateIsNotInventedIntoARefusal(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged, _ := server(t, held("some-state-github-added-later"), runs)
+
+	if code, _, errb := try(t, "go-gitsafe/gitsafe", "1"); code != 0 || !*merged {
+		t.Fatalf("a state this code does not know must not become a refusal: %s", errb)
 	}
 }
