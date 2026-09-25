@@ -29,6 +29,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"net/http"
 	"os"
@@ -89,7 +90,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		path = filepath.Join(home, defaultToken)
 	}
-	token, err := readToken(path)
+	token, err := ghauth.Read(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 		return 1
@@ -465,18 +466,4 @@ func deleteBranch(token, repo, ref string) error {
 		return fmt.Errorf("GitHub answered %s", resp.Status)
 	}
 	return nil
-}
-
-// readToken never puts the token in an error, so a failure cannot leak what a
-// success would have protected.
-func readToken(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("cannot read %s: %w", path, err)
-	}
-	tok := strings.TrimSpace(string(b))
-	if tok == "" {
-		return "", fmt.Errorf("%s is empty", path)
-	}
-	return tok, nil
 }
