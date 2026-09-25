@@ -137,12 +137,64 @@ func otherTokens(home, checked string) []string {
 	return out
 }
 
-// missingFrom reports which of want is absent from have.
-func missingFrom(have, want []string) []string {
-	set := make(map[string]bool, len(have))
-	for _, s := range have {
+// implies maps a classic OAuth scope onto the scopes it CONTAINS.
+//
+// GitHub's scopes are a hierarchy, not a list: granting `write:packages` grants
+// `read:packages` with it, and the token's X-OAuth-Scopes header reports only
+// the one that was ticked. A literal comparison therefore reports a scope as
+// missing that the token plainly has.
+//
+// Measured: a token carrying `delete:packages, write:packages` was reported as
+// missing `read:packages`, and the reading was believed — the API call that
+// followed was blamed on the scope rather than on the token it actually used.
+// A guard that cries wolf gets read as a fact.
+//
+// From GitHub's "Scopes for OAuth apps". Only the containments are listed; a
+// scope that contains nothing needs no entry.
+var implies = map[string][]string{
+	"repo":             {"repo:status", "repo_deployment", "public_repo", "repo:invite", "security_events"},
+	"write:packages":   {"read:packages"},
+	"delete:packages":  {"read:packages"},
+	"admin:org":        {"write:org", "read:org", "manage_runners:org"},
+	"write:org":        {"read:org"},
+	"admin:public_key": {"write:public_key", "read:public_key"},
+	"write:public_key": {"read:public_key"},
+	"admin:repo_hook":  {"write:repo_hook", "read:repo_hook"},
+	"write:repo_hook":  {"read:repo_hook"},
+	"admin:org_hook":   {},
+	"user":             {"read:user", "user:email", "user:follow"},
+	"admin:gpg_key":    {"write:gpg_key", "read:gpg_key"},
+	"write:gpg_key":    {"read:gpg_key"},
+	"project":          {"read:project"},
+	"admin:enterprise": {"manage_runners:enterprise", "manage_billing:enterprise", "read:enterprise"},
+	"write:discussion": {"read:discussion"},
+	"codespace":        {"codespace:secrets"},
+}
+
+// expand returns the scopes a token really has: the ones it was granted, plus
+// everything those contain, transitively.
+func expand(granted []string) map[string]bool {
+	set := map[string]bool{}
+	var add func(string)
+	add = func(s string) {
+		if set[s] {
+			return // already expanded; also what stops a cycle, should one appear
+		}
 		set[s] = true
+		for _, sub := range implies[s] {
+			add(sub)
+		}
 	}
+	for _, s := range granted {
+		add(s)
+	}
+	return set
+}
+
+// missingFrom reports which of want the token cannot do — counting what its
+// scopes CONTAIN, not only what they are called.
+func missingFrom(have, want []string) []string {
+	set := expand(have)
 	var missing []string
 	for _, w := range want {
 		if !set[w] {
