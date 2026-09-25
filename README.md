@@ -47,11 +47,15 @@ how one of them ends up wrong.
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
 | `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. |
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
+| `ghpkg` | Lists and deletes the versions of a published package. Refuses to delete without `--yes`, printing what it would remove; refuses a tag that names no version or two; and **names the other tags on the manifest it is about to delete**, because several can point at one. |
 | `guard-bash` | Refuses a shell command that would put a secret on a command line, **before it runs**. An agent harness hook: it reads the command on stdin and answers with a deny. The rule it enforces was written down in three places and broken anyway — see below. |
 
-`redact` and `protect` are the two libraries under them: one hides secrets by
-their shape wherever they appear, the other answers "does this push write the
-branch pull requests land on".
+`redact`, `protect` and `ghauth` are the libraries under them: one hides
+secrets by their shape wherever they appear, one answers "does this push write
+the branch pull requests land on", and one reads a credential without ever
+putting it where a second process could see it — and knows that GitHub's scopes
+are a hierarchy, so a token ticked `write:packages` is not told it cannot read
+them.
 
 ## Installing
 
