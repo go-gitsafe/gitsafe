@@ -228,10 +228,13 @@ func Repair(dir string, write bool) Report {
 			e.Clean = ""
 			continue
 		}
-		if _, _, err := git(dir, "config", "--local", "--replace-all", e.Key, e.Clean); err != nil {
-			continue
-		}
-		// Read it back. An unverified rewrite is a claim, not a repair.
+		// A failed write is not reported without looking either. Two checkouts
+		// that share a configuration — a repository and its linked worktree —
+		// are repaired concurrently by [Walk], git locks the file, and one of
+		// the two is refused for a value the other has already fixed. Reading
+		// it back answers "is it clean now" for both, which is the question;
+		// "did my write succeed" is not.
+		_, _, _ = git(dir, "config", "--local", "--replace-all", e.Key, e.Clean)
 		got, _, err := git(dir, "config", "--local", "--get", e.Key)
 		if err != nil {
 			continue

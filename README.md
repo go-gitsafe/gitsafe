@@ -50,8 +50,13 @@ how one of them ends up wrong.
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
 | `ghpkg` | Lists and deletes the versions of a published package. Refuses to delete without `--yes`, printing what it would remove; refuses a tag that names no version or two; and **names the other tags on the manifest it is about to delete**, because several can point at one. |
 | `guard-bash` | Refuses a shell command that would put a secret on a command line, **before it runs**. An agent harness hook: it reads the command on stdin and answers with a deny. The rule it enforces was written down in three places and broken anyway — see below. |
+| `credscan` | Finds credentials embedded in git remote URLs across a whole machine, and strips them. Tells a secret from a username by SHAPE, so `ssh://git@github.com/…` is not a finding — and reports a credential's properties, never its value. Exits non-zero when it finds one, and exits 3 rather than 0 when it could not read what it walked. |
+| `git-post-checkout-guard` | The **global** post-checkout hook. A clone is where a credentialed URL gets WRITTEN, and git has no hook before one, so this is the earliest a hook can run: it takes the credential out of .git/config before the next fetch echoes it, and says so while you are still looking. It cannot stop the clone — see what it does not cover, below. |
 
-`redact`, `protect` and `ghauth` are the libraries under them: one hides
+`credurl`, `credfix`, `redact`, `protect` and `ghauth` are the libraries under
+them: one answers "is the part before the `@` a secret or a username" and holds
+the one table of issuer prefixes every guard here asks, one walks a machine and
+repairs what it finds, one hides
 secrets by their shape wherever they appear, one answers "does this push write
 the branch pull requests land on", and one reads a credential without ever
 putting it where a second process could see it — and knows that GitHub's scopes
@@ -113,6 +118,8 @@ go install github.com/go-gitsafe/gitsafe/cmd/ghmerge@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghnew@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/git-pre-push-guard@latest
+go install github.com/go-gitsafe/gitsafe/cmd/credscan@latest
+go install github.com/go-gitsafe/gitsafe/cmd/git-post-checkout-guard@latest
 ```
 
 The hook goes where git looks for hooks in every repository:
@@ -120,6 +127,7 @@ The hook goes where git looks for hooks in every repository:
 ```
 git config --global core.hooksPath ~/.config/git/hooks
 cp "$(go env GOPATH)/bin/git-pre-push-guard" ~/.config/git/hooks/pre-push
+cp "$(go env GOPATH)/bin/git-post-checkout-guard" ~/.config/git/hooks/post-checkout
 ```
 
 ## What the hook refuses, and what it deliberately allows
@@ -188,6 +196,148 @@ place. `gitpush` clears the list at both scopes before naming its own.
 
 Pure Go, no cgo, no dependencies outside the standard library. BSD-3-Clause.
 
+
+## `credscan` — a token in 117 remote URLs for three months
+
+    credscan scan  [root...]              report; default root is $HOME
+    credscan clean <root...> [--write]    strip them; a dry run without --write
+
+A GitHub classic personal access token sat in the `origin` **fetch and push** URL
+of 117 local checkouts for three months. Git prints a remote URL on any fetch, so
+it was disclosed from the first day. Nothing on the machine noticed, because
+nothing was looking.
+
+Two detectors were written by hand during that incident and **both were wrong, in
+opposite directions.** They are the specification:
+
+| what it matched | what it got wrong |
+|---|---|
+| `://user:TOKEN@host` | **missed 5 checkouts** whose URL was `://TOKEN@host`. A credential does not need a username in front of it. |
+| any `://…@…` | **flagged 55 URLs that were never leaks**: `ssh://git@github.com/o/r`, `git@plmlab.math.cnrs.fr:team/repo`. `git` there is an SSH login. |
+
+So telling a secret from a username IS the job, and getting it wrong in the
+second direction is the more expensive one: a guard that calls everyday remotes
+leaks gets switched off, and then nothing guards anything. The verdict is made on
+the SHAPE of the userinfo, never on the presence of an `@`:
+
+| | |
+|---|---|
+| known issuers | `ghp_ gho_ ghu_ ghs_ ghr_ github_pat_` (GitHub), `glpat- gldt- glrt-` (GitLab), `xox[bpars]-` (Slack), `AKIA ASIA` (AWS) |
+| a password half | present and not a documented placeholder ⇒ a credential, whatever it looks like. There is no legitimate reason for that half to exist in a remote URL. |
+| anything else, long | ≥ 24 characters, digits and both cases, a token charset, per-character entropy above a word's — or ≥ 32 hex digits, since a digest has only one case |
+| known benign | the bare login `git`; and `oauth2`, `x-access-token`, `token`, `gitlab-ci-token`, **as a username** — those names say the password is the credential, so with a password half the same URL IS a leak and the password is what is reported |
+| `git@host:path` | its userinfo is a login by construction — ssh is handed it as one — so the entropy fallback does not apply there. A known issuer prefix still does: nothing beginning `ghp_` is somebody's login. |
+
+The six cases of the table above are a test, each asserted in **both**
+directions. A table of leaks alone would have passed for the too-broad detector.
+
+### It never prints what it found
+
+A finding names the repository, the host, the configuration key, and the
+credential's **properties**: issuer prefix, length, and the first 12 hex digits
+of its SHA-256, so two findings can be told apart and the same credential can be
+recognised in two places.
+
+    remote.origin.pushurl: GitHub classic personal access token (ghp_…), 40 chars,
+                           sha256:d5f9c7412cb8, in the username of a URL for github.com
+
+Not the value. A tool that printed the secret it found would be the leak it is
+reporting. The prefix comes from the table rather than from the input, so even
+the printed prefix cannot echo something unknown — and a username is only ever
+repeated when it is one of the benign names above, because echoing a userinfo
+this decided was harmless would disclose it in exactly the case where the
+decision was wrong.
+
+### It says what it walked
+
+    walked 899556 directories in 2m38s
+    found 2155 checkouts, 2133 distinct configurations, 0 unreadable, 243 directories refused listing
+    0 of them carry a credential: 0 URL(s) still do
+
+Every run prints those counts, whether it found anything or not, and a
+repository and its linked worktrees count once. A scan that could not read must
+not report zero: a sweep here once printed "4 files" for 4413 because the
+command it used had no such flag, and it read as a success.
+
+| exit | |
+|---|---|
+| 0 | walked something, read all of it, found nothing |
+| 1 | a credential is in a URL |
+| 2 | usage |
+| 3 | **the run established nothing** — no checkout found, or one it could not read. Not "clean". |
+
+Exit 3 is not pedantry. On this machine `git` can be an Xcode stub that prints a
+licence refusal and still exits 0, and a repository whose configuration comes
+back empty is impossible — every one has `core.repositoryformatversion`. So an
+empty answer is reported as unreadable, with whatever git said on stderr while
+succeeding, which every caller that checks only the exit status throws away.
+
+### `clean` reads back what it wrote
+
+`clean` strips the userinfo, leaving `https://host/owner/repo` so git falls back
+to the credential helper, and then **reads each value back out of git** before
+counting it repaired. A repair that reports success without looking is how this
+lasted three months.
+
+    credentialed URLs: 2 before, 0 after
+
+It is a dry run unless given `--write`, it is idempotent, and `--write` refuses
+to default to `$HOME`: this machine has 2155 checkouts under it, and somebody
+repairing one did not ask for the other 2154. The credential never reaches a
+command line — only the CLEANED value is passed to git, which is why the rewrite
+uses `--replace-all` on a key rather than any form that names the old value.
+
+Three findings it reports and will **not** repair, because each would be a guess:
+a credential in the configuration KEY (`url.https://TOKEN@host/.insteadOf` is a
+legal rewrite rule — where it should point instead is a decision), an scp-style
+URL (dropping the user leaves `host:path`, which is ambiguous), and a key holding
+more than one URL (`--replace-all` would collapse them).
+
+## Prevention, and exactly where it stops
+
+A push was already refused, by `git-pre-push-guard`, and that is where the first
+two leaks here were caught. But **a push is not where the URL is written.**
+`git clone https://TOKEN@host/o/r` writes it into `.git/config`, prints it on
+that first fetch, and prints it again on every fetch afterwards. In this incident
+there were three months between the clone and anyone looking.
+
+Git has no pre-clone hook and no hook on a configuration write. The earliest a
+hook can run at all is `post-checkout`, which git runs at the end of a clone —
+after the clone, after the token has been printed once. `git-post-checkout-guard`
+takes the credential out of the file at that moment, reads the value back, prints
+its properties, and exits non-zero so the message has something to stop on.
+
+**What that does not cover.** A guard whose limits are unstated is how this went
+unnoticed for three months:
+
+- `git clone --bare`, `--mirror` and `--no-checkout` run **no post-checkout hook
+  at all**. Nothing catches those.
+- `git fetch https://TOKEN@host/…`, `git pull <url>`, `git ls-remote <url>`:
+  nothing is written to config, so no hook runs, and git may still echo the URL.
+- `git remote add` and `git remote set-url` with a credential: git has no hook on
+  a configuration write. Not covered until the next scan.
+- A repository that sets its own `core.hooksPath` replaces the global one, and
+  this stops applying there.
+- Only the LOCAL configuration is read: a credential in the global config, in
+  `~/.git-credentials` or in `.netrc` is not looked at.
+- And it is remediation rather than prevention. By the time it runs, the
+  credential has been on a command line and in git's output. **It must still be
+  revoked.**
+
+For every case above the barrier is detection on a schedule — `credscan scan`
+exits non-zero, so cron or a launchd job gates on it — plus the push refusal that
+was already here. That is the honest answer, and it is a weaker one than the
+word "prevention" suggests. The only thing that removes the class of mistake is
+never putting a credential in a URL: `gitpush` and a credential helper do the
+same job with nothing to leak.
+
+    # once a day, and it says something only when it finds something
+    credscan scan >/tmp/credscan.log 2>&1 || mail -s "credscan" you < /tmp/credscan.log
+
+`guard-bash` is the one barrier that is genuinely in front of the mistake: it
+refuses a command line carrying a token before it runs, so `git clone
+https://TOKEN@host/…` never executes. It covers only commands that go through
+the agent harness, and nothing a person types in a terminal.
 
 ## `guard-bash`, and why a written rule was not enough
 
