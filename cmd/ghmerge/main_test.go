@@ -627,3 +627,153 @@ func TestAnUnknownStateIsNotInventedIntoARefusal(t *testing.T) {
 		t.Fatalf("a state this code does not know must not become a refusal: %s", errb)
 	}
 }
+
+// run is one check run as GitHub reports it.
+func checkrun(id int64, name, started, conclusion string) map[string]any {
+	return map[string]any{
+		"id": id, "name": name, "started_at": started,
+		"status": "completed", "conclusion": conclusion,
+	}
+}
+
+// TestARerunReplacesTheRunItReran is the case that refused a green pull
+// request. Two runs of one name on one SHA: the failure, and the re-run that
+// replaced it. GitHub, branch protection and `gh pr checks` all call this
+// green; reading both called it red.
+func TestARerunReplacesTheRunItReran(t *testing.T) {
+	merged, _ := server(t, green(), []map[string]any{
+		checkrun(1, "docs", "2026-09-26T15:14:32Z", "failure"),
+		checkrun(2, "docs", "2026-09-26T15:15:28Z", "success"),
+	})
+	code, out, errb := try(t, "o/r", "1")
+	if code != 0 {
+		t.Fatalf("refused a re-run that passed: %d %s%s", code, out, errb)
+	}
+	if !*merged {
+		t.Error("not merged")
+	}
+	if !strings.Contains(out, "1 check(s)") {
+		t.Errorf("the count still reports both runs: %q", out)
+	}
+}
+
+// TestARerunThatBrokeIt is the other direction, and the one that matters: a
+// green run followed by a re-run that failed must refuse. A collapse that kept
+// whichever it saw first, or whichever was green, would merge this.
+func TestARerunThatBrokeIt(t *testing.T) {
+	merged, _ := server(t, green(), []map[string]any{
+		checkrun(1, "docs", "2026-09-26T15:14:32Z", "success"),
+		checkrun(2, "docs", "2026-09-26T15:15:28Z", "failure"),
+	})
+	code, out, errb := try(t, "o/r", "1")
+	if code == 0 {
+		t.Fatal("merged although the latest run failed")
+	}
+	if *merged {
+		t.Error("merged")
+	}
+	if !strings.Contains(errb+out, "docs failure") {
+		t.Errorf("did not name the failing check: %q", errb+out)
+	}
+}
+
+// TestTheOrderInTheResponseDoesNotDecide: the same two runs, newest first.
+// GitHub does not promise an order, so neither answer may depend on one.
+func TestTheOrderInTheResponseDoesNotDecide(t *testing.T) {
+	merged, _ := server(t, green(), []map[string]any{
+		checkrun(2, "docs", "2026-09-26T15:15:28Z", "failure"),
+		checkrun(1, "docs", "2026-09-26T15:14:32Z", "success"),
+	})
+	if code, out, errb := try(t, "o/r", "1"); code == 0 {
+		t.Fatalf("merged although the latest run failed: %s%s", out, errb)
+	}
+	if *merged {
+		t.Error("merged")
+	}
+}
+
+// TestTwoRunsInTheSameSecondAreBrokenByID. started_at has one-second
+// resolution, and a re-run can land inside the same second.
+func TestTwoRunsInTheSameSecondAreBrokenByID(t *testing.T) {
+	merged, _ := server(t, green(), []map[string]any{
+		checkrun(99, "docs", "2026-09-26T15:15:28Z", "failure"),
+		checkrun(7, "docs", "2026-09-26T15:15:28Z", "success"),
+	})
+	if code, _, _ := try(t, "o/r", "1"); code == 0 {
+		t.Fatal("merged although the later id failed")
+	}
+	if *merged {
+		t.Error("merged")
+	}
+}
+
+// TestDifferentNamesAreNotCollapsed. The key is the name, so two checks that
+// ran once each must both still be judged.
+func TestDifferentNamesAreNotCollapsed(t *testing.T) {
+	merged, _ := server(t, green(), []map[string]any{
+		checkrun(1, "build", "2026-09-26T15:14:32Z", "success"),
+		checkrun(2, "docs", "2026-09-26T15:14:33Z", "failure"),
+	})
+	code, out, errb := try(t, "o/r", "1")
+	if code == 0 {
+		t.Fatal("collapsed two different checks into one")
+	}
+	if *merged {
+		t.Error("merged")
+	}
+	if !strings.Contains(errb+out, "docs failure") {
+		t.Errorf("did not name the failing check: %q", errb+out)
+	}
+}
+
+// TestASecondPageIsRead. A failure on page two is still a failure, and a tool
+// that stops at page one merges through it.
+func TestASecondPageIsRead(t *testing.T) {
+	merged := false
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			merged = true
+			fmt.Fprint(w, `{"merged":true}`)
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			page := r.URL.Query().Get("page")
+			body := map[string]any{"total_count": 101}
+			if page == "1" {
+				runs := make([]map[string]any, 0, 100)
+				for i := range 100 {
+					runs = append(runs, checkrun(int64(i), fmt.Sprintf("c%03d", i), "2026-09-26T15:00:00Z", "success"))
+				}
+				body["check_runs"] = runs
+			} else {
+				body["check_runs"] = []map[string]any{
+					checkrun(100, "the-one-that-failed", "2026-09-26T15:00:00Z", "failure"),
+				}
+			}
+			_ = json.NewEncoder(w).Encode(body)
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": []map[string]any{}})
+		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusNoContent)
+		case strings.Contains(r.URL.Path, "/pulls/"):
+			_ = json.NewEncoder(w).Encode(green())
+		default:
+			t.Errorf("the fake GitHub was asked for %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(s.Close)
+	was := apiBase
+	apiBase = s.URL
+	t.Cleanup(func() { apiBase = was })
+
+	code, out, errb := try(t, "o/r", "1")
+	if code == 0 {
+		t.Fatal("merged with a failure on the second page")
+	}
+	if merged {
+		t.Error("merged")
+	}
+	if !strings.Contains(errb+out, "the-one-that-failed") {
+		t.Errorf("did not name it: %q", errb+out)
+	}
+}

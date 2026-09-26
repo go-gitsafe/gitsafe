@@ -25,16 +25,19 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -361,9 +364,11 @@ type pr struct {
 }
 
 type checkRun struct {
+	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
+	StartedAt  string `json:"started_at"`
 }
 
 func pullRequest(token, repo string, number int) (*pr, error) {
@@ -396,14 +401,68 @@ func statuses(token, repo, sha string) ([]status, error) {
 }
 
 func checks(token, repo, sha string) ([]checkRun, error) {
-	var out struct {
-		CheckRuns []checkRun `json:"check_runs"`
+	const per = 100
+	var all []checkRun
+	for page := 1; ; page++ {
+		var out struct {
+			Total     int        `json:"total_count"`
+			CheckRuns []checkRun `json:"check_runs"`
+		}
+		url := fmt.Sprintf("%s/repos/%s/commits/%s/check-runs?per_page=%d&page=%d", apiBase, repo, sha, per, page)
+		if err := get(token, url, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.CheckRuns...)
+		// ⛔ A page that is not followed drops check runs, and the ones it
+		// drops are as likely to be the failing ones as any other. A tool
+		// whose whole job is to refuse a merge must not stop reading early.
+		if len(out.CheckRuns) == 0 || len(all) >= out.Total {
+			break
+		}
 	}
-	url := fmt.Sprintf("%s/repos/%s/commits/%s/check-runs?per_page=100", apiBase, repo, sha)
-	if err := get(token, url, &out); err != nil {
-		return nil, err
+	return latestPerName(all), nil
+}
+
+// latestPerName keeps one run per name: the most recent.
+//
+// ⛔ GitHub returns EVERY run for the commit, including the one a re-run
+// replaced. Measured on go-filesystems.github.io#15: two runs named "current /
+// the landing names what the organisation has" on one SHA — a failure at
+// 15:14:32 from a scanner version that no longer exists, and the success at
+// 15:15:28 that replaced it. Reading both refuses a pull request that GitHub
+// itself, branch protection and `gh pr checks` all call green, and it refuses
+// every pull request that was ever red and re-run, which is most of them.
+//
+// The status API has no such problem, and the reason is worth keeping: this
+// tool reads the COMBINED status, which already collapses repeated postings of
+// one context down to the latest. Nothing collapsed the check runs.
+//
+// A name is the whole key, which is what branch protection matches on too. Two
+// different workflows that give a job the same name are already indistinguishable
+// to a required-checks rule, so this is not a new limit — but it is a limit.
+func latestPerName(runs []checkRun) []checkRun {
+	best := make(map[string]checkRun, len(runs))
+	for _, r := range runs {
+		prev, seen := best[r.Name]
+		if !seen || newer(r, prev) {
+			best[r.Name] = r
+		}
 	}
-	return out.CheckRuns, nil
+	out := slices.Collect(maps.Values(best))
+	// The API's order is not promised, and a tool that names what failed must
+	// name it the same way twice.
+	slices.SortFunc(out, func(a, b checkRun) int { return cmp.Compare(a.Name, b.Name) })
+	return out
+}
+
+// newer answers whether a started later than b. started_at is what GitHub
+// orders by, and the id breaks a tie — two runs of one name in the same second
+// are still two runs, and the later id is the later one.
+func newer(a, b checkRun) bool {
+	if a.StartedAt != b.StartedAt {
+		return a.StartedAt > b.StartedAt
+	}
+	return a.ID > b.ID
 }
 
 func get(token, url string, into any) error {
