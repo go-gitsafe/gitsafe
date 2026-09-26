@@ -46,6 +46,7 @@ how one of them ends up wrong.
 | `gitpush` | Pushes without a token ever reaching a command line: it **names** a credential helper rather than reading the secret, refuses a remote URL that carries one, and redacts what it prints by shape. Takes the same arguments as the command it replaces. |
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
 | `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. |
+| `ghnew` | Creates a repository that **already has a default branch**, so no commit of yours ever has to land on it unreviewed. An empty repository has no branches, `gh pr create` has no base, and the way out that presents itself is pushing straight to the default branch — four repositories were bootstrapped that way here in one afternoon. It asks GitHub to write the first commit, then **looks** to confirm the branch is there before saying it worked. There is no flag to skip that. |
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
 | `ghpkg` | Lists and deletes the versions of a published package. Refuses to delete without `--yes`, printing what it would remove; refuses a tag that names no version or two; and **names the other tags on the manifest it is about to delete**, because several can point at one. |
 | `guard-bash` | Refuses a shell command that would put a secret on a command line, **before it runs**. An agent harness hook: it reads the command on stdin and answers with a deny. The rule it enforces was written down in three places and broken anyway — see below. |
@@ -57,11 +58,59 @@ putting it where a second process could see it — and knows that GitHub's scope
 are a hierarchy, so a token ticked `write:packages` is not told it cannot read
 them.
 
+## A repository with no branch is how a commit reaches main unreviewed
+
+`gh repo create` makes an empty repository: no commits, no branches, no default
+branch. So `gh pr create` has nothing to open a pull request *against*, and the
+first commit cannot go through one. What presents itself instead is a direct push
+to `main` — and that is how four repositories got their first commit here in one
+afternoon, none of them reviewed and none of them tested, because there was
+nothing there yet to test.
+
+The pre-push hook did not stop it either, and should not have: it refuses a write
+to the branch pull requests land on, and a branch that does not exist yet is not
+that.
+
+There is a second trap in the same place. Push a **feature** branch first to an
+empty repository and GitHub adopts *that* branch as the default. The repository
+then has no `main` at all, and its default branch is named after whatever happened
+to go up first. One of those four needed its default branch reset by hand
+afterwards.
+
+`ghnew` removes both by having GitHub write the first commit:
+
+    ghnew -public go-compressions/adc "Apple Data Compression, pure Go"
+    ghnew -private me/notes
+    ghnew -public -clone go-filesystems/xar "the macOS .pkg container"
+
+The repository arrives with `main`, a LICENSE and a README, all of them GitHub's
+work rather than yours — so from your first line of code onward, everything is a
+pull request.
+
+Three things it refuses, and each is the interesting part:
+
+- **It will not tell you it worked without looking.** `auto_init` is a request,
+  not a guarantee: an invalid licence keyword gives a 201 for the repository and
+  no initial commit. So it reads the ref back, retrying while GitHub finishes
+  writing it, and if the branch never appears it says so and tells you **not** to
+  push — which is the one moment that advice matters.
+- **It insists on `-public` or `-private`.** Neither default is safe: one
+  publishes something nobody asked to publish, the other quietly makes a
+  repository the fleet's tooling cannot see.
+- **It will not adopt a repository that already exists**, because "already there"
+  says nothing about whether it has a default branch.
+
+There is deliberately **no flag for creating one without an initial commit**. That
+is the whole defect, and an option to switch it off would be an option to have it
+back; a test asserts the flag does not exist. `gh repo create` is still there for
+anyone who genuinely wants an empty repository.
+
 ## Installing
 
 ```
 go install github.com/go-gitsafe/gitsafe/cmd/gitpush@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghmerge@latest
+go install github.com/go-gitsafe/gitsafe/cmd/ghnew@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/git-pre-push-guard@latest
 ```
