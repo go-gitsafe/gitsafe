@@ -264,7 +264,7 @@ command it used had no such flag, and it read as a success.
 | 0 | walked something, read all of it, found nothing |
 | 1 | a credential is in a URL |
 | 2 | usage |
-| 3 | **the run established nothing** — no checkout found, or one it could not read. Not "clean". |
+| 3 | **found nothing and did not cover everything** — no checkout found, or one it could not read. Not "clean". A finding outranks it: a full `$HOME` scan here found 3 credentials *and* 21 checkouts it could not read, and answering only "inconclusive" would have buried the credentials. |
 
 Exit 3 is not pedantry. On this machine `git` can be an Xcode stub that prints a
 licence refusal and still exits 0, and a repository whose configuration comes
@@ -286,6 +286,14 @@ to default to `$HOME`: this machine has 2155 checkouts under it, and somebody
 repairing one did not ask for the other 2154. The credential never reaches a
 command line — only the CLEANED value is passed to git, which is why the rewrite
 uses `--replace-all` on a key rather than any form that names the old value.
+
+It rewrites any single-valued key whose VALUE is a credentialed URL, whatever the
+key is called. That is not generality for its own sake: this started out
+restricted to `remote.<name>.url` and `.pushurl`, and the first real scan found
+three checkouts still carrying a token in `branch.<name>.remote` — which git
+allows to be a URL — months after every remote URL on the machine had been
+cleaned. A repair aimed at the key somebody thought of is a repair that leaves
+the others.
 
 Three findings it reports and will **not** repair, because each would be a guess:
 a credential in the configuration KEY (`url.https://TOKEN@host/.insteadOf` is a

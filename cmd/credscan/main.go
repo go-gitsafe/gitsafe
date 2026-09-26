@@ -27,9 +27,11 @@
 // # Counting
 //
 // Every run says how many directories it walked, how many checkouts it found,
-// how many it could not read, and how long it took. A scan that could not read
-// exits 3 rather than reporting a clean machine: a sweep here once printed
-// "4 files" for 4413 and read as a success.
+// how many it could not read, and how long it took. A run that found nothing and
+// could not read everything exits 3 rather than reporting a clean machine: a
+// sweep here once printed "4 files" for 4413 and read as a success. A finding
+// outranks that, because "there is a disclosed credential" is the more
+// actionable answer than "ask again".
 package main
 
 import (
@@ -68,8 +70,9 @@ flags:
 
 exit status:
   0  nothing found      1  a credential was found
-  2  usage              3  the scan established nothing (nothing walked, or a
-                           configuration it could not read) — which is not "clean"
+  2  usage              3  found nothing AND did not cover everything (nothing
+                           walked, or a configuration it could not read) — which
+                           is not the same as "clean". A finding outranks it: 1.
 `)
 }
 
@@ -189,9 +192,19 @@ func sweep(verb string, roots []string, write, verbose bool, stdout, stderr io.W
 	}
 	fmt.Fprintln(stdout)
 
+	// The incompleteness is printed whether or not anything was found: a run that
+	// could not read part of the machine has not cleared that part, and that is
+	// true even when it found something elsewhere.
 	if !st.Complete() {
-		fmt.Fprintf(stderr, "\ncredscan: this run established nothing.%s\n", incomplete(st))
+		fmt.Fprintf(stderr, "\ncredscan: this run did not cover everything.%s\n", incomplete(st))
 		fmt.Fprintln(stderr, "  A scan that could not read must not be reported as a clean machine.")
+	}
+	// A finding outranks an incomplete walk, because it is the more actionable
+	// answer: 3 says "ask again", 1 says "there is a disclosed credential".
+	// Measured on this machine: a full $HOME scan found 3 credentials AND 21
+	// checkouts it could not read, and reporting only the second would have
+	// buried the first.
+	if remaining == 0 && !st.Complete() {
 		return exitInconclusive
 	}
 	if remaining > 0 {

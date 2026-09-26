@@ -58,17 +58,22 @@ type Entry struct {
 	Repaired bool
 }
 
-// Rewritable reports whether [Repair] will touch this entry. Only a remote's
-// fetch or push URL is rewritten: those have one unambiguous correct value.
-// Anything else is reported for a person, because guessing at a repair is worse
-// than naming the problem.
-func (e Entry) Rewritable() bool {
-	if e.Clean == "" {
-		return false
-	}
-	return strings.HasPrefix(e.Key, "remote.") &&
-		(strings.HasSuffix(e.Key, ".url") || strings.HasSuffix(e.Key, ".pushurl"))
-}
+// Rewritable reports whether [Repair] will touch this entry.
+//
+// Any single-valued key whose VALUE is a credentialed URL is rewritten, whatever
+// the key is called, because the clean form of such a URL is the same everywhere
+// it appears: the URL with no userinfo. This started out restricted to
+// `remote.<name>.url` and `.pushurl`, and a scan of this machine found what that
+// missed — three checkouts still carrying a token in `branch.<name>.remote`,
+// which git allows to be a URL, months after every remote URL had been
+// cleaned. A repair aimed at the key a person happens to think of is a repair
+// that leaves the others.
+//
+// What is NOT rewritten is a credential in the KEY — `url.<base>.insteadOf` is a
+// rewrite rule and where it should point instead is a decision — and a key
+// holding more than one value, which [Repair] discovers and reports. Both are
+// named rather than guessed at.
+func (e Entry) Rewritable() bool { return e.Clean != "" && !e.InKey }
 
 // Report is what one repository turned out to hold.
 type Report struct {

@@ -372,21 +372,48 @@ func TestRoots(t *testing.T) {
 	}
 }
 
+// TestRewritable. The clean form of a credentialed URL is the same wherever the
+// URL sits, so the key's NAME is not what decides — a scan of this machine found
+// a token in `branch.<name>.remote`, which git allows to be a URL, in three
+// checkouts whose remote URLs had all been cleaned months earlier.
 func TestRewritable(t *testing.T) {
 	for _, tc := range []struct {
 		key, clean string
+		inKey      bool
 		want       bool
 	}{
-		{"remote.origin.url", "https://github.com/o/r", true},
-		{"remote.origin.pushurl", "https://github.com/o/r", true},
-		{"remote.a.b.url", "https://github.com/o/r", true},
-		{"remote.origin.url", "", false}, // nothing to write
-		{"url.https://github.com/.insteadof", "https://github.com/o/r", false},
-		{"core.editor", "https://github.com/o/r", false},
+		{"remote.origin.url", "https://github.com/o/r", false, true},
+		{"remote.origin.pushurl", "https://github.com/o/r", false, true},
+		{"branch.main.remote", "https://github.com/o/r", false, true},
+		{"submodule.x.url", "https://github.com/o/r", false, true},
+		{"remote.origin.url", "", false, false},                // nothing to write
+		{"url.https://github.com/.insteadof", "", true, false}, // the key carries it
+		{"url.https://github.com/.insteadof", "https://x/y", true, false},
 	} {
-		if got := (Entry{Key: tc.key, Clean: tc.clean}).Rewritable(); got != tc.want {
-			t.Errorf("Rewritable(%q, %q) = %v, want %v", tc.key, tc.clean, got, tc.want)
+		got := (Entry{Key: tc.key, Clean: tc.clean, InKey: tc.inKey}).Rewritable()
+		if got != tc.want {
+			t.Errorf("Rewritable(%q, %q, inKey=%v) = %v, want %v", tc.key, tc.clean, tc.inKey, got, tc.want)
 		}
+	}
+}
+
+// TestACredentialInABranchRemoteIsRepaired is the case a real scan found and the
+// first version of this package would have left behind: git allows
+// `branch.<name>.remote` to be a URL, and three checkouts here were still
+// carrying a token in one after every remote URL on the machine had been
+// cleaned. A repair aimed at the key somebody thought of is a repair that leaves
+// the others.
+func TestACredentialInABranchRemoteIsRepaired(t *testing.T) {
+	hermetic(t)
+	dir := repoWith(t, filepath.Join(t.TempDir(), "r"), "https://github.com/o/r.git", "")
+	run(t, dir, "config", "--local", "branch.main.remote", "https://x-access-token:"+fakeToken+"@github.com/o/r.git")
+
+	r := Repair(dir, true)
+	if r.Before() != 1 || r.After() != 0 {
+		t.Fatalf("before=%d after=%d, want 1 and 0: %+v", r.Before(), r.After(), r.Leaks)
+	}
+	if got := run(t, dir, "config", "--local", "--get", "branch.main.remote"); got != "https://github.com/o/r.git" {
+		t.Errorf("branch.main.remote = %q", got)
 	}
 }
 

@@ -113,7 +113,7 @@ func TestAScanThatWalkedNothingIsNotClean(t *testing.T) {
 	if code != exitInconclusive {
 		t.Errorf("exit = %d, want %d\n%s%s", code, exitInconclusive, out, errb)
 	}
-	if !strings.Contains(errb, "established nothing") {
+	if !strings.Contains(errb, "did not cover everything") {
 		t.Errorf("silence was not explained:\n%s", errb)
 	}
 	if !strings.Contains(out, "found 0 checkouts") {
@@ -286,8 +286,12 @@ func TestARewriteThatCannotBeWrittenSaysSoLoudly(t *testing.T) {
 	}
 }
 
-// TestAnUnreadableCheckoutMakesTheRunInconclusive, even when nothing was found:
-// on this machine a git that cannot run still exits 0.
+// TestAnUnreadableCheckoutMakesTheRunInconclusive, when nothing was found: on
+// this machine a git that cannot run still exits 0.
+//
+// And when something WAS found, the finding outranks it — measured on this
+// machine, a full $HOME scan found 3 credentials and 21 checkouts it could not
+// read, and answering only "inconclusive" would have buried the credentials.
 func TestAnUnreadableCheckoutMakesTheRunInconclusive(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
@@ -301,5 +305,15 @@ func TestAnUnreadableCheckoutMakesTheRunInconclusive(t *testing.T) {
 	}
 	if !strings.Contains(out, "1 unreadable") {
 		t.Errorf("the unreadable checkout was not counted:\n%s", out)
+	}
+
+	// Now give it something to find as well.
+	repo(t, filepath.Join(root, "dirty"), "https://"+fakeToken+"@github.com/o/r.git")
+	code, out, errb = exec1(t, "scan", root)
+	if code != exitFound {
+		t.Errorf("exit = %d, want %d — a finding outranks an incomplete walk\n%s%s", code, exitFound, out, errb)
+	}
+	if !strings.Contains(errb, "did not cover everything") {
+		t.Errorf("the incomplete walk was no longer mentioned:\n%s", errb)
 	}
 }
