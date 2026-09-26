@@ -12,24 +12,29 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/go-gitsafe/gitsafe/credurl"
 )
 
 // Mask is what replaces a secret. It is deliberately unmistakable, so that a
 // redacted transcript reads as redacted rather than as a truncated token.
 const Mask = "«REDACTED»"
 
-// shapes are the token formats GitHub issues. They are matched even when the
-// exact value is not known, because a secret can arrive from somewhere the
-// caller never read — a nested command, an error message, a remote's own reply.
+// shapes are the credential formats matched even when the exact value is not
+// known, because a secret can arrive from somewhere the caller never read — a
+// nested command, an error message, a remote's own reply.
 //
-//   - gh[pousr]_… : classic personal access, OAuth, user-to-server,
-//     server-to-server and refresh tokens
-//   - github_pat_… : fine-grained personal access tokens
-//   - x-access-token:… : the form that appears inside a URL, which is exactly
-//     how both leaks happened
+// The issuer prefixes come from [credurl.TokenPattern] rather than from a list
+// kept here. There used to be a list here and it knew GitHub and nothing else,
+// so Clean answered "clean" for a GitLab token in a URL and the global pre-push
+// hook would have pushed it without a word. Two lists of prefixes in two
+// packages is how one of them ends up missing the prefix that leaks.
+//
+// The second shape is the credential-in-a-URL form, which is what both leaks on
+// this machine looked like. It stays here because it is about masking a STRING
+// rather than judging a URL; the judgement lives in [credurl].
 var shapes = []*regexp.Regexp{
-	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{16,}`),
-	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{16,}`),
+	credurl.TokenPattern(16),
 	regexp.MustCompile(`(?i)://[^/@\s:]+:[^/@\s]+@`),
 }
 
@@ -83,5 +88,8 @@ func Clean(s string) bool {
 			return false
 		}
 	}
-	return true
+	// And a URL is put to [credurl] as well, because the shapes above catch a
+	// credential whose ISSUER is known and a URL can carry one from an issuer
+	// nobody here has heard of. That half was missing.
+	return !credurl.Inspect(s).Leak()
 }

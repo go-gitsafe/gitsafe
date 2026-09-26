@@ -12,3 +12,7 @@
 /cmd/*/git-pre-push-guard
 /cmd/*/git-credential-tokenfile
 /ghrelease
+/credscan
+/cmd/*/credscan
+/git-post-checkout-guard
+/cmd/*/git-post-checkout-guard
