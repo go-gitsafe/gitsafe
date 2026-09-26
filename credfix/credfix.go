@@ -153,6 +153,15 @@ func Inspect(dir string) Report {
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(dir, p)
 			}
+			// And the two spellings of one path are not equal as strings. From
+			// a linked worktree git prints the shared config ABSOLUTE, from the
+			// main checkout it prints it relative — and on macOS the absolute
+			// one comes back through /private/tmp while the walk arrived via
+			// /tmp. Symlinks are resolved so that a repository and its
+			// worktrees are one configuration, which is what the count claims.
+			if real, err := filepath.EvalSymlinks(p); err == nil {
+				p = real
+			}
 			r.Config = p
 		}
 		key, value, _ := strings.Cut(kv, "\n")
