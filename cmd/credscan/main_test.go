@@ -69,15 +69,17 @@ func TestScanFindsAndExitsNonZero(t *testing.T) {
 	if strings.Contains(out+errb, fakeToken) {
 		t.Error("the credential was printed")
 	}
+	// Which key, what kind of credential, a digest telling it from another,
+	// where it points, what was walked, how many were found, and what to do.
 	for _, want := range []string{
-		"remote.origin.url",                       // which key
-		"GitHub classic personal access token",    // what kind
-		"sha256:",                                 // told apart from another
-		"github.com",                              // where
-		"walked",                                  // and what was walked
-		"found 2 checkouts",                       // counted, not implied
-		"1 of them carry a credential",            //
-		"would become https://github.com/o/r.git", // and what to do
+		"remote.origin.url",
+		"GitHub classic personal access token",
+		"sha256:",
+		"github.com",
+		"walked",
+		"found 2 checkouts",
+		"1 of them carry a credential",
+		"would become https://github.com/o/r.git",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not mention %q:\n%s", want, out)
