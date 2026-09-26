@@ -104,6 +104,9 @@ var shapes = []Shape{
 	{"GitLab runner token", "glrt-", `[A-Za-z0-9_-]`, 16},
 	{"Slack bot token", "xoxb-", `[A-Za-z0-9-]`, 8},
 	{"Slack user token", "xoxp-", `[A-Za-z0-9-]`, 8},
+	{"Slack app-level token", "xoxa-", `[A-Za-z0-9-]`, 8},
+	{"Slack refresh token", "xoxr-", `[A-Za-z0-9-]`, 8},
+	{"Slack session token", "xoxs-", `[A-Za-z0-9-]`, 8},
 	{"AWS access key id", "AKIA", `[0-9A-Z]`, 12},
 	{"AWS temporary access key id", "ASIA", `[0-9A-Z]`, 12},
 }

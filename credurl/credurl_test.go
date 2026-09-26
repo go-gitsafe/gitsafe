@@ -95,6 +95,11 @@ func TestAUsernameIsNeverEchoedUnlessItIsKnownBenign(t *testing.T) {
 	if got := Inspect("ssh://git@github.com/o/r").Login; got != "git" {
 		t.Errorf("Login = %q, want git", got)
 	}
+	// A benign login may be named, and is: a person reading a report needs to
+	// know WHICH remote it is talking about.
+	if got := Inspect("ssh://git@github.com/o/r").String(); got != "username git@github.com" {
+		t.Errorf("String() = %q", got)
+	}
 	f := Inspect("https://alice@example.org/o/r")
 	if f.Verdict != Username {
 		t.Fatalf("verdict = %v, want username", f.Verdict)
@@ -186,6 +191,7 @@ func TestGenericFallback(t *testing.T) {
 		want bool
 	}{
 		{"Zq7Kp2Lm9Rt4Wx6Yn1Bv3Cd5Ef8", true},              // mixed case, digits, long
+		{"Zq7Kp2Lm+Rt4Wx6/n1Bv3Cd5=Ef8", true},             // and base64's own characters
 		{"deadbeefcafe0123456789abcdef0123456789ab", true}, // a 40-char hex digest: one case by nature
 		{"git", false},                             // the SSH login, 55 times over
 		{"oauth2", false},                          // a documented placeholder

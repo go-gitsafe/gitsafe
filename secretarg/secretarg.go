@@ -38,6 +38,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/go-gitsafe/gitsafe/credurl"
 	"github.com/go-gitsafe/gitsafe/shellcmd"
 )
 
@@ -57,8 +58,13 @@ type Finding struct {
 func (f Finding) Found() bool { return f.Rule != "" }
 
 var (
-	// literal token shapes: a secret typed out in full.
-	literal = regexp.MustCompile(`ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|gho_[A-Za-z0-9]{8,}|ghs_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{12,}|x-access-token:[^@\s]+`)
+	// literal token shapes: a secret typed out in full. The issuer prefixes
+	// come from [credurl.TokenPattern] and not from a list kept here — the list
+	// that used to be here had no ghu_, no ghr_ and no GitLab at all, so a
+	// clone whose URL carried a GitLab token was allowed onto a command line.
+	// The floor of 8 body characters is this package's own choice: on a command
+	// line even a truncated token is a disclosure.
+	literal = regexp.MustCompile(credurl.TokenPattern(8).String() + `|x-access-token:[^@\s]+`)
 
 	// A file whose NAME says it holds a credential. Matching the name rather
 	// than the contents is deliberate: the contents are exactly what must not be
