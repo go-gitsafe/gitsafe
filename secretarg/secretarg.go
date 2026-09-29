@@ -76,6 +76,33 @@ var (
 
 	// Commands that read a file's CONTENTS. `wc -c < f` and `ls f` do not.
 	readers = regexp.MustCompile(`(?i)(^|[|;&\s(])(cat|head|tail|tr|cut|sed|awk|xargs|printf|echo|base64|jq|openssl|<)\b|^\s*<`)
+
+	// An option that NAMES a credential, given its value inline. The rules
+	// above are keyed on the value's SHAPE, so a credential with no issuer
+	// prefix walks past them — and most credentials have no prefix. Measured
+	// 2026-09-29, six of these seven were allowed and only the last refused:
+	//
+	//	./config.sh --token AABF3JGZDX3P5PMEXLND6TS6FCWO6   (a runner token)
+	//	docker login -u me -p …
+	//	curl -u me:… https://…
+	//	mysql --password=…
+	//	./config.sh --token ghp_…                            ← the only refusal
+	//
+	// The first is not hypothetical: registering a self-hosted runner needs
+	// `config.sh --token`, and the token is 29 bare uppercase characters. A
+	// rule on THAT shape would refuse any base32 digest, so the flag is what
+	// this matches. The flag is also the honest signal: whoever wrote
+	// `--token` said what the next word is.
+	//
+	// `=` or whitespace immediately after the name, so `--token-file ~/.t`
+	// and `--password-stdin` — the two safe forms — are untouched. A value is
+	// required, so a bare `--password` that prompts is untouched too.
+	credFlag = regexp.MustCompile(`(?i)(^|\s)(--?(?:token|password|passwd|secret|api[-_]?key|access[-_]?key|auth[-_]?token|client[-_]?secret))(=|\s+)(\S+)`)
+
+	// Values that are plainly not a secret: a placeholder somebody is writing
+	// out, or a path for the tool to read. Without this the rule refuses the
+	// documentation of itself, which is how a guard gets worked around.
+	notASecret = regexp.MustCompile(`(?i)^(<[^>]*>|\{\{.*|\$[({]?\w|["']?(your|my|the)[-_]|x+$|\.{0,2}/|~/|-)`)
 )
 
 // Check reports whether cmd discloses a secret on the command line.
@@ -87,6 +114,15 @@ func Check(cmd string) Finding {
 			Match: m,
 			Why: "this carries what looks like a credential on the command line, " +
 				"which reaches the process list, the shell history and every log of what ran",
+		}
+	}
+	if m := credFlag.FindStringSubmatch(scanned); m != nil && !notASecret.MatchString(m[4]) {
+		return Finding{
+			Rule:  "flag",
+			Match: strings.TrimSpace(m[2] + m[3] + m[4]),
+			Why: "this names a credential as an option and gives its value on the command line, " +
+				"which reaches the process list, the shell history and every log of what ran. " +
+				"Most credentials carry no issuer prefix, so the value's shape cannot be relied on",
 		}
 	}
 	for _, m := range subst.FindAllStringSubmatch(scanned, -1) {
