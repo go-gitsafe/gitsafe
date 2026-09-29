@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,10 +22,38 @@ import (
 const regTok = "AABF3JGZDX3P5PMEXLND6TS6FCWO6"
 
 // fakeAPI answers the four calls this command makes.
+//
+// Guarded by a mutex because the handler runs on the server's goroutines while
+// the test reads what it recorded. The first version left it bare and mutated
+// it from a goroutine of its own; `go test -race` in CI reported the race and
+// the test had looked fine on one machine.
 type fakeAPI struct {
+	mu      sync.Mutex
 	runners []runner
 	deleted []int
 	calls   []string
+	// onlineAfter makes the Nth listing the first to report the runner, so
+	// report()'s polling is exercised deterministically rather than by timing.
+	onlineAfter int
+	lists       int
+}
+
+func (f *fakeAPI) snapshotCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeAPI) snapshotDeleted() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.deleted...)
+}
+
+func (f *fakeAPI) listCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lists
 }
 
 func (f *fakeAPI) serve(t *testing.T) *httptest.Server {
@@ -37,6 +66,8 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		f.calls = append(f.calls, r.Method+" "+r.URL.Path)
 		if r.Header.Get("Authorization") == "" {
 			t.Error("the API was called without a credential")
@@ -47,7 +78,22 @@ func (f *fakeAPI) handler(t *testing.T) http.Handler {
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(map[string]string{"token": regTok})
 		case strings.HasSuffix(r.URL.Path, "/actions/runners"):
-			json.NewEncoder(w).Encode(map[string]any{"runners": f.runners})
+			f.lists++
+			rs := f.runners
+			// The runner arrives LATE, on the Nth listing: the service starts
+			// and it takes a moment to connect. Counted here rather than timed
+			// from outside, which was a data race.
+			if f.onlineAfter > 0 {
+				if f.lists < f.onlineAfter {
+					rs = nil
+				} else {
+					rs = []runner{{ID: 9, Name: "z1", Status: "online",
+						Labels: []struct {
+							Name string `json:"name"`
+						}{{Name: "self-hosted"}, {Name: "Linux"}, {Name: "S390X"}}}}
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"runners": rs})
 		case r.Method == http.MethodDelete:
 			var id int
 			fmt.Sscanf(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], "%d", &id)
@@ -127,19 +173,25 @@ func TestTheTokenNeverReachesACommandLine(t *testing.T) {
 		t.Errorf("stderr: %s", errb.String())
 	}
 
-	// Now the real path, with the name free.
-	api.runners = nil
+	// Now the real path, with the name free — and the runner arriving LATE,
+	// which is what actually happens: the service starts and the runner takes
+	// a moment to connect, so report() polls.
+	//
+	// Its own fake, rather than reaching into the first one. Driving the
+	// arrival by mutating a shared fake from a goroutine was a data race,
+	// reported by CI's `go test -race` after it had looked fine here; driving
+	// it by resetting that fake's counter without the lock would be the same
+	// race written more carefully.
+	api2 := &fakeAPI{onlineAfter: 2}
+	srv2 := api2.serve(t)
+	c2 := &client{token: c.token, repo: "o/r", base: srv2.URL}
 	out.Reset()
 	errb.Reset()
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		api.runners = []runner{{ID: 9, Name: "z1", Status: "online",
-			Labels: []struct {
-				Name string `json:"name"`
-			}{{Name: "self-hosted"}, {Name: "Linux"}, {Name: "S390X"}}}}
-	}()
-	if code := doRegister(c, o, &out, &errb); code != 0 {
+	if code := doRegister(c2, o, &out, &errb); code != 0 {
 		t.Fatalf("code = %d\n%s%s", code, out.String(), errb.String())
+	}
+	if api2.listCount() < 2 {
+		t.Error("premise: report() did not have to poll, so the late arrival was not exercised")
 	}
 
 	if len(*calls) == 0 {
