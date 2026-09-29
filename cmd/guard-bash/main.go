@@ -33,6 +33,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 )
@@ -67,6 +68,17 @@ func run(stdin io.Reader, stdout io.Writer) int {
 	var p payload
 	if err := json.Unmarshal(b, &p); err != nil || p.ToolInput.Command == "" {
 		return 0
+	}
+	// A command that has a CHECKING wrapper, run by hand. These three rules
+	// lived in a shell script registered beside this binary, as greps over the
+	// whole command text. Measured on 2026-09-29 the script was wrong on 6 of
+	// 10 cases — four disclosures let through and two correct commands refused
+	// — and every false refusal was a person WRITING about a command rather
+	// than running one. See [bypass].
+	if f := bypass.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\nIt matched %s\n\n%s",
+			f.Why, f.Match, f.Advice))
 	}
 	if f := secretarg.Check(p.ToolInput.Command); f.Found() {
 		return deny(stdout, fmt.Sprintf(
