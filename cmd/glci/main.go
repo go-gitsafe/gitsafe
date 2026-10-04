@@ -76,6 +76,14 @@ type job struct {
 	// AllowFailure jobs fail without failing the pipeline; they are shown, and
 	// their log too, but said to be allowed.
 	AllowFailure bool `json:"allow_failure"`
+	// Downstream is set for a trigger job (a "bridge"): the pipeline it
+	// started, possibly in another project. Bridges are not in the jobs list
+	// at all — /jobs leaves them out — so a pipeline whose only remaining
+	// work was a trigger read as finished with nothing pending.
+	Downstream *struct {
+		Status string `json:"status"`
+		WebURL string `json:"web_url"`
+	} `json:"downstream_pipeline"`
 }
 
 func run(args []string, dir string, stdout, stderr io.Writer) int {
@@ -190,18 +198,23 @@ func latest(c *glauth.Client, pid, ref string) (*pipeline, error) {
 	return &ps[0], nil
 }
 
+// jobsOf is every job of the pipeline: the ordinary jobs, then the trigger
+// jobs ("bridges"), which GitLab lists under a separate endpoint.
 func jobsOf(c *glauth.Client, pid string, pipelineID int) ([]job, error) {
 	var all []job
-	for page := 1; ; page++ {
-		var js []job
-		if err := c.GetJSON(fmt.Sprintf("/projects/%s/pipelines/%d/jobs?per_page=100&page=%d", pid, pipelineID, page), &js); err != nil {
-			return nil, err
-		}
-		all = append(all, js...)
-		if len(js) < 100 {
-			return all, nil
+	for _, kind := range []string{"jobs", "bridges"} {
+		for page := 1; ; page++ {
+			var js []job
+			if err := c.GetJSON(fmt.Sprintf("/projects/%s/pipelines/%d/%s?per_page=100&page=%d", pid, pipelineID, kind, page), &js); err != nil {
+				return nil, err
+			}
+			all = append(all, js...)
+			if len(js) < 100 {
+				break
+			}
 		}
 	}
+	return all, nil
 }
 
 // verdict maps a pipeline status onto the exit status. Anything not known to be
@@ -227,6 +240,9 @@ func report(w io.Writer, project, ref string, p *pipeline, jobs []job) {
 		note := ""
 		if j.AllowFailure && j.Status == "failed" {
 			note = "  (allowed to fail)"
+		}
+		if j.Downstream != nil {
+			note += fmt.Sprintf("  → downstream %s %s", j.Downstream.Status, j.Downstream.WebURL)
 		}
 		fmt.Fprintf(w, "  %-10s %-24s %-9s %6.0fs%s\n", j.Stage, j.Name, j.Status, j.Duration, note)
 	}
