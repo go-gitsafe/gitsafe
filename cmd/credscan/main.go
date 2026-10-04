@@ -184,6 +184,12 @@ func sweep(verb string, roots []string, write, verbose bool, stdout, stderr io.W
 	// The counts come before the verdict, always, and whether anything was
 	// found or not.
 	fmt.Fprintf(stdout, "\nwalked %d directories in %s\n", st.Dirs, time.Since(start).Round(time.Millisecond))
+	if st.NotRepos > 0 {
+		// Said out loud rather than dropped: these were counted as unreadable
+		// until 2026-10-04, and the number was the whole of this machine's
+		// "incomplete" verdict.
+		fmt.Fprintf(stdout, "skipped %d .git entr(ies) holding no configuration at all — objects and refs with no config, or a worktree pointer whose target is gone. No configuration means no remote URL, so no credential.\n", st.NotRepos)
+	}
 	fmt.Fprintf(stdout, "found %d checkouts, %d distinct configurations, %d unreadable, %d directories refused listing\n",
 		st.Repos, st.Unique, st.Unreadable, st.DenyErrors)
 	fmt.Fprintf(stdout, "%d of them carry a credential: %d URL(s) still do", dirty, remaining)

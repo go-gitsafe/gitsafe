@@ -23,6 +23,7 @@ package credfix
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -274,6 +275,11 @@ type Stats struct {
 	Unique int
 	// Unreadable is how many could not be read.
 	Unreadable int
+	// NotRepos is how many .git entries hold no configuration at all: a
+	// directory with objects and refs but no config, or a worktree pointer
+	// whose target is gone. They have no remote URL, so no credential, and
+	// they are not a reason to call the walk incomplete.
+	NotRepos int
 	// DenyErrors is how many directories could not be listed at all. A home
 	// directory always has some, and they are not a reason to fail — but they
 	// are a reason not to claim the walk was complete.
@@ -286,6 +292,43 @@ type Stats struct {
 // walk that found no repository, or could not read one it found, has not
 // established that a machine is clean.
 func (s Stats) Complete() bool { return s.Repos > 0 && s.Unreadable == 0 }
+
+// notARepo reports whether a .git entry provably has no configuration.
+//
+// Provably: the configuration file is ABSENT. Any other answer from the
+// filesystem -- a permission error, anything -- leaves the entry to be
+// inspected and, if it will not answer, counted as unreadable. A scanner that
+// treats "I could not tell" as "nothing here" is the one that reassures
+// wrongly, and that is the expensive direction for this tool.
+func notARepo(gitPath string, d fs.DirEntry) bool {
+	if d.IsDir() {
+		_, err := os.Stat(filepath.Join(gitPath, "config"))
+		return errors.Is(err, fs.ErrNotExist)
+	}
+	// A .git FILE points at the real directory; if that is gone, the pointer
+	// names nothing and git cannot read a configuration through it.
+	b, err := os.ReadFile(gitPath)
+	if err != nil {
+		return false
+	}
+	// ⛔ A gitfile MUST start with "gitdir:". uv leaves a zero-byte .git in its
+	// cache as a marker; git calls that "invalid gitfile format" and reads no
+	// configuration through it, so there is no remote URL and no credential.
+	// Anything that is not a gitfile is not a worktree pointer either.
+	rest, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	if !ok {
+		return true
+	}
+	target := strings.TrimSpace(rest)
+	if target == "" {
+		return true
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(gitPath), target)
+	}
+	_, err = os.Stat(target)
+	return errors.Is(err, fs.ErrNotExist)
+}
 
 // Walk finds every git checkout under roots and calls fn with each one's
 // report, once per distinct configuration.
@@ -311,6 +354,30 @@ func Walk(roots []string, inspect func(dir string) Report, fn func(Report)) Stat
 			// A .git directory is a repository here; a .git FILE is a linked
 			// worktree or a submodule, whose configuration is elsewhere and is
 			// found by asking git rather than by guessing.
+			//
+			// ⛔ UNLESS THERE IS NO CONFIGURATION TO READ. A scan of this
+			// machine reported 137 checkouts that "would not answer", and the
+			// honest exit status 3 with them. Every one of the 137 had NO
+			// .git/config: 122 build-cache trees holding objects/ and refs/
+			// and nothing else, and 15 worktree pointers whose target had been
+			// pruned. git itself calls those "not a git repository", because
+			// config is where core.repositoryformatversion lives.
+			//
+			// A directory with no configuration has no remote URL, so it
+			// cannot carry a credential in one. Counting it as unreadable
+			// buried that fact under a number that looked like risk.
+			//
+			// The test is the ABSENCE of the file, never the error from
+			// reading it: a config that exists and will not open is still
+			// unreadable, and still has to say so. That direction is the one
+			// that reassures wrongly.
+			if notARepo(p, d) {
+				st.NotRepos++
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 			st.Repos++
 			dirs = append(dirs, filepath.Dir(p))
 			if d.IsDir() {
