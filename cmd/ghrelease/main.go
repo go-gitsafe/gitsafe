@@ -39,6 +39,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"net/http"
 	"os"
@@ -246,7 +247,7 @@ func tagExists(token, repo, tag string) (bool, error) {
 	case http.StatusNotFound:
 		return false, nil
 	}
-	return false, fmt.Errorf("GitHub answered %s looking for the tag", resp.Status)
+	return false, refused("looking for the tag", resp)
 }
 
 // mergeCommit is the commit the merge produced.
@@ -261,7 +262,7 @@ func mergeCommit(token, repo string, number int) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub answered %s for the pull request", resp.Status)
+		return "", refused("asking for the pull request", resp)
 	}
 	var pr struct {
 		Merged   bool   `json:"merged"`
@@ -289,7 +290,20 @@ func createTag(token, repo, tag, sha string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("GitHub refused the tag: %s", resp.Status)
+		return refused("GitHub refused the tag", resp)
 	}
 	return nil
+}
+
+// refused says which refusal an answer was, and while doing what.
+//
+// ⛔ It used to say only the status -- "GitHub answered 403 Forbidden
+// looking for the tag" -- and a 403 from GitHub's burst limit, the usual
+// one after a few merges in a row, then read as a dead credential: on
+// 2026-10-04 a person was asked to reissue a token that was working, and
+// twenty minutes later it was. ghmerge and ghscopes already ask
+// ghauth.WhyRefused; now this does too.
+func refused(doing string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return fmt.Errorf("%s: %w", doing, ghauth.WhyRefused(resp.StatusCode, resp.Header, body))
 }
