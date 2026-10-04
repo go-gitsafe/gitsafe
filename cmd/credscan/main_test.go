@@ -298,8 +298,25 @@ func TestAnUnreadableCheckoutMakesTheRunInconclusive(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
 	repo(t, filepath.Join(root, "fine"), "https://github.com/o/r.git")
-	if err := os.MkdirAll(filepath.Join(root, "broken", ".git"), 0o755); err != nil {
+	// ⛔ An EMPTY .git directory used to stand in for this, and it is a
+	// different thing: with no config there is no remote URL, so nothing to
+	// leak, and git itself calls it "not a git repository". The case this
+	// test is about is a configuration that EXISTS and will not open.
+	broken := filepath.Join(root, "broken", ".git")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
 		t.Fatal(err)
+	}
+	cfg := filepath.Join(broken, "config")
+	if err := os.WriteFile(cfg, []byte("[core]\n\trepositoryformatversion = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cfg, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	if f, err := os.Open(cfg); err == nil {
+		f.Close()
+		t.Skip("this user can read a 000 file (root?), so an unreadable config cannot be staged here")
 	}
 	code, out, errb := exec1(t, "scan", root)
 	if code != exitInconclusive {
@@ -317,5 +334,47 @@ func TestAnUnreadableCheckoutMakesTheRunInconclusive(t *testing.T) {
 	}
 	if !strings.Contains(errb, "did not cover everything") {
 		t.Errorf("the incomplete walk was no longer mentioned:\n%s", errb)
+	}
+}
+
+// TestAGitDirectoryWithoutAConfigIsNotACheckout.
+//
+// ⛔ A scan of this machine reported 137 checkouts that "would not answer",
+// and exit 3 with them. Every one had NO .git/config: build-cache trees
+// holding objects/ and refs/, and worktree pointers whose target had been
+// pruned. No configuration means no remote URL, so no credential — and
+// counting them as unreadable buried that under a number that looked like
+// risk.
+func TestAGitDirectoryWithoutAConfigIsNotACheckout(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	repo(t, filepath.Join(root, "fine"), "https://github.com/o/r.git")
+	// objects and refs, no config: what a brewkit cache tree looks like.
+	for _, d := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(root, "cache", ".git", d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a worktree pointer whose target is gone.
+	if err := os.MkdirAll(filepath.Join(root, "orphan"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "orphan", ".git"),
+		[]byte("gitdir: "+filepath.Join(root, "nowhere", ".git", "worktrees", "x")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errb := exec1(t, "scan", root)
+	if code != exitClean {
+		t.Errorf("exit = %d, want %d — nothing here can hold a credential\n%s%s", code, exitClean, out, errb)
+	}
+	if !strings.Contains(out, "0 unreadable") {
+		t.Errorf("a .git with no config is not unreadable:\n%s", out)
+	}
+	if !strings.Contains(out, "skipped 2 .git entr") {
+		t.Errorf("the two were not accounted for out loud:\n%s", out)
+	}
+	if !strings.Contains(out, "found 1 checkouts") {
+		t.Errorf("the one real checkout should be the only one counted:\n%s", out)
 	}
 }

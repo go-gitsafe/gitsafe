@@ -335,11 +335,32 @@ func TestWalkCountsRefusedDirectories(t *testing.T) {
 func TestUnreadableRepositoriesAreReportedNotSkipped(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
-	// A .git directory with nothing in it: git will not read it as a
-	// repository, and a scan must say so rather than pass over it.
-	if err := os.MkdirAll(filepath.Join(root, "broken", ".git"), 0o755); err != nil {
+	// A configuration that EXISTS and will not open. This is what "unreadable"
+	// has to mean: the scan cannot tell whether a credential is in there.
+	//
+	// ⛔ This test used to stage an EMPTY .git directory, and its own comment
+	// said git would not read it as a repository. True, and a different thing:
+	// with no config there is no remote URL, so nothing can be hidden. On this
+	// machine 137 such entries were the WHOLE of the "did not cover
+	// everything" verdict -- build caches and pruned worktree pointers,
+	// counted as risk. They are now accounted for by name instead.
+	broken := filepath.Join(root, "broken", ".git")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	cfg := filepath.Join(broken, "config")
+	if err := os.WriteFile(cfg, []byte("[core]\n\trepositoryformatversion = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cfg, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	if f, err := os.Open(cfg); err == nil {
+		f.Close()
+		t.Skip("this user can read a 000 file (root?), so an unreadable config cannot be staged here")
+	}
+
 	var got []Report
 	st := Walk([]string{root}, Inspect, func(r Report) { got = append(got, r) })
 	if st.Repos != 1 || st.Unreadable != 1 {
@@ -350,6 +371,40 @@ func TestUnreadableRepositoriesAreReportedNotSkipped(t *testing.T) {
 	}
 	if st.Complete() {
 		t.Error("a walk with an unreadable repository called itself complete")
+	}
+}
+
+// TestAConfiglessGitEntryIsCountedApart is the other half: it must be
+// accounted for OUT LOUD, and it must not make the walk incomplete.
+func TestAConfiglessGitEntryIsCountedApart(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	// One real checkout, so the walk is not vacuous: Complete() requires
+	// Repos > 0, because "nothing walked" is not a clean result either.
+	repoWith(t, filepath.Join(root, "fine"), "https://github.com/o/r.git", "https://github.com/o/r.git")
+	for _, d := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(root, "cache", ".git", d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "orphan"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "orphan", ".git"),
+		[]byte("gitdir: "+filepath.Join(root, "gone", ".git", "worktrees", "x")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []Report
+	st := Walk([]string{root}, Inspect, func(r Report) { got = append(got, r) })
+	if st.NotRepos != 2 {
+		t.Errorf("NotRepos = %d, want 2", st.NotRepos)
+	}
+	if st.Repos != 1 || st.Unreadable != 0 || len(got) != 1 {
+		t.Errorf("Repos=%d Unreadable=%d reports=%d, want 1, 0, 1 — only the real one", st.Repos, st.Unreadable, len(got))
+	}
+	if !st.Complete() {
+		t.Error("nothing here can hold a credential, so the walk is complete")
 	}
 }
 
@@ -424,4 +479,51 @@ func has(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestAGitFileThatIsNotAGitfileIsNotACheckout. uv leaves a zero-byte .git in
+// its cache; git answers "invalid gitfile format" and reads nothing through
+// it. Those two were the last of 137 keeping this machine's scan from being
+// able to call itself complete.
+func TestAGitFileThatIsNotAGitfileIsNotACheckout(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	repoWith(t, filepath.Join(root, "fine"), "https://github.com/o/r.git", "https://github.com/o/r.git")
+	for name, body := range map[string]string{
+		"empty":   "",
+		"garbage": "this is not a gitfile\n",
+	} {
+		d := filepath.Join(root, name)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, ".git"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := Walk([]string{root}, Inspect, func(Report) {})
+	if st.NotRepos != 2 {
+		t.Errorf("NotRepos = %d, want 2", st.NotRepos)
+	}
+	if st.Unreadable != 0 || !st.Complete() {
+		t.Errorf("Unreadable=%d Complete=%v — neither can hold a credential", st.Unreadable, st.Complete())
+	}
+
+	// The control: a gitfile pointing at a target that EXISTS is a real
+	// worktree and must still be inspected.
+	live := filepath.Join(root, "live")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(live, ".git"),
+		[]byte("gitdir: "+filepath.Join(root, "fine", ".git")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st = Walk([]string{root}, Inspect, func(Report) {})
+	if st.NotRepos != 2 {
+		t.Errorf("a live worktree pointer was skipped: NotRepos = %d, want still 2", st.NotRepos)
+	}
+	if st.Repos != 2 {
+		t.Errorf("Repos = %d, want 2 — the checkout and its worktree", st.Repos)
+	}
 }
