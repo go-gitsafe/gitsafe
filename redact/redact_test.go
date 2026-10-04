@@ -109,3 +109,36 @@ func TestClean(t *testing.T) {
 		}
 	}
 }
+
+// TestGitLabRoutableTokenIsMaskedWhole: GitLab's routable tokens (17.x onward)
+// end in ".<version>.<length+crc>". The shape used to stop at the first dot, so
+// a redacted line kept the end of the token in clear — measured on a real
+// personal access token, 12 characters left visible. Assembled, not written
+// whole, for the reason given in TestTheTwoRealLeaks.
+func TestGitLabRoutableTokenIsMaskedWhole(t *testing.T) {
+	body := strings.Repeat("Ab0_", 9)
+	tail := ".01." + "0w17y347e"
+	for _, prefix := range []string{"gl" + "pat-", "gl" + "dt-", "gl" + "rt-"} {
+		tok := prefix + body + tail
+		for _, line := range []string{
+			"token " + tok + " end",
+			"header=" + tok + " prefix= len=0",
+			"https://oauth2:" + tok + "@plmlab.example.org/g/p.git",
+		} {
+			got := New().String(line)
+			for _, part := range []string{body, ".01.", "0w17y347e"} {
+				if strings.Contains(got, part) {
+					t.Errorf("%s: %q survived redaction:\n  %s", prefix, part, got)
+				}
+			}
+			if Clean(line) {
+				t.Errorf("%s: Clean said clean:\n  %s", prefix, line)
+			}
+		}
+	}
+	// A dotted word after an ordinary token-shaped prefix stays readable: the
+	// tail is only taken when it has GitLab's exact shape.
+	if got := New().String("see glpat-" + body + ". Then continue."); !strings.Contains(got, ". Then continue.") {
+		t.Errorf("text after the token was eaten:\n  %s", got)
+	}
+}
