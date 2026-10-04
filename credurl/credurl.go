@@ -84,6 +84,12 @@ type Shape struct {
 	body string
 	// min is the shortest body this shape ever has.
 	min int
+	// tail is an optional pattern after the body. GitLab's routable tokens
+	// (GitLab 17.x onward) end in ".<version>.<length+crc>": without it, a
+	// match stopped at the first dot and the redacted text kept the rest of
+	// the token — measured on a real personal access token pasted into a
+	// transcript, its last 12 characters left in clear.
+	tail string
 }
 
 // shapes are the credential formats recognised by prefix.
@@ -93,22 +99,22 @@ type Shape struct {
 // the 117 checkouts, and nothing prefix-based catches a credential from an
 // issuer nobody here has heard of yet.
 var shapes = []Shape{
-	{"GitHub classic personal access token", "ghp_", `[A-Za-z0-9]`, 16},
-	{"GitHub OAuth token", "gho_", `[A-Za-z0-9]`, 16},
-	{"GitHub user-to-server token", "ghu_", `[A-Za-z0-9]`, 16},
-	{"GitHub server-to-server token", "ghs_", `[A-Za-z0-9]`, 16},
-	{"GitHub refresh token", "ghr_", `[A-Za-z0-9]`, 16},
-	{"GitHub fine-grained personal access token", "github_pat_", `[A-Za-z0-9_]`, 16},
-	{"GitLab personal access token", "glpat-", `[A-Za-z0-9_-]`, 16},
-	{"GitLab deploy token", "gldt-", `[A-Za-z0-9_-]`, 16},
-	{"GitLab runner token", "glrt-", `[A-Za-z0-9_-]`, 16},
-	{"Slack bot token", "xoxb-", `[A-Za-z0-9-]`, 8},
-	{"Slack user token", "xoxp-", `[A-Za-z0-9-]`, 8},
-	{"Slack app-level token", "xoxa-", `[A-Za-z0-9-]`, 8},
-	{"Slack refresh token", "xoxr-", `[A-Za-z0-9-]`, 8},
-	{"Slack session token", "xoxs-", `[A-Za-z0-9-]`, 8},
-	{"AWS access key id", "AKIA", `[0-9A-Z]`, 12},
-	{"AWS temporary access key id", "ASIA", `[0-9A-Z]`, 12},
+	{"GitHub classic personal access token", "ghp_", `[A-Za-z0-9]`, 16, ""},
+	{"GitHub OAuth token", "gho_", `[A-Za-z0-9]`, 16, ""},
+	{"GitHub user-to-server token", "ghu_", `[A-Za-z0-9]`, 16, ""},
+	{"GitHub server-to-server token", "ghs_", `[A-Za-z0-9]`, 16, ""},
+	{"GitHub refresh token", "ghr_", `[A-Za-z0-9]`, 16, ""},
+	{"GitHub fine-grained personal access token", "github_pat_", `[A-Za-z0-9_]`, 16, ""},
+	{"GitLab personal access token", "glpat-", `[A-Za-z0-9_-]`, 16, `(?:\.[0-9A-Za-z]{2}\.[0-9A-Za-z]+)?`},
+	{"GitLab deploy token", "gldt-", `[A-Za-z0-9_-]`, 16, `(?:\.[0-9A-Za-z]{2}\.[0-9A-Za-z]+)?`},
+	{"GitLab runner token", "glrt-", `[A-Za-z0-9_-]`, 16, `(?:\.[0-9A-Za-z]{2}\.[0-9A-Za-z]+)?`},
+	{"Slack bot token", "xoxb-", `[A-Za-z0-9-]`, 8, ""},
+	{"Slack user token", "xoxp-", `[A-Za-z0-9-]`, 8, ""},
+	{"Slack app-level token", "xoxa-", `[A-Za-z0-9-]`, 8, ""},
+	{"Slack refresh token", "xoxr-", `[A-Za-z0-9-]`, 8, ""},
+	{"Slack session token", "xoxs-", `[A-Za-z0-9-]`, 8, ""},
+	{"AWS access key id", "AKIA", `[0-9A-Z]`, 12, ""},
+	{"AWS temporary access key id", "ASIA", `[0-9A-Z]`, 12, ""},
 }
 
 // Shapes returns the recognised credential formats.
@@ -127,7 +133,7 @@ func Shapes() []Shape {
 func (s Shape) anchored() *regexp.Regexp { return s.compile(true, s.min) }
 
 func (s Shape) compile(anchor bool, min int) *regexp.Regexp {
-	pat := regexp.QuoteMeta(s.Prefix) + s.body + "{" + itoa(min) + ",}"
+	pat := regexp.QuoteMeta(s.Prefix) + s.body + "{" + itoa(min) + ",}" + s.tail
 	if anchor {
 		pat = `\A` + pat + `\z`
 	}
