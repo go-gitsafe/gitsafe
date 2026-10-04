@@ -49,7 +49,7 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 			                 {"id":8,"name":"publish","stage":"publish","status":"failed","duration":3,"web_url":"https://gl/p/-/jobs/8"}]`))
 		case strings.HasSuffix(p, "/jobs/8/trace"):
 			w.Write([]byte("section_start:1:step_script\r\x1b[0K\x1b[32;1m$ curl --upload-file x\x1b[0;m\n" +
-				"curl: (22) The requested URL returned error: 400\n" +
+				"2026-10-04T15:41:36.475297Z 01O curl: (22) The requested URL returned error: 400\n" +
 				"debug: token=" + fakeToken + " other=" + otherSecret + "\n" +
 				"section_end:2:step_script\r\x1b[0K\n"))
 		default:
@@ -104,7 +104,7 @@ func TestFailureShowsTheMaskedLog(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "\x1b") || strings.Contains(out, "section_start") {
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "section_start") || strings.Contains(out, "15:41:36") {
 		t.Errorf("raw log markup in output:\n%q", out)
 	}
 }

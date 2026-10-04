@@ -237,6 +237,11 @@ func report(w io.Writer, project, ref string, p *pipeline, jobs []job) {
 var (
 	ansi    = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b\[0K`)
 	section = regexp.MustCompile(`section_(start|end):[0-9]+:[A-Za-z0-9_.-]+(\[[^\]]*\])?\r?`)
+	// stamp is the per-line prefix of logs from instances with job log
+	// timestamps on (GitLab 17 onward): "2026-10-04T15:41:36.475297Z 01O ",
+	// an RFC 3339 time, a stream number and O/E for stdout/stderr, "+" when
+	// the line continues the previous one. Measured on plmlab.math.cnrs.fr.
+	stamp = regexp.MustCompile(`(?m)^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z [0-9]{2}[OE]\+? ?`)
 )
 
 func showLog(w io.Writer, c *glauth.Client, pid string, j job, n int, mask *redact.Redactor) {
@@ -247,6 +252,7 @@ func showLog(w io.Writer, c *glauth.Client, pid string, j job, n int, mask *reda
 		return
 	}
 	text := section.ReplaceAllString(ansi.ReplaceAllString(string(b), ""), "")
+	text = stamp.ReplaceAllString(text, "")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	if len(lines) > n {
