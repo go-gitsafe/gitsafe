@@ -262,9 +262,12 @@ func tokenScopes(tok string) ([]string, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub answered %s — the token is probably expired or revoked", resp.Status)
+		// ⛔ WHICH REFUSAL IT WAS. See ghauth.WhyRefused: this said "probably
+		// expired or revoked" for a burst limit, which is advice to revoke a
+		// working credential.
+		return nil, ghauth.WhyRefused(resp.StatusCode, resp.Header, body)
 	}
 	var out []string
 	for _, s := range strings.Split(resp.Header.Get("X-OAuth-Scopes"), ",") {

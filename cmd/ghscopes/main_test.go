@@ -218,8 +218,41 @@ func TestATokenGitHubWillNotAnswerFor(t *testing.T) {
 	if code := run([]string{"-f", aToken(t)}, &out, &errOut); code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
-	if !strings.Contains(errOut.String(), "expired or revoked") {
-		t.Errorf("it said %q", errOut.String())
+	// ⛔ THE WORDING IS ghauth.WhyRefused.S NOW, so this asks for the MEANING: a
+	// 401 is a credential GitHub will not accept, and must still read that way.
+	// It must NOT read as a rate limit, or this change would have traded one
+	// wrong diagnosis for another.
+	if got := errOut.String(); !strings.Contains(got, "expired") ||
+		strings.Contains(got, "limit") {
+		t.Errorf("it said %q", got)
+	}
+}
+
+// ⛔⛔ AND A BURST LIMIT MUST NOT READ AS A DEAD TOKEN, which is the whole point
+// and is asserted HERE rather than only on the predicate.
+//
+// ghauth.WhyRefused has its own table of cases and passes it. That proves the
+// predicate, not the WIRING -- and the wiring is where the last one of these
+// hid: a notice whose condition was right and whose call site read a value that
+// did not exist yet. So this drives the command.
+//
+// ⭐ MEASURED: after seven pull requests merged in quick succession, ghmerge and
+// then ghscopes both answered 403 while gitpush on the same token answered
+// "Everything up-to-date". git was authenticating with it one second and the API
+// was refusing it the next, and the tool said to revoke it.
+func TestABurstLimitIsNotADeadToken(t *testing.T) {
+	answering(t, 403, "", `{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`)
+	var out, errOut bytes.Buffer
+	if code := run([]string{"-f", aToken(t)}, &out, &errOut); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	got := errOut.String()
+	if !strings.Contains(got, "burst limit") {
+		t.Errorf("it said %q, want it to name the burst limit", got)
+	}
+	if strings.Contains(got, "expired") || strings.Contains(got, "revoked") {
+		t.Errorf("it said %q, which still tells a person to reissue a working "+
+			"credential", got)
 	}
 }
 

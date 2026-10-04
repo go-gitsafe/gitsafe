@@ -8,11 +8,15 @@
 package ghauth
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultFile is the token this machine keeps apart from the wide one, so a
@@ -107,4 +111,72 @@ func Missing(have, want []string) []string {
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+// WhyRefused explains a GitHub answer that is not a success, in the terms a
+// person can act on.
+//
+// ⛔⛔ EVERY NON-SUCCESS USED TO READ AS A DEAD CREDENTIAL. ghscopes collapsed
+// them all into "the token is probably expired or revoked", and ghpkg said the
+// same words. That is one of four different situations, and naming the wrong one
+// sends somebody to revoke and reissue a token that was working.
+//
+// ⭐ IT HAPPENED, AND THE EVIDENCE WAS ALREADY IN HAND. After seven pull
+// requests merged in quick succession, ghmerge and then ghscopes both answered
+// 403 while `gitpush --dry-run` on the same token answered "Everything
+// up-to-date" -- so git was authenticating with it one second and the API was
+// refusing it the next. It was GitHub's BURST limit. The measurement said the
+// credential was alive and the tool's label said it was dead, and the label won.
+//
+// GitHub does distinguish these, so this does too:
+//
+//	401, or "bad credentials"        the credential itself
+//	"secondary rate limit", "abuse"  the burst limit; wait and retry
+//	Retry-After present              the same, and it says how long
+//	403 with no budget left          the hourly budget; it says when it resets
+//	anything else                    the status, and GitHub's own sentence
+//
+// ⚠ NOTHING HERE CAN CARRY THE TOKEN. The status, the headers this reads and
+// GitHub's `message` field are all answers ABOUT a request, never the request's
+// own Authorization header -- which is why the body may be quoted at all.
+func WhyRefused(status int, header http.Header, body []byte) error {
+	var msg struct {
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(body, &msg)
+	lower := strings.ToLower(msg.Message)
+
+	switch {
+	case status == http.StatusUnauthorized || strings.Contains(lower, "bad credentials"):
+		return fmt.Errorf("GitHub refused the credential (%d): it is expired, "+
+			"revoked, or not a token at all", status)
+
+	case strings.Contains(lower, "secondary rate limit"),
+		strings.Contains(lower, "abuse detection"),
+		header.Get("Retry-After") != "":
+		// ⭐ THE WAIT IS GITHUB'S OWN NUMBER when it gives one, because the
+		// alternative is a person guessing, and the guess that feels safe is
+		// "the token is broken".
+		if s := header.Get("Retry-After"); s != "" {
+			return fmt.Errorf("GitHub's burst limit (%d): too many writes too "+
+				"quickly. It asks for %s seconds; the credential is fine", status, s)
+		}
+		return fmt.Errorf("GitHub's burst limit (%d): too many writes too "+
+			"quickly. Wait a minute and retry; the credential is fine", status)
+
+	case header.Get("X-RateLimit-Remaining") == "0":
+		if s := header.Get("X-RateLimit-Reset"); s != "" {
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return fmt.Errorf("GitHub's hourly budget is spent (%d): it "+
+					"resets at %s; the credential is fine",
+					status, time.Unix(n, 0).Format(time.TimeOnly))
+			}
+		}
+		return fmt.Errorf("GitHub's hourly budget is spent (%d); the "+
+			"credential is fine", status)
+	}
+	if msg.Message != "" {
+		return fmt.Errorf("GitHub answered %d: %s", status, msg.Message)
+	}
+	return fmt.Errorf("GitHub answered %d", status)
 }
