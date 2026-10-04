@@ -268,3 +268,21 @@ func TestShortNamesACommitBriefly(t *testing.T) {
 		t.Errorf("short of a short hash = %q", got)
 	}
 }
+
+// A 403 from GitHub's burst limit says so, and does not send anybody to
+// reissue a token that works -- what the bare status did on 2026-10-04.
+func TestABurstLimitIsNotADeadCredential(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusForbidden,
+			`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`),
+	}}
+	install(t, s)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", withToken(t, "t"), "o/r", "3", "v1.0.0"}, &out, &errb); code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	e := errb.String()
+	if !strings.Contains(e, "burst limit") || !strings.Contains(e, "credential is fine") || strings.Contains(e, "expired") {
+		t.Errorf("stderr = %q", e)
+	}
+}
