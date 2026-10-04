@@ -47,6 +47,8 @@ func (f *fake) handler(t *testing.T) http.HandlerFunc {
 		case strings.HasSuffix(p, "/pipelines/42/jobs"):
 			w.Write([]byte(`[{"id":7,"name":"build","stage":"build","status":"success","duration":12},
 			                 {"id":8,"name":"publish","stage":"publish","status":"failed","duration":3,"web_url":"https://gl/p/-/jobs/8"}]`))
+		case strings.HasSuffix(p, "/pipelines/42/bridges"):
+			w.Write([]byte(`[{"id":9,"name":"deploy","stage":"deploy","status":"success","downstream_pipeline":{"status":"success","web_url":"https://gl/other/-/pipelines/43"}}]`))
 		case strings.HasSuffix(p, "/jobs/8/trace"):
 			w.Write([]byte("section_start:1:step_script\r\x1b[0K\x1b[32;1m$ curl --upload-file x\x1b[0;m\n" +
 				"2026-10-04T15:41:36.475297Z 01O curl: (22) The requested URL returned error: 400\n" +
@@ -85,7 +87,7 @@ func runGlci(t *testing.T, args ...string) (int, string) {
 func TestSuccess(t *testing.T) {
 	args := setup(t, &fake{statuses: []string{"success"}})
 	code, out := runGlci(t, append(args, "main")...)
-	if code != exitSuccess || !strings.Contains(out, "pipeline 42 SUCCESS") {
+	if code != exitSuccess || !strings.Contains(out, "pipeline 42 SUCCESS") || !strings.Contains(out, "→ downstream success https://gl/other/-/pipelines/43") {
 		t.Errorf("code %d\n%s", code, out)
 	}
 }
