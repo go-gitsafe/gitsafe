@@ -52,8 +52,10 @@ how one of them ends up wrong.
 | `guard-bash` | Refuses a shell command that would put a secret on a command line, **before it runs**. An agent harness hook: it reads the command on stdin and answers with a deny. The rule it enforces was written down in three places and broken anyway — see below. |
 | `credscan` | Finds credentials embedded in git remote URLs across a whole machine, and strips them. Tells a secret from a username by SHAPE, so `ssh://git@github.com/…` is not a finding — and reports a credential's properties, never its value. Exits non-zero when it finds one, and exits 3 rather than 0 when it could not read what it walked. |
 | `git-post-checkout-guard` | The **global** post-checkout hook. A clone is where a credentialed URL gets WRITTEN, and git has no hook before one, so this is the earliest a hook can run: it takes the credential out of .git/config before the next fetch echoes it, and says so while you are still looking. It cannot stop the clone — see what it does not cover, below. |
+| `glscopes` | `ghscopes` for **GitLab**: which account a token belongs to, its scopes and when it expires — asked of the instance with the token in a header, never read out of the file. Exits non-zero if a demanded scope is missing, and knows GitLab's containments (`api` ⊃ `read_api`, `write_repository` ⊃ `read_repository`, but **not** `write_registry` ⊃ `read_registry`). |
+| `glci` | How the latest **GitLab** pipeline of a branch, tag or merge request (`'!1'`) went, job by job, with the end of each failed job's log, cleaned and **masked**. `-watch` waits for the end. Exits 4 when there is **no pipeline at all**: nothing ran, so nothing passed. |
 
-`credurl`, `credfix`, `redact`, `protect` and `ghauth` are the libraries under
+`credurl`, `credfix`, `redact`, `protect`, `ghauth` and `glauth` are the libraries under
 them: one answers "is the part before the `@` a secret or a username" and holds
 the one table of issuer prefixes every guard here asks, one walks a machine and
 repairs what it finds, one hides
@@ -120,6 +122,8 @@ go install github.com/go-gitsafe/gitsafe/cmd/ghscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/git-pre-push-guard@latest
 go install github.com/go-gitsafe/gitsafe/cmd/credscan@latest
 go install github.com/go-gitsafe/gitsafe/cmd/git-post-checkout-guard@latest
+go install github.com/go-gitsafe/gitsafe/cmd/glscopes@latest
+go install github.com/go-gitsafe/gitsafe/cmd/glci@latest
 ```
 
 The hook goes where git looks for hooks in every repository:
@@ -422,3 +426,33 @@ Writing *about* the forbidden form is not the forbidden form: the body of a
 heredoc whose tag is quoted is never expanded, so a commit message or a note that
 quotes it goes through. `GITSAFE_ALLOW_DISCARD=1` in front of one command is the
 deliberate way past.
+
+
+## GitLab: `glscopes` and `glci`
+
+The first look at a GitLab token on this machine printed it. The token file was
+expected to hold `PRIVATE-TOKEN: <token>`, it held the bare token, and a format
+check that printed "the header name" printed the token. Worse, the masking that
+should have caught it did not: GitLab's routable tokens end in
+`.<version>.<length+crc>`, and the shape stopped at the first dot, leaving the
+end of the token in clear. Both are fixed here, once, in `glauth` and `credurl`.
+
+A token lives in a file and goes nowhere but a request header:
+
+    ~/.gitlab-token-<host>      one per GitLab instance, e.g. ~/.gitlab-token-plmlab.math.cnrs.fr
+    ~/.gitlab-token             the fallback
+
+The file may hold the bare token or a `PRIVATE-TOKEN: <token>` line. Both
+commands find the instance and the project from the clone's `origin` remote, and
+refuse a remote URL that carries a credential rather than repeat it.
+
+    glscopes read_api            may the token for this clone's instance read the API?
+    glci                         the pipeline of the current branch
+    glci -watch '!3'             wait for merge request !3's pipeline to finish
+
+`glci` exit statuses are part of its interface: 0 success, 1 failed or canceled,
+3 not finished (a `manual` job included), 4 **no pipeline**, 2 usage or refusal.
+A refusal says which one it was: 401 is the token (revoked, expired, another
+instance), 403 a scope or a role, and 404 may be a private project the token's
+account cannot see — GitLab answers 404 rather than 403 there.
+
