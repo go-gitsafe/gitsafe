@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: stable }
+        with: { go-version: '1.27.1' }
       - name: nothing big is tracked
         shell: bash
         run: |
@@ -45,5 +45,5 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: stable }
+        with: { go-version: '1.27.1' }
       - run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build ./...
