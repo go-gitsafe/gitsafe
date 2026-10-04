@@ -480,7 +480,11 @@ func get(token, url string, into any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub answered %s", resp.Status)
+		// ⛔ WHICH REFUSAL IT WAS. See ghauth.WhyRefused: this command is the one
+		// that MEETS the burst limit, since merging is the write a person does
+		// several times in a row, and it was the one saying nothing about it.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		return ghauth.WhyRefused(resp.StatusCode, resp.Header, body)
 	}
 	return json.NewDecoder(resp.Body).Decode(into)
 }
@@ -504,7 +508,9 @@ func merge(token, repo string, number int, squash bool) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub refused the merge: %s", resp.Status)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		return fmt.Errorf("GitHub refused the merge: %w",
+			ghauth.WhyRefused(resp.StatusCode, resp.Header, body))
 	}
 	return nil
 }
@@ -522,7 +528,8 @@ func deleteBranch(token, repo, ref string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusUnprocessableEntity {
-		return fmt.Errorf("GitHub answered %s", resp.Status)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		return ghauth.WhyRefused(resp.StatusCode, resp.Header, body)
 	}
 	return nil
 }

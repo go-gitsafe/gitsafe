@@ -170,7 +170,11 @@ func identify(token string) (login string, scopes []string, err error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("GitHub answered %s — the token is probably expired or revoked", resp.Status)
+		// ⛔ WHICH REFUSAL IT WAS, not a guess. This said "probably expired or
+		// revoked" for every one of them, and sent somebody to reissue a token
+		// that GitHub was merely asking to slow down. See ghauth.WhyRefused.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		return "", nil, ghauth.WhyRefused(resp.StatusCode, resp.Header, body)
 	}
 	var body struct {
 		Login string `json:"login"`

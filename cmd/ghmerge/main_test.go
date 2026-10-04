@@ -242,7 +242,16 @@ func TestBadArguments(t *testing.T) {
 
 // refusing answers every request with a status, so the error paths are exercised
 // with the same shape GitHub uses when a token is wrong or a repository is gone.
+// refusing is refusingWith and no body, which is every caller that predates
+// GitHub saying WHY in one.
 func refusing(t *testing.T, code int, only string) {
+	t.Helper()
+	refusingWith(t, code, only, "")
+}
+
+// refusingWith answers `only` with a status AND a body, because the body is
+// where GitHub names a burst limit. See ghauth.WhyRefused.
+func refusingWith(t *testing.T, code int, only, body string) {
 	t.Helper()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if only != "" && !strings.Contains(r.URL.Path, only) {
@@ -257,6 +266,9 @@ func refusing(t *testing.T, code int, only string) {
 			return
 		}
 		w.WriteHeader(code)
+		if body != "" {
+			_, _ = w.Write([]byte(body))
+		}
 	}))
 	t.Cleanup(s.Close)
 	was := apiBase
@@ -775,5 +787,44 @@ func TestASecondPageIsRead(t *testing.T) {
 	}
 	if !strings.Contains(errb+out, "the-one-that-failed") {
 		t.Errorf("did not name it: %q", errb+out)
+	}
+}
+
+// ⛔⛔ THE COMMAND THAT MEETS THE BURST LIMIT MUST NAME IT. Merging is the write
+// a person does several times in a row, so ghmerge is where GitHub's burst
+// limit actually bites -- and it was the one command answering nothing but
+// "GitHub answered 403 Forbidden".
+//
+// ⭐ MEASURED: after seven pull requests merged in quick succession, ghmerge
+// answered 403, and ghscopes -- asked next, to find out why -- said the token
+// was probably expired or revoked. gitpush on that same token answered
+// "Everything up-to-date" throughout. The credential was alive the whole time
+// and the advice was to reissue it.
+//
+// ⚠ IT DRIVES THE COMMAND. ghauth.WhyRefused has its own table of nine cases
+// and passes it, which proves the predicate and not the WIRING -- and the
+// wiring is where the last defect of this shape hid.
+func TestGhmergeNamesTheBurstLimit(t *testing.T) {
+	const body = `{"message":"You have exceeded a secondary rate limit. ` +
+		`Please wait a few minutes before you try again."}`
+	for _, c := range []struct{ name, only string }{
+		{"asking about the pull request", "/pulls/"},
+		{"merging it", "/merge"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			refusingWith(t, http.StatusForbidden, c.only, body)
+			code, _, errb := try(t, "go-gitsafe/gitsafe", "1")
+			if code == 0 {
+				t.Fatal("a refusal from GitHub was treated as success")
+			}
+			if !strings.Contains(errb, "burst limit") {
+				t.Errorf("error = %q, want it to name the burst limit", errb)
+			}
+			// ⛔ AND IT MUST NOT SEND ANYBODY TO REISSUE A WORKING CREDENTIAL,
+			// which is what the old sentence did by way of ghscopes.
+			if strings.Contains(errb, "expired") || strings.Contains(errb, "revoked") {
+				t.Errorf("error = %q, which still blames the credential", errb)
+			}
+		})
 	}
 }
