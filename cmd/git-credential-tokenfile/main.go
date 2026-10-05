@@ -77,6 +77,23 @@ func readToken() (string, error) {
 		return "", fmt.Errorf("no home directory: %w", err)
 	}
 	path := filepath.Join(home, tokenFile)
+	// ⛔ A SECRET FILE OTHERS CAN READ IS NOT A SECRET, and nothing here looked.
+	// The mode is 0600 on the machine this was written for, which is exactly why
+	// the gap went unnoticed: a check that only matters after a drift is a check
+	// no drift will reveal.
+	//
+	// It REFUSES rather than warns, the way ssh refuses a world-readable private
+	// key, because a warning from a credential helper lands in git's own output
+	// and is read by nobody. The remedy is one chmod, and the message is it.
+	//
+	// ⚠ And it looks BEFORE reading, so a file that must not be read is never
+	// read: the contents do not enter this process at all.
+	if st, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("cannot read %s: %w", path, err)
+	} else if m := st.Mode().Perm(); m&0o077 != 0 {
+		return "", fmt.Errorf("%s is mode %04o, so other accounts on this "+
+			"machine can read it: chmod 600 %s", path, m, path)
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("cannot read %s: %w", path, err)
