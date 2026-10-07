@@ -22,7 +22,16 @@ func green() map[string]any {
 		// leaves a field empty tests the code's handling of a shape the server
 		// never sends.
 		"mergeable_state": "clean",
-		"head":            map[string]any{"sha": "abc", "ref": "a-branch"},
+		// head.repo is what says WHICH repository the branch is in, and
+		// GitHub always sends it. Leaving it out is the very thing the
+		// comment above warns about: it was missing here, so nothing
+		// noticed that the branch deletion aimed at the base repository
+		// with the head's ref name -- wrong for every pull request from a
+		// fork.
+		"head": map[string]any{
+			"sha": "abc", "ref": "a-branch",
+			"repo": map[string]any{"full_name": "go-gitsafe/gitsafe"},
+		},
 	}
 }
 
@@ -826,5 +835,89 @@ func TestGhmergeNamesTheBurstLimit(t *testing.T) {
 				t.Errorf("error = %q, which still blames the credential", errb)
 			}
 		})
+	}
+}
+
+// TestAForkBranchIsLeftAlone is the defect this fixture used to hide. The
+// head branch of a pull request from a fork lives in the CONTRIBUTOR's
+// repository; the delete URL named the base repository with that
+// branch's name, so a fork branch called `main` -- or any name the base
+// also uses -- aimed the request at our own branch of that name.
+//
+// Seen for real, merging an outside pull request into go-ansible/template
+// whose head ref was `main`: ghmerge sent a DELETE at the base's own main
+// and announced "branch main deleted". Only GitHub's refusal to delete a
+// default branch stopped it.
+func TestAForkBranchIsLeftAlone(t *testing.T) {
+	pr := green()
+	pr["head"] = map[string]any{
+		"sha": "abc", "ref": "main",
+		"repo": map[string]any{"full_name": "a-contributor/gitsafe"},
+	}
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	merged, deleted := server(t, pr, runs)
+
+	code, out, errb := try(t, "go-gitsafe/gitsafe", "1")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	if !*merged {
+		t.Error("the merge itself must still happen")
+	}
+	if *deleted {
+		t.Error("it deleted a branch in a repository that is not this one")
+	}
+	if !strings.Contains(out, "left alone") || !strings.Contains(out, "a-contributor/gitsafe") {
+		t.Errorf("it did not say whose branch it left alone:\n%s", out)
+	}
+}
+
+// A head whose fork has been deleted sends head.repo as null. There is
+// nothing to delete, and nothing to aim at this repository either.
+func TestAVanishedForkIsNotDeletedFromHere(t *testing.T) {
+	pr := green()
+	pr["head"] = map[string]any{"sha": "abc", "ref": "a-branch", "repo": nil}
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	_, deleted := server(t, pr, runs)
+
+	if code, _, errb := try(t, "go-gitsafe/gitsafe", "1"); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	if *deleted {
+		t.Error("it tried to delete a branch for a head repository that is gone")
+	}
+}
+
+// 422 means there was no ref to delete. It is an acceptable outcome, not a
+// deletion -- and reporting it as "deleted" is how this tool announced the
+// removal of a branch that is still standing.
+func TestAnAbsentBranchIsNotReportedAsDeleted(t *testing.T) {
+	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			fmt.Fprint(w, `{"merged":true}`)
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": runs})
+		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusUnprocessableEntity)
+		default:
+			_ = json.NewEncoder(w).Encode(green())
+		}
+	}))
+	defer s.Close()
+	was := apiBase
+	apiBase = s.URL
+	defer func() { apiBase = was }()
+
+	code, out, errb := try(t, "go-gitsafe/gitsafe", "1")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	if strings.Contains(out, "deleted") {
+		t.Errorf("422 was announced as a deletion:\n%s", out)
+	}
+	if !strings.Contains(out, "already gone") {
+		t.Errorf("it did not say what actually happened:\n%s", out)
 	}
 }

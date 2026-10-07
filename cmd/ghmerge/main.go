@@ -165,14 +165,37 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "merged\n")
 	if *del {
-		if err := deleteBranch(token, repo, pr.Head.Ref); err != nil {
-			// Not fatal: the merge is what mattered, and a branch left behind
-			// is tidied by anyone. Saying so is better than failing after the
-			// irreversible half already happened.
-			fmt.Fprintf(stderr, "ghmerge: the branch was left behind: %v\n", err)
-			return 0
+		// ⛔ The head branch of a pull request from a FORK lives in the
+		// contributor's repository, not this one. Deleting it is not this
+		// tool's business, and the URL it would have used names THIS
+		// repository with THAT branch's name -- so a fork branch called
+		// `main`, or any name this repository also uses, aimed the delete
+		// at our own branch of that name. Seen for real: merging an
+		// outside pull request whose head ref was `main` sent a DELETE at
+		// go-ansible/template's own main, and only GitHub's refusal to
+		// delete a default branch stopped it.
+		switch head := pr.Head.Repo.FullName; {
+		case head == "":
+			fmt.Fprintf(stdout, "the head repository is gone, so there is no branch to delete\n")
+		case !strings.EqualFold(head, repo):
+			fmt.Fprintf(stdout, "branch %s left alone: it is in %s, not %s\n", pr.Head.Ref, head, repo)
+		default:
+			gone, err := deleteBranch(token, repo, pr.Head.Ref)
+			switch {
+			case err != nil:
+				// Not fatal: the merge is what mattered, and a branch left
+				// behind is tidied by anyone. Saying so is better than
+				// failing after the irreversible half already happened.
+				fmt.Fprintf(stderr, "ghmerge: the branch was left behind: %v\n", err)
+			case gone:
+				fmt.Fprintf(stdout, "branch %s deleted\n", pr.Head.Ref)
+			default:
+				// 422 means the ref was not there to delete. Reporting that
+				// as "deleted" is how this tool claimed to have removed a
+				// branch that is still standing.
+				fmt.Fprintf(stdout, "branch %s was already gone\n", pr.Head.Ref)
+			}
 		}
-		fmt.Fprintf(stdout, "branch %s deleted\n", pr.Head.Ref)
 	}
 	return 0
 }
@@ -360,6 +383,13 @@ type pr struct {
 	Head           struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
+		// Repo is the repository the head BRANCH lives in, which is not
+		// this repository when the pull request comes from a fork. GitHub
+		// always sends it; it is null only for a head whose fork has been
+		// deleted, and then there is nothing to delete either.
+		Repo struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
 }
 
@@ -515,21 +545,30 @@ func merge(token, repo string, number int, squash bool) error {
 	return nil
 }
 
-func deleteBranch(token, repo, ref string) error {
+// deleteBranch removes ref from repo. It reports whether the branch was
+// actually deleted: GitHub answers 204 when it removed one and 422 when
+// there was none to remove, and both are acceptable outcomes -- but they
+// are not the same thing, and this used to collapse them into a nil error
+// that the caller announced as "deleted".
+func deleteBranch(token, repo, ref string) (deleted bool, err error) {
 	req, err := http.NewRequest(http.MethodDelete,
 		fmt.Sprintf("%s/repos/%s/git/refs/heads/%s", apiBase, repo, ref), nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusUnprocessableEntity {
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return true, nil
+	case http.StatusUnprocessableEntity:
+		return false, nil
+	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		return ghauth.WhyRefused(resp.StatusCode, resp.Header, body)
+		return false, ghauth.WhyRefused(resp.StatusCode, resp.Header, body)
 	}
-	return nil
 }
