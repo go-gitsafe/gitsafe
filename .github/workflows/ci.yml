@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.1' }
+        with: { go-version: '1.27.2' }
       # ⛔ SAY WHICH TOOLCHAIN RAN. A green check that does not record the
       # compiler behind it makes every figure measured under it unattributable:
       # go.mod said 1.26 on a sibling repository for weeks while its CI asked
@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.1' }
+        with: { go-version: '1.27.2' }
       # ⛔ SAY WHICH TOOLCHAIN RAN. A green check that does not record the
       # compiler behind it makes every figure measured under it unattributable:
       # go.mod said 1.26 on a sibling repository for weeks while its CI asked
