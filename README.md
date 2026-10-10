@@ -351,6 +351,30 @@ refuses a command line carrying a token before it runs, so `git clone
 https://TOKEN@host/…` never executes. It covers only commands that go through
 the agent harness, and nothing a person types in a terminal.
 
+### And one case this list used to omit: these tools themselves
+
+`guard-bash` asks `secretarg`'s question of commands the harness runs. Nothing
+asked it of gitsafe. Six commands read the token — `ghscopes`, `ghnew`, `ghpkg`,
+`ghmerge`, `ghrunner` — and an audit on 2026-10-10 found every one of them passing
+it only to an HTTP helper. A reading is not a guarantee, and the pressure is real:
+`actions/runner`'s `config.sh` takes the registration token as `--token`, which is
+why `ghrunner` opens with twenty lines about avoiding it.
+
+So it is enforced. `secretarg`'s `TestNoToolPutsTheTokenOnACommandLineOrInTheEnvironment`
+parses every non-test `.go` file in the module and fails if an identifier holding the
+value of `ghauth.Read` reaches an argument of `exec.Command`/`exec.CommandContext`,
+`os.Setenv`, or an assignment to `.Env` — the whole subtree of each argument, so an
+intervening `Sprintf` hides nothing. It also fails if it parsed too few files, or if
+fewer than four of them hold a token, because a scan that reads nothing reports
+nothing and passes.
+
+**How to talk about a secret without holding it.** The pattern the rest of this
+repository uses, and the one to copy elsewhere: `credurl.Finding` carries the shape,
+the issuer's marker *from a fixed table*, the length, the first twelve hex digits of
+a SHA-256, which half of the userinfo it sat in, and the host. That is enough to tell
+two credentials apart, to recognise the same one in two places, and to confirm a
+revocation covered the right value. None of it is the value.
+
 ## `guard-bash`, and why a written rule was not enough
 
 The rule against a secret on a command line is in this README, in the machine's
