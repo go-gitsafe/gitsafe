@@ -348,6 +348,66 @@ answer and a directory that refused listing are counted and said out loud, becau
 scan that could not read must not be reported as a clean machine. An empty repository
 is neither: `git log` exits non-zero there and that is not a failure to read.
 
+⛔ **And it says WHERE, because the total on its own is the wrong number to act on.**
+The first real sweep read as *"350 repositories carry an identity, in 50724
+commits"*. That same scan, counting the thing you would actually fix:
+
+    walked 485470 directories, 2084 checkouts
+    59 of the carriers were worktrees of a repository already counted
+    291 checkout(s) carry an identity of yours, in 38310 commit(s)
+    172 distinct upstream(s) to fix; 117 of the carriers are further clones of one already counted
+
+    by UPSTREAM, grouped by host:
+       20355 commit(s) in  111 repo(s)   plmlab.math.cnrs.fr
+       16992 commit(s) in   36 repo(s)   git.math.cnrs.fr
+         697 commit(s) in   24 repo(s)   github.com
+         212 commit(s) in    1 repo(s)   ssh.github.com
+          54 commit(s) in    2 repo(s)   (no remote — published nowhere)
+
+147 of the 172 are on an institution's own forges, where that institution's address
+belongs and is not a leak. The number to act on is **25** — the two GitHub rows added
+— and 909 commits.
+
+⛔ **That number moved four times, and every time for one reason: the unit being
+counted was not the unit that matters.**
+
+| counted | github.com said |
+|---|---|
+| the total, all forges together | 350 repos / 50724 commits |
+| the **path** | 12 / 280 |
+| the **remote's host** | 88 / 13111 |
+| the **repository** (worktrees folded) | 29 / 697 |
+| the **upstream** (clones folded) | **24 / 697** |
+
+The first of those was done by hand, in a throwaway script, and was wrong by a factor
+of forty: a path does not say where a repository is published — almost all of the "71
+with no remote" have one (only **2** have none), and dozens elsewhere in the tree point
+at GitHub. **Post-processing that makes a tool's answer actionable belongs inside the
+tool, where it is tested.** Beside it, nothing checks it.
+
+The two keys are exact rather than heuristic. `git rev-parse --git-common-dir` is
+*identical* for a worktree and its repository — 59 agent worktrees of one fork were
+carrying 12414 duplicate commits on GitHub alone. And a normalised
+`remote.origin.url` folds clones: `git@h:o/r.git` and `https://h/o/r` are one
+repository, fixed once upstream.
+
+⚠ But the **listing stays per checkout**. A clone can hold a commit that was never
+pushed, and folding the list would hide it. The counts fold; the list does not.
+
+One nuance this surfaces and does not resolve: `github.com` and `ssh.github.com` are
+the same forge under two hostnames (the latter is GitHub's SSH endpoint on port 443).
+Normalising would mean a table of host aliases in the source — a list that names
+values rather than describing them, which is what `-identities` exists to avoid — so
+both rows stay and the reader adds them.
+
+It groups by the **remote's host and not the path**, and names the host on each
+repository's own line as well: a summary that counts 88 repositories without naming
+them is not actionable, and the reader then groups the output by path to find them —
+which is the mistake above. A remote that is a local path is named as such rather than counted as "no
+remote". The URL is read with this repository's own `credurl`, which already knows the
+scp form `git@host:path` — two parsers of the same thing is how one of them ends up
+wrong.
+
 ⛔ It needs the roots spelled out. It will not walk `$HOME` by default.
 
 ### It does not push
