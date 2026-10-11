@@ -286,3 +286,77 @@ func TestABurstLimitIsNotADeadCredential(t *testing.T) {
 		t.Errorf("stderr = %q", e)
 	}
 }
+
+// ⛔ Ces trois tests fixent la raison d'être du changement du 2026-10-11.
+//
+// L'essai à blanc disait « would merge o/r#3, then tag its merge commit v1.0.0 »
+// quelle que soit l'état de la PR. Pour une PR DÉJÀ fusionnée cela se lit comme
+// « va tenter de fusionner » — alors que ghmerge rend 0 sur une PR déjà fusionnée,
+// donc ghrelease aurait enchaîné sur l'étiquetage du bon commit. Cette formulation a
+// envoyé quelqu'un contourner la commande, le 2026-10-10, pour poser l'étiquette
+// avec `gh api .../git/refs` et un sha lu dans `commits/main`; main avait bougé
+// entre-temps sous la fusion d'un pair. C'est la quatrième occurrence de la faute
+// décrite en tête de ce fichier, dans une orthographe neuve.
+func TestADryRunOnAnAlreadyMergedRequestNamesTheCommitItWouldTag(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/pulls/3": reply(http.StatusOK,
+			`{"merged":true,"merge_commit_sha":"8f9af5be0123456789abcdef"}`),
+	}}
+	install(t, s)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", withToken(t, "t"), "-dry-run", "o/r", "3", "v1.0.0"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if s.ran != 0 {
+		t.Error("a dry run merged")
+	}
+	for _, want := range []string{"already merged", "8f9af5be", "v1.0.0"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout does not contain %q: %q", want, out.String())
+		}
+	}
+	// ⛔ And it must NOT read as an intention to merge, which is the whole point.
+	if strings.Contains(out.String(), "would merge") {
+		t.Errorf("an already merged request still reads as a merge: %q", out.String())
+	}
+}
+
+func TestADryRunOnAnOpenRequestSaysTheMergeCommitDoesNotExistYet(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/pulls/3": reply(http.StatusOK, `{"merged":false,"merge_commit_sha":""}`),
+	}}
+	install(t, s)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", withToken(t, "t"), "-dry-run", "o/r", "3", "v1.0.0"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "would merge") ||
+		!strings.Contains(out.String(), "does not exist yet") {
+		t.Errorf("stdout = %q", out.String())
+	}
+}
+
+// ⭐ Et le cas qui doit rester UTILISABLE: un essai à blanc qui trouve l'étiquette
+// libre mais ne peut pas lire la PR dit ce qu'il tenterait, dit sur stderr qu'il n'a
+// pas pu nommer le commit, et sort 0. Refuser ici rendrait -dry-run inutile
+// précisément quand on est prudent.
+//
+// ⛔ Une première version de ce test employait doErr pour couper le réseau entier.
+// C'était une prémisse fausse: tagExists tourne AVANT ce bloc, donc un essai à blanc
+// ne survivait déjà pas à une panne générale. La branche n'est atteinte que quand la
+// recherche d'étiquette aboutit — 404 veut dire « libre » — et que la lecture de la
+// PR échoue.
+func TestADryRunThatCannotReadTheRequestSaysSoAndStillWorks(t *testing.T) {
+	s := &stub{} // 404 partout: l'étiquette est libre, la PR illisible
+	install(t, s)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", withToken(t, "t"), "-dry-run", "o/r", "3", "v1.0.0"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "would merge") {
+		t.Errorf("stdout = %q", out.String())
+	}
+	if !strings.Contains(errb.String(), "did NOT name the commit") {
+		t.Errorf("stderr does not say the commit was not named: %q", errb.String())
+	}
+}
