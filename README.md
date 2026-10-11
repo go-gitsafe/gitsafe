@@ -145,17 +145,43 @@ anyone who genuinely wants an empty repository.
 
 ## Installing
 
+**Where they land.** `go install` writes to `GOBIN`, and `GOBIN` defaults to
+`$(go env GOPATH)/bin` — which is **not necessarily a directory your `PATH`
+contains**. On the machine these guards were written for it is not: six commands
+built on 2026-10-08 sat unused in `~/go/bin` while the copies actually being run
+were older ones in `~/.local/bin`. An install that lands outside `PATH` looks
+exactly like an install that worked.
+
+So say where, and check afterwards that the shell agrees:
+
 ```
+export GOBIN=~/.local/bin          # or wherever your PATH looks
+
 go install github.com/go-gitsafe/gitsafe/cmd/gitpush@latest
+go install github.com/go-gitsafe/gitsafe/cmd/git-credential-tokenfile@latest
+go install github.com/go-gitsafe/gitsafe/cmd/git-pre-push-guard@latest
+go install github.com/go-gitsafe/gitsafe/cmd/git-post-checkout-guard@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghmerge@latest
+go install github.com/go-gitsafe/gitsafe/cmd/ghrelease@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghnew@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghscopes@latest
-go install github.com/go-gitsafe/gitsafe/cmd/git-pre-push-guard@latest
+go install github.com/go-gitsafe/gitsafe/cmd/ghpkg@latest
+go install github.com/go-gitsafe/gitsafe/cmd/ghrunner@latest
 go install github.com/go-gitsafe/gitsafe/cmd/credscan@latest
-go install github.com/go-gitsafe/gitsafe/cmd/git-post-checkout-guard@latest
+go install github.com/go-gitsafe/gitsafe/cmd/guard-bash@latest
+go install github.com/go-gitsafe/gitsafe/cmd/hookcheck@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glci@latest
+
+which -a gitpush ghrelease git-credential-tokenfile   # one path each, the one you meant
 ```
+
+⛔ **`git-credential-tokenfile` is not optional.** `gitpush` names `tokenfile` as
+its credential helper, and git resolves that to `git-credential-tokenfile` on
+`PATH`. Without it there is nothing to serve the token and the first push fails —
+which is the moment someone reaches for a URL with a credential in it. This list
+left it out, along with `ghrelease`, which has a section of its own above;
+`TestTheInstallListNamesEveryCommand` now keeps the list and `cmd/` in step.
 
 The hook goes where git looks for hooks in every repository:
 
