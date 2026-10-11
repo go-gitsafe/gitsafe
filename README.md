@@ -326,6 +326,30 @@ Three lines gone, and it printed `1 commits rebuilt, tree unchanged, nothing lef
 publish` — a success. This rewrites the tag **object**, so the message and the
 tagger's date survive and only an owned tagger identity changes.
 
+### `-scan` — which checkouts still carry you
+
+    reauthor -identities <file> -scan <root>...
+
+The rewrite fixes one repository. Nothing says which ones need it, and the only
+reason the 31 were ever found is that somebody looked. So the detection half runs on
+a schedule, the way `credscan scan` does:
+
+    # once a day, and it says something only when it finds something
+    reauthor -identities ~/.git-identities -scan ~/src >/tmp/ident.log 2>&1 \
+      || mail -s "reauthor" you < /tmp/ident.log
+
+It is read-only and exits non-zero when it finds any, so cron or a launchd job can
+gate on it. It counts the **committer** as well as the author: a commit somebody else
+wrote and you rebased carries your address as committer, and that is published just
+as visibly.
+
+⛔ **Completeness is reported separately from the answer.** A checkout that would not
+answer and a directory that refused listing are counted and said out loud, because a
+scan that could not read must not be reported as a clean machine. An empty repository
+is neither: `git log` exits non-zero there and that is not a failure to read.
+
+⛔ It needs the roots spelled out. It will not walk `$HOME` by default.
+
 ### It does not push
 
 Every hash changes, so publishing means force-pushing branches **and** tags:

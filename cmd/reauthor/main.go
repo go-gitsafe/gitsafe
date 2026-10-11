@@ -91,6 +91,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	identities := fs.String("identities", "", "file listing the identities that are YOURS (required)")
 	to := fs.String("to", "", `the identity to rewrite them to, as "Name <email>"; default: git's configured user.name and user.email`)
 	dry := fs.Bool("dry-run", false, "say what would change, write nothing")
+	doScan := fs.Bool("scan", false, "walk the given roots for checkouts and say which ones still "+
+		"carry an identity of yours; read-only, and non-zero when it finds any")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -100,20 +102,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
+	rest := fs.Args()
 	repo := "."
-	if rest := fs.Args(); len(rest) == 1 {
-		repo = rest[0]
-	} else if len(rest) > 1 {
-		fmt.Fprintln(stderr, "reauthor: one repository at a time")
+	if !*doScan {
+		if len(rest) == 1 {
+			repo = rest[0]
+		} else if len(rest) > 1 {
+			fmt.Fprintln(stderr, "reauthor: one repository at a time; -scan takes several roots")
+			return 2
+		}
+	} else if len(rest) == 0 {
+		fmt.Fprintln(stderr, "reauthor: -scan needs the roots spelled out; it will not walk $HOME by default")
 		return 2
 	}
 
-	g := &git{dir: repo}
 	own, err := readIdentities(*identities)
 	if err != nil {
 		fmt.Fprintln(stderr, "reauthor:", err)
 		return 1
 	}
+	if *doScan {
+		// ⛔ A scan needs no target identity and writes nothing, so it must not
+		// refuse for want of a configured user.name — that would make the
+		// detection half unusable exactly where it is most needed.
+		return scan(rest, own, stdout, stderr)
+	}
+
+	g := &git{dir: repo}
 	want, err := target(g, *to)
 	if err != nil {
 		fmt.Fprintln(stderr, "reauthor:", err)
