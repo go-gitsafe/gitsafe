@@ -31,6 +31,27 @@
 // run at all if the merge did not happen, whatever the reason -- red checks, no
 // checks, a conflict -- because it runs ghmerge and takes its exit status
 // seriously, which is the whole point.
+//
+// # The fourth occurrence, in a new spelling
+//
+// On 2026-10-10 the same mistake happened a fourth time, and not through a pipe:
+//
+//	ghmerge go-gitsafe/gitsafe 40                      # merged, 8/8 green
+//	SHA=$(gh api repos/.../commits/main --jq .sha)     # read a MOVING ref
+//	gh api -X POST .../git/refs -f sha="$SHA"
+//
+// A peer merged another pull request between the verification and the tag, so
+// v0.6.1 landed on a commit whose checks were still running. It happened to be
+// green. "Tagging a branch" above is the same error; `commits/main` is just
+// another name for it.
+//
+// What sent someone around this command was the DRY RUN's wording. It said
+// "would merge X, then tag its merge commit TAG" whatever the state, which reads
+// as "will try to merge" for a pull request that is already merged -- and
+// ghmerge exits 0 on one of those, so this command would have tagged the right
+// commit. So the dry run now NAMES the commit it would tag. A person can then
+// compare it to the sha whose checks they watched, which is the step that was
+// missing.
 package main
 
 import (
@@ -102,7 +123,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *dry {
-		fmt.Fprintf(stdout, "would merge %s#%d, then tag its merge commit %s\n", repo, number, tag)
+		// ⛔ This used to say only "would merge X, then tag its merge commit TAG",
+		// which reads as "will try to merge" for a pull request that is ALREADY
+		// merged — and ghmerge exits 0 on one of those, so ghrelease would have
+		// gone straight on to tag it. On 2026-10-10 that wording sent someone
+		// around this command to `gh api .../git/refs` with a sha read from
+		// `commits/main`; main had moved under a peer's merge in the meantime, so
+		// the tag landed on a commit whose checks were still running. It is the
+		// fourth occurrence of the mistake in this file's header, in a new
+		// spelling.
+		//
+		// So the dry run now NAMES THE COMMIT it would tag, which is both the
+		// disambiguation and the thing a person can verify before acting.
+		merged, sha, err := mergeState(token, repo, number)
+		switch {
+		case err != nil:
+			// A dry run that cannot read the pull request must not pretend to
+			// know. It says what it would attempt, says why it cannot be more
+			// precise, and still exits 0 — refusing here would make -dry-run
+			// unusable exactly when a person is being careful.
+			fmt.Fprintf(stdout, "would merge %s#%d, then tag %s at its merge commit\n",
+				repo, number, tag)
+			fmt.Fprintf(stderr, "ghrelease: could not read whether it is already merged: %v\n", err)
+			fmt.Fprintf(stderr, "ghrelease: so this did NOT name the commit it would tag\n")
+		case merged && sha != "":
+			fmt.Fprintf(stdout, "%s#%d is already merged; would tag %s at %s, its merge commit\n",
+				repo, number, tag, short(sha))
+		case merged:
+			fmt.Fprintf(stderr, "ghrelease: %s#%d is merged and GitHub gave no merge commit; "+
+				"there is nothing this could tag\n", repo, number)
+			return 1
+		default:
+			fmt.Fprintf(stdout, "would merge %s#%d, then tag %s at the merge commit that "+
+				"produces — it does not exist yet\n", repo, number, tag)
+		}
 		return 0
 	}
 
@@ -250,34 +304,48 @@ func tagExists(token, repo, tag string) (bool, error) {
 	return false, refused("looking for the tag", resp)
 }
 
-// mergeCommit is the commit the merge produced.
+// mergeState reads whether the pull request is merged and, if it is, the commit
+// the merge produced.
 //
-// A squash merge makes a NEW commit, so the pull request's head sha is not it
-// and tagging that would tag a commit no branch contains.
-func mergeCommit(token, repo string, number int) (string, error) {
+// It is one reader for two callers — the dry run, which must not treat "not
+// merged" as an error, and mergeCommit, which must. Two readers of the same
+// endpoint is how one of them ends up decoding a field the other does not.
+func mergeState(token, repo string, number int) (merged bool, sha string, err error) {
 	resp, err := api(token, http.MethodGet,
 		fmt.Sprintf("%s/repos/%s/pulls/%d", apiBase, repo, number), nil)
 	if err != nil {
-		return "", err
+		return false, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", refused("asking for the pull request", resp)
+		return false, "", refused("asking for the pull request", resp)
 	}
 	var pr struct {
 		Merged   bool   `json:"merged"`
 		MergeSHA string `json:"merge_commit_sha"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return false, "", err
+	}
+	return pr.Merged, pr.MergeSHA, nil
+}
+
+// mergeCommit is the commit the merge produced.
+//
+// A squash merge makes a NEW commit, so the pull request's head sha is not it
+// and tagging that would tag a commit no branch contains.
+func mergeCommit(token, repo string, number int) (string, error) {
+	merged, sha, err := mergeState(token, repo, number)
+	if err != nil {
 		return "", err
 	}
-	if !pr.Merged {
+	if !merged {
 		return "", errors.New("GitHub says the pull request is not merged")
 	}
-	if pr.MergeSHA == "" {
+	if sha == "" {
 		return "", errors.New("GitHub gave no merge commit")
 	}
-	return pr.MergeSHA, nil
+	return sha, nil
 }
 
 // createTag publishes a lightweight tag at sha.

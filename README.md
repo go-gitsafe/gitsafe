@@ -38,6 +38,37 @@ a refusal never leaves a merged pull request with no release. It runs `ghmerge`
 rather than copying its rules, because two answers to "may this be merged" is
 how one of them ends up wrong.
 
+### A fourth time, in a new spelling — and what the dry run says now
+
+On 2026-10-10 it happened again, without a pipe:
+
+    ghmerge go-gitsafe/gitsafe 40                   # merged, 8/8 green
+    SHA=$(gh api repos/.../commits/main --jq .sha)  # a MOVING ref
+    gh api -X POST .../git/refs -f sha="$SHA"
+
+A peer merged another pull request between the verification and the tag, so
+`v0.6.1` landed on a commit whose checks were still running. It happened to be
+green. `commits/main` is just another name for "tagging a branch".
+
+**This command already handled that case.** `ghmerge` prints "is already merged"
+and exits **0** on a merged pull request, so `ghrelease <repo> <pr> <tag>` would
+have tagged `#40`'s own merge commit. What sent someone around it was the dry
+run's wording: it said "would merge X, then tag its merge commit TAG" whatever
+the state, which reads as "will try to merge" for something already merged.
+
+So the dry run now **names the commit it would tag**:
+
+    $ ghrelease -dry-run go-gitsafe/gitsafe 40 v0.6.2
+    go-gitsafe/gitsafe#40 is already merged; would tag v0.6.2 at 31b41b45, its merge commit
+
+    $ ghrelease -dry-run go-gitsafe/gitsafe 41 v0.6.2
+    would merge go-gitsafe/gitsafe#41, then tag v0.6.2 at the merge commit that produces — it does not exist yet
+
+That is the step that was missing: a hash a person can compare with the one whose
+checks they watched. When it cannot read the pull request it says so on stderr and
+still exits 0 — refusing there would make `-dry-run` useless exactly when someone
+is being careful.
+
 ## What is here
 
 | | |
