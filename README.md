@@ -168,6 +168,7 @@ go install github.com/go-gitsafe/gitsafe/cmd/ghscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghpkg@latest
 go install github.com/go-gitsafe/gitsafe/cmd/ghrunner@latest
 go install github.com/go-gitsafe/gitsafe/cmd/credscan@latest
+go install github.com/go-gitsafe/gitsafe/cmd/reauthor@latest
 go install github.com/go-gitsafe/gitsafe/cmd/guard-bash@latest
 go install github.com/go-gitsafe/gitsafe/cmd/hookcheck@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glscopes@latest
@@ -257,6 +258,88 @@ place. `gitpush` clears the list at both scopes before naming its own.
 
 Pure Go, no cgo, no dependencies outside the standard library. BSD-3-Clause.
 
+
+## `reauthor` — a personal address in a root commit, reachable from every tag
+
+    reauthor -identities <file> [-to "Name <email>"] [-dry-run] [<repo>]
+
+A sweep of 660 repositories on one machine in August 2026 found four identifiers
+where only the public one should have been, in **31** repositories. Two causes: the
+root commit of most of them carried a personal address under the right name — and a
+root commit is reachable from every branch and every tag — plus a run of commits made
+with `git -c user.name` in one session.
+
+It rewrites the commits that are **yours** and leaves everybody else's byte for byte.
+Trees, messages, parents (merges included), author dates and committer dates all
+survive: it reads and writes raw commit objects rather than passing dates through a
+format, so an offset cannot be normalised on the way through. The working tree comes
+out identical and every Go module hash stays valid, because a module zip is built
+from the tree and not from the commit.
+
+### Your identities are an argument, never a list in here
+
+The shell script this replaces carried seven personal addresses and a personal name
+in its source. Publishing that would publish exactly what the tool removes — and a
+list in a program is wrong for a second reason: it names values instead of describing
+them, so it dies the day one changes. There is no default:
+
+    # one per line, blank lines and # comments ignored
+    email: someone@example.invalid
+    name:  Some Name
+
+A **name** matches whatever the address is: a commit under your name with a
+stranger's address is still yours. An **address** matches whatever the name is, which
+is the case the first sweep missed — a name being right is not evidence the address
+is.
+
+⛔ Only your own identities belong in that file. The shell version's final check
+grepped for an institution's domain, and that would flag a contributor whose address
+is at the same institution and whose single commit is precisely what this tool exists
+to preserve. This one checks the identities you named, and nothing else.
+
+### What it refuses
+
+- uncommitted changes to **tracked** files; untracked ones are nobody's business and
+  a build directory is no reason to stop;
+- a second run on the same repository, with a lock directory in the git dir. Killing
+  the shell that started a rewrite does not kill the rewrite: in August 2026 that left
+  two of them on one repository, both heading for `update-ref` and a hard reset on the
+  same refs. `mkdir` is the test and the claim in one step;
+- finishing quietly if **any ref's tree** changed — not just HEAD's, because a branch
+  moved onto the wrong commit leaves HEAD's tree intact and is still wrong;
+- finishing quietly if any of your identities is still reachable from a branch or tag.
+
+### The defect the port fixes, measured
+
+The shell version moved annotated tags with `git tag -a <tag> -m "$subject"`, and
+`%(contents:subject)` is the FIRST LINE. On the same fixture, a tag whose message had
+a body:
+
+    before          after the shell script      after this
+    v0.1.0          v0.1.0                      v0.1.0
+                                                (blank)
+    A body that                                 A body that must survive.
+    must survive.                               Two lines of it.
+    Two lines of it.
+
+Three lines gone, and it printed `1 commits rebuilt, tree unchanged, nothing left to
+publish` — a success. This rewrites the tag **object**, so the message and the
+tagger's date survive and only an owned tagger identity changes.
+
+### It does not push
+
+Every hash changes, so publishing means force-pushing branches **and** tags:
+
+    gitpush --force origin --all
+    gitpush --force origin --tags
+
+`--force`, not `--force-with-lease`: the lease on a rewritten tag is stale by
+construction and the push is rejected.
+
+⛔ **And do not fetch in between.** `git fetch --tags` brings the old tags back down
+and silently undoes part of the rewrite — it cost two repositories their tags in
+August 2026, from a command run only to see what the remote held. Ask the remote with
+`git ls-remote`, which writes nothing.
 
 ## `credscan` — a token in 117 remote URLs for three months
 
