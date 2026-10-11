@@ -348,6 +348,42 @@ answer and a directory that refused listing are counted and said out loud, becau
 scan that could not read must not be reported as a clean machine. An empty repository
 is neither: `git log` exits non-zero there and that is not a failure to read.
 
+⛔ **And it says WHERE, because the total on its own is the wrong number to act on.**
+The first real sweep read as *"350 repositories carry an identity, in 50724
+commits"*. Grouped by where `origin` points, that same answer is:
+
+    20355 commit(s) in  215 repo(s)   plmlab.math.cnrs.fr
+    16992 commit(s) in   44 repo(s)   git.math.cnrs.fr
+    13111 commit(s) in   88 repo(s)   github.com
+      212 commit(s) in    1 repo(s)   ssh.github.com
+       54 commit(s) in    2 repo(s)   (no remote — published nowhere)
+
+259 of the 350 are on an institution's own forges, where that institution's address
+belongs and is not a leak. The number to act on is **89** — the two GitHub rows added
+together — and 13323 commits.
+
+⛔ **The grouping is in the tool because the first attempt at it, by hand, was wrong
+by a factor of forty.** It grouped by PATH and reported "12 repositories on
+github.com, 280 commits", plus "71 with no remote". A path does not say where a
+repository is published: almost all of those 71 have a remote (only **2** have none),
+and dozens of repositories elsewhere in the tree — under `portail-maths`, `plm-dev`,
+`localhost` — point at GitHub. Post-processing a tool's output to make it actionable
+belongs inside the tool, where it is tested; done beside it, nothing checks it.
+
+One nuance this surfaces and does not resolve: `github.com` and `ssh.github.com` are
+the same forge under two hostnames (the latter is GitHub's SSH endpoint on port 443).
+Normalising would mean a table of host aliases in the source — a list that names
+values rather than describing them, which is what `-identities` exists to avoid — so
+both rows stay and the reader adds them.
+
+It groups by the **remote's host and not the path**, and names the host on each
+repository's own line as well: a summary that counts 88 repositories without naming
+them is not actionable, and the reader then groups the output by path to find them —
+which is the mistake above. A remote that is a local path is named as such rather than counted as "no
+remote". The URL is read with this repository's own `credurl`, which already knows the
+scp form `git@host:path` — two parsers of the same thing is how one of them ends up
+wrong.
+
 ⛔ It needs the roots spelled out. It will not walk `$HOME` by default.
 
 ### It does not push

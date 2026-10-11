@@ -144,3 +144,104 @@ func TestAnEmptyRepositoryIsNotUnreadable(t *testing.T) {
 		t.Errorf("stderr annonce un balayage incomplet: %q", errb)
 	}
 }
+
+// ⛔ La première lecture du balayage de flotte a été « 350 dépôts portent une
+// identité » — alors que 215 étaient sur le GitLab d'une institution, où son
+// adresse est à sa place, et 71 n'avaient aucun remote. Le total seul est le
+// mauvais chiffre pour agir, et j'ai fait la décomposition à la main, hors de
+// l'outil. Elle est donc dans l'outil.
+func TestTheSummaryGroupsByWhereOriginPoints(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+
+	// Trois porteurs: un publié sur un hôte public, un sur une forge interne,
+	// un sans aucun remote.
+	mk := func(name, remote string) {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		run2(t, dir, nil, "init", "-q", "-b", "main", ".")
+		run2(t, dir, nil, "config", "user.name", wantName)
+		run2(t, dir, nil, "config", "user.email", wantEmail)
+		if remote != "" {
+			run2(t, dir, nil, "config", "remote.origin.url", remote)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run2(t, dir, nil, "add", "f.txt")
+		run2(t, dir, []string{
+			"GIT_AUTHOR_NAME=" + mineName, "GIT_AUTHOR_EMAIL=" + mineEmail,
+			"GIT_COMMITTER_NAME=" + mineName, "GIT_COMMITTER_EMAIL=" + mineEmail,
+		}, "commit", "-q", "-m", "mine")
+	}
+	mk("public", "https://github.invalid/o/r.git")
+	// ⭐ La forme scp n'a pas de schéma: c'est credurl qui sait la lire, et c'est
+	// la raison de ne pas écrire un second parseur d'URL ici.
+	mk("internal", "git@gitlab.internal.invalid:group/proj.git")
+	mk("nowhere", "")
+
+	ids := identitiesFile(t, "email: "+mineEmail)
+	code, out, errb := exec2(t, "-identities", ids, "-scan", root)
+	if code != 1 {
+		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+	for _, want := range []string{
+		"by where origin points",
+		"github.invalid",
+		"gitlab.internal.invalid",
+		"(no remote — published nowhere)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("la synthèse ne dit pas %q:\n%s", want, out)
+		}
+	}
+	// Chaque groupe tient exactement un dépôt et un commit.
+	if n := strings.Count(out, "commit(s) in    1 repo(s)"); n != 3 {
+		t.Errorf("3 groupes d'un dépôt attendus, %d trouvés:\n%s", n, out)
+	}
+	// ⛔ Et l'hôte doit figurer sur la ligne de CHAQUE dépôt: un tableau qui
+	// compte 88 dépôts sur un hôte public sans les nommer n'est pas
+	// exploitable, et le lecteur regroupe alors la sortie par CHEMIN pour les
+	// retrouver — la faute même que ce groupement existe pour éviter.
+	for _, want := range []string{
+		filepath.Join(root, "public") + "\n    github.invalid",
+		filepath.Join(root, "nowhere") + "\n    (no remote",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("la ligne du dépôt ne nomme pas son hôte (%q):\n%s", want, out)
+		}
+	}
+}
+
+// Un chemin local comme remote EST un remote, et ce n'est pas « aucun remote ».
+func TestALocalPathRemoteIsNotNoRemote(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "cloned")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run2(t, dir, nil, "init", "-q", "-b", "main", ".")
+	run2(t, dir, nil, "config", "user.name", wantName)
+	run2(t, dir, nil, "config", "user.email", wantEmail)
+	run2(t, dir, nil, "config", "remote.origin.url", "/some/local/path.git")
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run2(t, dir, nil, "add", "f.txt")
+	run2(t, dir, []string{
+		"GIT_AUTHOR_NAME=" + mineName, "GIT_AUTHOR_EMAIL=" + mineEmail,
+		"GIT_COMMITTER_NAME=" + mineName, "GIT_COMMITTER_EMAIL=" + mineEmail,
+	}, "commit", "-q", "-m", "mine")
+
+	ids := identitiesFile(t, "email: "+mineEmail)
+	_, out, _ := exec2(t, "-identities", ids, "-scan", root)
+	if !strings.Contains(out, "(a local path)") {
+		t.Errorf("un remote qui est un chemin local n'est pas nommé comme tel:\n%s", out)
+	}
+	if strings.Contains(out, "no remote") {
+		t.Errorf("un chemin local a été pris pour une absence de remote:\n%s", out)
+	}
+}

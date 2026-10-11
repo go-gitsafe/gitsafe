@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/go-gitsafe/gitsafe/credurl"
 )
 
 // ⛔ A scan is the half of this doctrine that runs on a schedule, and it exists
@@ -22,7 +24,23 @@ import (
 type finding struct {
 	Dir    string
 	Counts map[string]int // identity → commits, only the ones that are yours
+	Host   string         // where origin points, or "" for a repository with no remote
 	Err    error
+}
+
+// where names the group this repository belongs to.
+//
+// ⛔ It is the REMOTE's host and not the path, because the path does not say
+// whether anything is published. On the machine this was written for,
+// `localhost/tools` has no remote at all while a directory under `github.com/`
+// may be a worktree of something else — and the first sweep of this was read as
+// "350 repositories carry an identity" when 215 of them were on an institution's
+// own GitLab, where an institutional address belongs, and 71 had no remote.
+func (f finding) where() string {
+	if f.Host == "" {
+		return "(no remote — published nowhere)"
+	}
+	return f.Host
 }
 
 func (f finding) total() int {
@@ -55,6 +73,7 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 			}
 			repos++
 			f := look(p, own)
+			f.Host = originHost(p)
 			if f.Err != nil {
 				unreadable++
 			}
@@ -73,6 +92,8 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 	})
 
 	carrying, commits := 0, 0
+	perHost := map[string]int{}
+	reposPerHost := map[string]int{}
 	for _, f := range found {
 		if f.Err != nil {
 			fmt.Fprintf(stderr, "?    %s: %v\n", f.Dir, f.Err)
@@ -80,7 +101,13 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 		}
 		carrying++
 		commits += f.total()
-		fmt.Fprintf(stdout, "\n%s\n", f.Dir)
+		perHost[f.where()] += f.total()
+		reposPerHost[f.where()]++
+		// ⛔ The host goes on the repository's own line too. A summary that
+		// counts 88 repositories on a public host without naming them is not
+		// actionable, and the reader then groups the output by PATH to find
+		// them — which is the mistake this grouping exists to prevent.
+		fmt.Fprintf(stdout, "\n%s\n    %s\n", f.Dir, f.where())
 		for _, line := range byCount(f.Counts) {
 			fmt.Fprintln(stdout, "   ", line)
 		}
@@ -88,6 +115,33 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "\nwalked %d directories, %d checkouts\n", walked, repos)
 	fmt.Fprintf(stdout, "%d carry an identity of yours, in %d commit(s)\n", carrying, commits)
+
+	// ⛔ And WHERE, because the total on its own is the wrong number to act on.
+	// Grouping is in here rather than left to whoever reads the output: the first
+	// sweep's "350 repositories" was only actionable once broken down, and doing
+	// that by hand afterwards is how a tool's answer gets restated wrongly.
+	if len(perHost) > 0 {
+		fmt.Fprintln(stdout, "\nby where origin points — an institutional address on that")
+		fmt.Fprintln(stdout, "institution's own forge is not the same finding as one on a public host:")
+		type row struct {
+			host  string
+			repos int
+			n     int
+		}
+		var rows []row
+		for h, n := range perHost {
+			rows = append(rows, row{h, reposPerHost[h], n})
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].n != rows[j].n {
+				return rows[i].n > rows[j].n
+			}
+			return rows[i].host < rows[j].host
+		})
+		for _, r := range rows {
+			fmt.Fprintf(stdout, "    %5d commit(s) in %4d repo(s)   %s\n", r.n, r.repos, r.host)
+		}
+	}
 
 	// ⛔ Completeness is reported separately from the answer, because a scan that
 	// could not read must not be reported as a clean machine.
@@ -135,4 +189,23 @@ func look(dir string, own owned) finding {
 		}
 	}
 	return f
+}
+
+// originHost is the host the origin remote points at, or "" when there is none.
+//
+// ⭐ It reuses credurl.Inspect rather than parsing a URL again: that parser
+// already knows the scp form `git@host:path`, which has no scheme, and two
+// parsers of the same thing is how one of them ends up wrong.
+func originHost(dir string) string {
+	g := &git{dir: dir}
+	raw, err := g.out("config", "remote.origin.url")
+	if err != nil || raw == "" {
+		return ""
+	}
+	if h := credurl.Inspect(raw).Host; h != "" {
+		return h
+	}
+	// A local path as a remote is a remote, and it is not published anywhere a
+	// host would name. Saying so beats calling it "no remote".
+	return "(a local path)"
 }
