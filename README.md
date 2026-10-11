@@ -350,25 +350,49 @@ is neither: `git log` exits non-zero there and that is not a failure to read.
 
 ⛔ **And it says WHERE, because the total on its own is the wrong number to act on.**
 The first real sweep read as *"350 repositories carry an identity, in 50724
-commits"*. Grouped by where `origin` points, that same answer is:
+commits"*. That same scan, counting the thing you would actually fix:
 
-    20355 commit(s) in  215 repo(s)   plmlab.math.cnrs.fr
-    16992 commit(s) in   44 repo(s)   git.math.cnrs.fr
-    13111 commit(s) in   88 repo(s)   github.com
-      212 commit(s) in    1 repo(s)   ssh.github.com
-       54 commit(s) in    2 repo(s)   (no remote — published nowhere)
+    walked 485470 directories, 2084 checkouts
+    59 of the carriers were worktrees of a repository already counted
+    291 checkout(s) carry an identity of yours, in 38310 commit(s)
+    172 distinct upstream(s) to fix; 117 of the carriers are further clones of one already counted
 
-259 of the 350 are on an institution's own forges, where that institution's address
-belongs and is not a leak. The number to act on is **89** — the two GitHub rows added
-together — and 13323 commits.
+    by UPSTREAM, grouped by host:
+       20355 commit(s) in  111 repo(s)   plmlab.math.cnrs.fr
+       16992 commit(s) in   36 repo(s)   git.math.cnrs.fr
+         697 commit(s) in   24 repo(s)   github.com
+         212 commit(s) in    1 repo(s)   ssh.github.com
+          54 commit(s) in    2 repo(s)   (no remote — published nowhere)
 
-⛔ **The grouping is in the tool because the first attempt at it, by hand, was wrong
-by a factor of forty.** It grouped by PATH and reported "12 repositories on
-github.com, 280 commits", plus "71 with no remote". A path does not say where a
-repository is published: almost all of those 71 have a remote (only **2** have none),
-and dozens of repositories elsewhere in the tree — under `portail-maths`, `plm-dev`,
-`localhost` — point at GitHub. Post-processing a tool's output to make it actionable
-belongs inside the tool, where it is tested; done beside it, nothing checks it.
+147 of the 172 are on an institution's own forges, where that institution's address
+belongs and is not a leak. The number to act on is **25** — the two GitHub rows added
+— and 909 commits.
+
+⛔ **That number moved four times, and every time for one reason: the unit being
+counted was not the unit that matters.**
+
+| counted | github.com said |
+|---|---|
+| the total, all forges together | 350 repos / 50724 commits |
+| the **path** | 12 / 280 |
+| the **remote's host** | 88 / 13111 |
+| the **repository** (worktrees folded) | 29 / 697 |
+| the **upstream** (clones folded) | **24 / 697** |
+
+The first of those was done by hand, in a throwaway script, and was wrong by a factor
+of forty: a path does not say where a repository is published — almost all of the "71
+with no remote" have one (only **2** have none), and dozens elsewhere in the tree point
+at GitHub. **Post-processing that makes a tool's answer actionable belongs inside the
+tool, where it is tested.** Beside it, nothing checks it.
+
+The two keys are exact rather than heuristic. `git rev-parse --git-common-dir` is
+*identical* for a worktree and its repository — 59 agent worktrees of one fork were
+carrying 12414 duplicate commits on GitHub alone. And a normalised
+`remote.origin.url` folds clones: `git@h:o/r.git` and `https://h/o/r` are one
+repository, fixed once upstream.
+
+⚠ But the **listing stays per checkout**. A clone can hold a commit that was never
+pushed, and folding the list would hide it. The counts fold; the list does not.
 
 One nuance this surfaces and does not resolve: `github.com` and `ssh.github.com` are
 the same forge under two hostnames (the latter is GitHub's SSH endpoint on port 443).

@@ -52,7 +52,7 @@ func TestAScanNamesOnlyTheCheckoutsThatCarryYou(t *testing.T) {
 	}
 	// La synthèse dit REPOSITORIES depuis le repliement des worktrees: un
 	// worktree n'est pas une publication distincte.
-	if !strings.Contains(out, "1 REPOSITORY carr") {
+	if !strings.Contains(out, "1 checkout(s) carry") {
 		t.Errorf("le compte de porteurs est faux:\n%s", out)
 	}
 	// ⭐ L'adresse de l'autre contributeur ne doit PAS être comptée.
@@ -190,7 +190,7 @@ func TestTheSummaryGroupsByWhereOriginPoints(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
 	}
 	for _, want := range []string{
-		"by where origin points",
+		"by UPSTREAM, grouped by host",
 		"github.invalid",
 		"gitlab.internal.invalid",
 		"(no remote — published nowhere)",
@@ -280,7 +280,7 @@ func TestAWorktreeIsFoldedIntoItsRepository(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
 	}
-	if !strings.Contains(out, "1 REPOSITORY carr") {
+	if !strings.Contains(out, "1 checkout(s) carry") || !strings.Contains(out, "1 distinct upstream(s)") {
 		t.Errorf("le dépôt et ses 2 worktrees ne sont pas repliés en UN:\n%s", out)
 	}
 	if !strings.Contains(out, "2 of the carriers were worktrees") {
@@ -294,5 +294,55 @@ func TestAWorktreeIsFoldedIntoItsRepository(t *testing.T) {
 	// Le tableau par hôte compte UN dépôt, pas trois.
 	if !strings.Contains(out, "in    1 repo(s)   github.invalid") {
 		t.Errorf("le tableau par hôte compte les worktrees:\n%s", out)
+	}
+}
+
+// ⛔⛔ Le quatrième déplacement du chiffre, et la même cause: l'unité comptée.
+// Trois clones d'un même projet étaient comptés trois fois, et douze clones
+// bac-à-sable d'un fork douze fois. Ce qu'on corrige est l'AMONT, une seule fois.
+//
+// ⭐ Et les deux orthographes doivent répondre pareil: `git@host:o/r.git` et
+// `https://host/o/r` sont le même dépôt.
+func TestSeveralClonesOfOneUpstreamCountOnce(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	mk := func(name, remote string) {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		run2(t, dir, nil, "init", "-q", "-b", "main", ".")
+		run2(t, dir, nil, "config", "user.name", wantName)
+		run2(t, dir, nil, "config", "user.email", wantEmail)
+		run2(t, dir, nil, "config", "remote.origin.url", remote)
+		if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run2(t, dir, nil, "add", "f.txt")
+		run2(t, dir, []string{
+			"GIT_AUTHOR_NAME=" + mineName, "GIT_AUTHOR_EMAIL=" + mineEmail,
+			"GIT_COMMITTER_NAME=" + mineName, "GIT_COMMITTER_EMAIL=" + mineEmail,
+		}, "commit", "-q", "-m", "mine")
+	}
+	mk("clone-ssh", "git@github.invalid:o/r.git")
+	mk("clone-https", "https://github.invalid/o/r")
+	mk("elsewhere", "https://github.invalid/o/other.git")
+
+	ids := identitiesFile(t, "email: "+mineEmail)
+	code, out, errb := exec2(t, "-identities", ids, "-scan", root)
+	if code != 1 {
+		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+	if !strings.Contains(out, "3 checkout(s) carry") {
+		t.Errorf("les 3 checkouts doivent être listés, aucun n'est caché:\n%s", out)
+	}
+	if !strings.Contains(out, "2 distinct upstream(s) to fix") {
+		t.Errorf("deux orthographes d'un même amont n'ont pas été repliées:\n%s", out)
+	}
+	if !strings.Contains(out, "1 of the carriers are further clones") {
+		t.Errorf("le clone replié n'est pas dit:\n%s", out)
+	}
+	if !strings.Contains(out, "in    2 repo(s)   github.invalid") {
+		t.Errorf("le tableau par hôte doit compter 2 amonts:\n%s", out)
 	}
 }

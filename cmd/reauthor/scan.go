@@ -26,6 +26,7 @@ type finding struct {
 	Counts map[string]int // identity → commits, only the ones that are yours
 	Host   string         // where origin points, or "" for a repository with no remote
 	Repo   string         // the git-common-dir: the same for a worktree and its repository
+	Origin string         // a key for the UPSTREAM this points at, "" when there is none
 	Main   bool           // true when this checkout is the repository itself, not a worktree of it
 	Err    error
 }
@@ -77,6 +78,7 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 			f := look(p, own)
 			f.Host = originHost(p)
 			f.Repo, f.Main = repoOf(p)
+			f.Origin = originKey(p)
 			if f.Err != nil {
 				unreadable++
 			}
@@ -133,9 +135,11 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 		return found[i].Dir < found[j].Dir
 	})
 
-	carrying, commits := 0, 0
+	carrying, commits, clones := 0, 0, 0
 	perHost := map[string]int{}
 	reposPerHost := map[string]int{}
+	seenOrigin := map[string]bool{}
+	origins := map[string]bool{}
 	for _, f := range found {
 		if f.Err != nil {
 			fmt.Fprintf(stderr, "?    %s: %v\n", f.Dir, f.Err)
@@ -144,7 +148,17 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 		carrying++
 		commits += f.total()
 		perHost[f.where()] += f.total()
-		reposPerHost[f.where()]++
+		if key := f.Origin; key == "" {
+			reposPerHost[f.where()]++
+		} else if !seenOrigin[f.where()+" "+key] {
+			seenOrigin[f.where()+" "+key] = true
+			reposPerHost[f.where()]++
+		} else {
+			clones++
+		}
+		if f.Origin != "" {
+			origins[f.Origin] = true
+		}
 		// ⛔ The host goes on the repository's own line too. A summary that
 		// counts 88 repositories on a public host without naming them is not
 		// actionable, and the reader then groups the output by PATH to find
@@ -161,15 +175,29 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 			"and are folded into it: a worktree shares its repository's history, so counting it "+
 			"separately counts the same commits twice\n", worktrees)
 	}
-	fmt.Fprintf(stdout, "%d REPOSITOR%s carry an identity of yours, in %d commit(s)\n",
-		carrying, plural(carrying), commits)
+	fmt.Fprintf(stdout, "%d checkout(s) carry an identity of yours, in %d commit(s)\n",
+		carrying, commits)
+	// ⛔ And the number to ACT on is neither of those. Several clones of one
+	// upstream are one repository to fix, and fixing it once fixes them all:
+	// three clones of the same project were counted as three here, and twelve
+	// sandbox clones of one fork as twelve.
+	//
+	// Every checkout is still listed above, because a clone can hold a commit
+	// that was never pushed, and folding the LISTING would hide it.
+	if len(origins) > 0 {
+		fmt.Fprintf(stdout, "%d distinct upstream(s) to fix", len(origins))
+		if clones > 0 {
+			fmt.Fprintf(stdout, "; %d of the carriers are further clones of one already counted", clones)
+		}
+		fmt.Fprintln(stdout)
+	}
 
 	// ⛔ And WHERE, because the total on its own is the wrong number to act on.
 	// Grouping is in here rather than left to whoever reads the output: the first
 	// sweep's "350 repositories" was only actionable once broken down, and doing
 	// that by hand afterwards is how a tool's answer gets restated wrongly.
 	if len(perHost) > 0 {
-		fmt.Fprintln(stdout, "\nby where origin points — an institutional address on that")
+		fmt.Fprintln(stdout, "\nby UPSTREAM, grouped by host — an institutional address on that")
 		fmt.Fprintln(stdout, "institution's own forge is not the same finding as one on a public host:")
 		type row struct {
 			host  string
@@ -290,4 +318,41 @@ func plural(n int) string {
 		return "Y"
 	}
 	return "IES"
+}
+
+// originKey identifies the UPSTREAM a checkout points at, so that several clones
+// of one project count once.
+//
+// ⛔ It is a KEY and not a parsed URL: host plus path, lowercased, with a
+// trailing ".git" and any leading slashes removed, so that
+// `git@github.com:o/r.git` and `https://github.com/o/r` answer the same. The host
+// comes from credurl, which already knows the scp form; only the path is taken
+// apart here, and only far enough to compare two spellings of one repository.
+func originKey(dir string) string {
+	g := &git{dir: dir}
+	raw, err := g.out("config", "remote.origin.url")
+	if err != nil || raw == "" {
+		return ""
+	}
+	host := credurl.Inspect(raw).Host
+	path := raw
+	if i := strings.Index(path, "://"); i >= 0 {
+		path = path[i+3:]
+		if j := strings.Index(path, "@"); j >= 0 {
+			path = path[j+1:]
+		}
+		if j := strings.Index(path, "/"); j >= 0 {
+			path = path[j:]
+		} else {
+			path = ""
+		}
+	} else if i := strings.Index(path, ":"); i >= 0 && host != "" {
+		path = path[i+1:]
+	}
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	if host == "" {
+		// A local path as a remote: the path itself identifies it.
+		return strings.ToLower(strings.TrimSuffix(raw, ".git"))
+	}
+	return strings.ToLower(host + "/" + path)
 }
