@@ -25,6 +25,8 @@ type finding struct {
 	Dir    string
 	Counts map[string]int // identity → commits, only the ones that are yours
 	Host   string         // where origin points, or "" for a repository with no remote
+	Repo   string         // the git-common-dir: the same for a worktree and its repository
+	Main   bool           // true when this checkout is the repository itself, not a worktree of it
 	Err    error
 }
 
@@ -74,6 +76,7 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 			repos++
 			f := look(p, own)
 			f.Host = originHost(p)
+			f.Repo, f.Main = repoOf(p)
 			if f.Err != nil {
 				unreadable++
 			}
@@ -83,6 +86,45 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 			return nil
 		})
 	}
+
+	// ⛔ One entry per REPOSITORY, not per checkout. A worktree shares its
+	// repository's history, so counting checkouts counted the same commits once
+	// per worktree: the first grouped sweep reported 89 GitHub-hosted carriers
+	// and 13323 commits, of which ~80 were agent worktrees of ONE fork. A
+	// worktree is not a separate publication.
+	//
+	// The repository's own checkout is preferred for display when it was walked,
+	// because that is the directory a person acts on.
+	best := map[string]finding{}
+	worktrees := 0
+	for _, f := range found {
+		if f.Err != nil {
+			continue
+		}
+		key := f.Repo
+		if key == "" {
+			key = f.Dir
+		}
+		prev, seen := best[key]
+		if !seen {
+			best[key] = f
+			continue
+		}
+		worktrees++
+		if f.Main && !prev.Main {
+			best[key] = f
+		}
+	}
+	var collapsed []finding
+	for _, f := range found {
+		if f.Err != nil {
+			collapsed = append(collapsed, f)
+		}
+	}
+	for _, f := range best {
+		collapsed = append(collapsed, f)
+	}
+	found = collapsed
 
 	sort.Slice(found, func(i, j int) bool {
 		if found[i].total() != found[j].total() {
@@ -114,7 +156,13 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "\nwalked %d directories, %d checkouts\n", walked, repos)
-	fmt.Fprintf(stdout, "%d carry an identity of yours, in %d commit(s)\n", carrying, commits)
+	if worktrees > 0 {
+		fmt.Fprintf(stdout, "%d of the carriers were worktrees of a repository already counted, "+
+			"and are folded into it: a worktree shares its repository's history, so counting it "+
+			"separately counts the same commits twice\n", worktrees)
+	}
+	fmt.Fprintf(stdout, "%d REPOSITOR%s carry an identity of yours, in %d commit(s)\n",
+		carrying, plural(carrying), commits)
 
 	// ⛔ And WHERE, because the total on its own is the wrong number to act on.
 	// Grouping is in here rather than left to whoever reads the output: the first
@@ -208,4 +256,38 @@ func originHost(dir string) string {
 	// A local path as a remote is a remote, and it is not published anywhere a
 	// host would name. Saying so beats calling it "no remote".
 	return "(a local path)"
+}
+
+// repoOf is the repository a checkout belongs to, and whether this checkout IS
+// that repository rather than a worktree of it.
+//
+// ⛔ git-common-dir is the same for a worktree and its repository, which is what
+// makes a worktree foldable. Without this, a repository with eighty agent
+// worktrees counts its history eighty-one times — and it was eighty-one agent
+// worktrees of one fork that turned 2 carriers into 89.
+func repoOf(dir string) (string, bool) {
+	g := &git{dir: dir}
+	common, err := g.out("rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		// Older git has no --path-format; the relative answer resolves against
+		// the checkout, which is enough to tell a worktree from its repository.
+		if common, err = g.out("rev-parse", "--git-common-dir"); err != nil {
+			return "", true
+		}
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(dir, common)
+		}
+	}
+	own, err := g.out("rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return common, true
+	}
+	return common, own == common
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "Y"
+	}
+	return "IES"
 }

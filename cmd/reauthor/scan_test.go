@@ -50,7 +50,9 @@ func TestAScanNamesOnlyTheCheckoutsThatCarryYou(t *testing.T) {
 	if !strings.Contains(out, "2 checkouts") {
 		t.Errorf("le compte de dépôts est faux:\n%s", out)
 	}
-	if !strings.Contains(out, "1 carry an identity of yours") {
+	// La synthèse dit REPOSITORIES depuis le repliement des worktrees: un
+	// worktree n'est pas une publication distincte.
+	if !strings.Contains(out, "1 REPOSITORY carr") {
 		t.Errorf("le compte de porteurs est faux:\n%s", out)
 	}
 	// ⭐ L'adresse de l'autre contributeur ne doit PAS être comptée.
@@ -243,5 +245,54 @@ func TestALocalPathRemoteIsNotNoRemote(t *testing.T) {
 	}
 	if strings.Contains(out, "no remote") {
 		t.Errorf("un chemin local a été pris pour une absence de remote:\n%s", out)
+	}
+}
+
+// ⛔⛔ Le défaut qui a fait bouger le chiffre une troisième fois. Le premier
+// balayage groupé annonçait « 89 dépôts GitHub porteurs, 13323 commits » — dont
+// une quatre-vingtaine étaient des worktrees d'agents d'UN SEUL fork, chacun
+// comptant la même histoire. Un worktree n'est pas une publication distincte.
+func TestAWorktreeIsFoldedIntoItsRepository(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	main := filepath.Join(root, "repo")
+	if err := os.MkdirAll(main, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run2(t, main, nil, "init", "-q", "-b", "main", ".")
+	run2(t, main, nil, "config", "user.name", wantName)
+	run2(t, main, nil, "config", "user.email", wantEmail)
+	run2(t, main, nil, "config", "remote.origin.url", "https://github.invalid/o/r.git")
+	if err := os.WriteFile(filepath.Join(main, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run2(t, main, nil, "add", "f.txt")
+	run2(t, main, []string{
+		"GIT_AUTHOR_NAME=" + mineName, "GIT_AUTHOR_EMAIL=" + mineEmail,
+		"GIT_COMMITTER_NAME=" + mineName, "GIT_COMMITTER_EMAIL=" + mineEmail,
+	}, "commit", "-q", "-m", "mine")
+	// Deux worktrees, sous le dépôt lui-même, comme les worktrees d'agents.
+	run2(t, main, nil, "worktree", "add", "-q", "-b", "wt1", filepath.Join(main, "wt", "one"))
+	run2(t, main, nil, "worktree", "add", "-q", "-b", "wt2", filepath.Join(main, "wt", "two"))
+
+	ids := identitiesFile(t, "email: "+mineEmail)
+	code, out, errb := exec2(t, "-identities", ids, "-scan", root)
+	if code != 1 {
+		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+	if !strings.Contains(out, "1 REPOSITORY carr") {
+		t.Errorf("le dépôt et ses 2 worktrees ne sont pas repliés en UN:\n%s", out)
+	}
+	if !strings.Contains(out, "2 of the carriers were worktrees") {
+		t.Errorf("le repliement n'est pas dit:\n%s", out)
+	}
+	// ⭐ Et c'est le dépôt LUI-MÊME qui est nommé, pas un de ses worktrees: c'est
+	// le répertoire sur lequel on agit.
+	if !strings.Contains(out, main+"\n") {
+		t.Errorf("le dépôt principal n'est pas celui qui est nommé:\n%s", out)
+	}
+	// Le tableau par hôte compte UN dépôt, pas trois.
+	if !strings.Contains(out, "in    1 repo(s)   github.invalid") {
+		t.Errorf("le tableau par hôte compte les worktrees:\n%s", out)
 	}
 }
