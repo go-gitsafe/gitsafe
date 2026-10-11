@@ -207,8 +207,10 @@ func TestTheSummaryGroupsByWhereOriginPoints(t *testing.T) {
 	// compte 88 dépôts sur un hôte public sans les nommer n'est pas
 	// exploitable, et le lecteur regroupe alors la sortie par CHEMIN pour les
 	// retrouver — la faute même que ce groupement existe pour éviter.
+	// ⛔ L'AMONT sur la ligne, pas seulement son hôte: la synthèse compte des
+	// amonts, et ne nommer que l'hôte laisse le lecteur chercher lesquels.
 	for _, want := range []string{
-		filepath.Join(root, "public") + "\n    github.invalid",
+		filepath.Join(root, "public") + "\n    github.invalid/o/r",
 		filepath.Join(root, "nowhere") + "\n    (no remote",
 	} {
 		if !strings.Contains(out, want) {

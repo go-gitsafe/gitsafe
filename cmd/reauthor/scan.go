@@ -39,6 +39,15 @@ type finding struct {
 // may be a worktree of something else — and the first sweep of this was read as
 // "350 repositories carry an identity" when 215 of them were on an institution's
 // own GitLab, where an institutional address belongs, and 71 had no remote.
+// upstream is what a person acts on: the repository this points at, or the
+// reason there is none.
+func (f finding) upstream() string {
+	if f.Origin == "" {
+		return f.where()
+	}
+	return f.Origin
+}
+
 func (f finding) where() string {
 	if f.Host == "" {
 		return "(no remote — published nowhere)"
@@ -163,7 +172,10 @@ func scan(roots []string, own owned, stdout, stderr io.Writer) int {
 		// counts 88 repositories on a public host without naming them is not
 		// actionable, and the reader then groups the output by PATH to find
 		// them — which is the mistake this grouping exists to prevent.
-		fmt.Fprintf(stdout, "\n%s\n    %s\n", f.Dir, f.where())
+		// ⛔ The UPSTREAM on the line, not just its host. The summary counts
+		// upstreams; naming only the host leaves the reader to work out which
+		// ones, which is the same "counts without naming" gap one level up.
+		fmt.Fprintf(stdout, "\n%s\n    %s\n", f.Dir, f.upstream())
 		for _, line := range byCount(f.Counts) {
 			fmt.Fprintln(stdout, "   ", line)
 		}
