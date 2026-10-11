@@ -14,14 +14,21 @@ import (
 // l'un de NOS outils met le jeton là où tout le monde le lit?
 //
 // L'audit du 2026-10-10 a suivi les six commandes qui appellent ghauth.Read et n'a
-// rien trouvé: le jeton ne va que vers des aides HTTP. Mais une lecture n'est pas une
+// rien trouvé: le jeton ne va que vers des aides HTTP.
+//
+// ⛔⛔ Et ce test ne suivait QUE ghauth.Read. `glauth.Read` est un second lecteur de
+// jeton — glscopes et glci s'en servent — donc le garde-fou était posé à UN SEUL des
+// deux endroits, ce qui est exactement la faute qu'il existe pour empêcher. Corrigé
+// le 2026-10-11, avec un troisième test qui ÉNUMÈRE les lecteurs du dépôt et échoue
+// si un quatrième paquet d'authentification apparaît sans être couvert: une liste
+// écrite à la main hérite de l'angle mort de celui qui l'a écrite. Mais une lecture n'est pas une
 // garantie. ghrunner montre la pression exacte: actions/runner veut le jeton en
 // `--token`, et son en-tête explique longuement comment il l'évite. La prochaine
 // personne qui en aura besoin atteindra `--token`.
 //
-// La règle: un identifiant qui tient la valeur rendue par ghauth.Read ne doit
-// apparaître dans AUCUN argument de exec.Command/CommandContext, ni dans os.Setenv,
-// ni dans une affectation à .Env. Peu importe par combien de Sprintf il passe: on
+// La règle: un identifiant qui tient la valeur rendue par un lecteur de jeton
+// (ghauth.Read, glauth.Read) ne doit apparaître dans AUCUN argument de
+// exec.Command/CommandContext, ni dans os.Setenv, ni dans une affectation à .Env. Peu importe par combien de Sprintf il passe: on
 // cherche l'identifiant n'importe où dans le sous-arbre de l'argument.
 func TestNoToolPutsTheTokenOnACommandLineOrInTheEnvironment(t *testing.T) {
 	root := moduleRoot(t)
@@ -54,7 +61,7 @@ func TestNoToolPutsTheTokenOnACommandLineOrInTheEnvironment(t *testing.T) {
 		}
 		for _, v := range leaksToArgvOrEnv(f, holders) {
 			rel, _ := filepath.Rel(root, p)
-			t.Errorf("%s: « %s » tient la valeur de ghauth.Read et atteint %s — "+
+			t.Errorf("%s: « %s » tient la valeur d'un lecteur de jeton et atteint %s — "+
 				"une ligne de commande va dans la liste des processus, et un "+
 				"environnement se lit dans /proc et dans tout vidage de plantage",
 				rel, v.ident, v.where)
@@ -69,11 +76,11 @@ func TestNoToolPutsTheTokenOnACommandLineOrInTheEnvironment(t *testing.T) {
 	if files < 20 {
 		t.Fatalf("seulement %d fichiers .go lus: le balayage ne voit pas le module", files)
 	}
-	if withToken < 4 {
-		t.Fatalf("seulement %d fichiers tiennent un jeton de ghauth.Read; il y en avait 5 "+
+	if withToken < 6 {
+		t.Fatalf("seulement %d fichiers tiennent un jeton; il y en avait 7 "+
 			"le 2026-10-10. Si le nom a changé, ce test ne contrôle plus rien", withToken)
 	}
-	t.Logf("%d fichiers .go, %d tiennent la valeur de ghauth.Read", files, withToken)
+	t.Logf("%d fichiers .go, %d tiennent la valeur d'un lecteur de jeton", files, withToken)
 }
 
 // ⭐ Et l'autre moitié: le détecteur doit RECONNAÎTRE une violation plantée. Sans ce
@@ -91,6 +98,8 @@ func f() { tok, _ := ghauth.Read(p); exec.Command("sh", "-c", fmt.Sprintf("x %s"
 func f() { tok, _ := ghauth.Read(p); cmd.Env = append(cmd.Env, "GH_TOKEN="+tok) }`, true},
 		{"os.Setenv", `package p
 func f() { tok, _ := ghauth.Read(p); os.Setenv("GH_TOKEN", tok) }`, true},
+		{"argv, lecteur GitLab", `package p
+func f() { tok, _ := glauth.Read(p); exec.Command("glab", "--token", tok) }`, true},
 		{"en-tête HTTP, admis", `package p
 func f() { tok, _ := ghauth.Read(p); req.Header.Set("Authorization", "Bearer "+tok) }`, false},
 		{"redact, admis", `package p
@@ -109,7 +118,12 @@ func f() { exec.Command("git", "remote", "get-url", "origin") }`, false},
 	}
 }
 
-// tokenHolders rend les identifiants auxquels la valeur de ghauth.Read est affectée.
+// tokenReaders are the package-level functions that hand a process a credential.
+// Both halves of the fleet have one, and the test below asserts there are no others.
+var tokenReaders = map[string]string{"ghauth": "Read", "glauth": "Read"}
+
+// tokenHolders rend les identifiants auxquels la valeur d'un lecteur de jeton est
+// affectée.
 func tokenHolders(f *ast.File) map[string]bool {
 	out := map[string]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -118,7 +132,17 @@ func tokenHolders(f *ast.File) map[string]bool {
 			return true
 		}
 		call, ok := as.Rhs[0].(*ast.CallExpr)
-		if !ok || !isSelector(call.Fun, "ghauth", "Read") {
+		if !ok {
+			return true
+		}
+		named := false
+		for pkg, fn := range tokenReaders {
+			if isSelector(call.Fun, pkg, fn) {
+				named = true
+				break
+			}
+		}
+		if !named {
 			return true
 		}
 		if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
@@ -206,5 +230,95 @@ func moduleRoot(t *testing.T) string {
 		d = filepath.Dir(d)
 	}
 	t.Skip("racine du module introuvable")
+	return ""
+}
+
+// ⛔⛔ Ce test existe parce que la liste `tokenReaders` est écrite à la main, et
+// qu'une liste écrite à la main hérite de l'angle mort de qui l'a écrite: la première
+// version ne contenait que `ghauth`, donc le garde-fou ci-dessus ne regardait pas
+// `glscopes` ni `glci`, qui lisent un jeton par `glauth.Read`. Le garde-fou était
+// posé à UN SEUL des deux endroits — la faute même qu'il sert à empêcher.
+//
+// Il énumère donc les lecteurs que le dépôt contient réellement et échoue si l'un
+// n'est pas couvert. Le critère est la SIGNATURE — `func Read(path string) (string,
+// error)` dans un paquet qui n'est pas `main` — et non le nom du paquet: un troisième
+// fournisseur ne s'appellera pas forcément `*auth`.
+func TestEveryTokenReaderInTheRepositoryIsCovered(t *testing.T) {
+	root := moduleRoot(t)
+	found := map[string]string{}
+	scanned := 0
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if n := d.Name(); n == ".git" || n == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		scanned++
+		f, err := parser.ParseFile(token.NewFileSet(), p, nil, 0)
+		if err != nil {
+			return err
+		}
+		if f.Name.Name == "main" {
+			return nil
+		}
+		for _, dec := range f.Decls {
+			fn, ok := dec.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || !readsACredential(fn) {
+				continue
+			}
+			rel, _ := filepath.Rel(root, p)
+			found[f.Name.Name] = rel
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < 20 {
+		t.Fatalf("seulement %d fichiers lus: le balayage ne voit pas le module", scanned)
+	}
+	if len(found) == 0 {
+		t.Fatal("aucun lecteur de jeton trouvé: la signature recherchée ne correspond plus " +
+			"à rien, et ce test ne contrôle donc rien")
+	}
+	for pkg, where := range found {
+		if _, ok := tokenReaders[pkg]; !ok {
+			t.Errorf("%s expose un lecteur de jeton (%s) que tokenReaders ne nomme pas: "+
+				"le garde-fou ne suit donc pas ce qu'il rend. L'ajouter.", pkg, where)
+		}
+	}
+	for pkg := range tokenReaders {
+		if _, ok := found[pkg]; !ok {
+			t.Errorf("tokenReaders nomme %s, qui n'expose plus de lecteur de jeton: "+
+				"une entrée morte fait croire à une couverture qui n'existe plus", pkg)
+		}
+	}
+	t.Logf("%d fichiers lus, lecteurs trouvés: %v", scanned, found)
+}
+
+// readsACredential matches `func Read(path string) (string, error)`.
+func readsACredential(fn *ast.FuncDecl) bool {
+	if fn.Name.Name != "Read" || fn.Type.Params == nil || fn.Type.Results == nil {
+		return false
+	}
+	if len(fn.Type.Params.List) != 1 || len(fn.Type.Results.List) != 2 {
+		return false
+	}
+	return typeName(fn.Type.Params.List[0].Type) == "string" &&
+		typeName(fn.Type.Results.List[0].Type) == "string" &&
+		typeName(fn.Type.Results.List[1].Type) == "error"
+}
+
+func typeName(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
 	return ""
 }
