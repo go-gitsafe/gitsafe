@@ -66,6 +66,10 @@ var corpus = []struct {
 	{"hand merge", ghMerge, "refuse"},
 	{"identity on the line", "git -c user.email=me@example.com commit -m x", "refuse"},
 	{"discarding the work tree", "git checkout -- .", "refuse"},
+	// ⛔ Written three times in one afternoon on 2026-10-11, each time printing
+	// status=0 over a failed build. hookcheck has to know the rule exists, or
+	// its "right on all N" is a verdict on a smaller table than the guard.
+	{"a status after a pipeline", `go build ./... | tail -5; echo "status=$?"`, "refuse"},
 
 	{"writing about it, quoted", "cat <<'EOF'\n" + gitPush + "\nEOF", "allow"},
 	{"a message that mentions it", "git commit -m 'about " + gitPush + "'", "allow"},
@@ -73,6 +77,8 @@ var corpus = []struct {
 	{"the wrapper itself", "gitpush origin main", "allow"},
 	{"a subcommand that shares the word", "git stash push -m wip", "allow"},
 	{"asking for help", ghMerge + " --help", "allow"},
+	{"the same read with pipefail set", `set -o pipefail; go build ./... | tail -5; echo "status=$?"`, "allow"},
+	{"a status with no pipeline before it", "go build ./...; echo $?", "allow"},
 	{"harmless", "go test ./...", "allow"},
 }
 

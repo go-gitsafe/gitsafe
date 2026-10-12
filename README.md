@@ -642,6 +642,56 @@ the form is not the form. An unquoted `<<EOF` does expand, and is still scanned.
 Input it cannot read means *no opinion*, not approval and not a block. A guard
 that failed closed on its own bug would stop every command on the machine.
 
+## A status that belongs to the wrong command
+
+`guard-bash` refuses a command that reads an exit status the pipeline did not
+produce. A pipeline's status is its **last stage's**, so this reports whether
+`tail` succeeded, which it always does:
+
+    go build ./... | tail -5 ; echo "status=$?"
+
+On 2026-10-11 that shape was written **three times in one afternoon**, in three
+spellings — after `go build | head`, after `go build | tail`, and after a fleet scan
+piped into `tail -40`. Every one printed `status=0`: over a failed build, and over a
+scan that had just found 350 carriers. There is a memory for it, and it had been
+re-read between two of the three. That is the whole case for a hook over a note.
+
+The rule names the **act** — reading a status the pipeline did not produce — not one
+spelling of it, so `echo $?`, `code=$?`, `exit $?` and `if [ $? -ne 0 ]` are the same
+refusal. A guard that named only the first would send whoever hit it to the second.
+
+### The escape makes the command correct rather than merely permitted
+
+    set -o pipefail
+
+With `pipefail` the status **is** the pipeline's, so the command stops being wrong.
+`${PIPESTATUS[0]}` is the other right answer, and running the command on its own is
+the third. All three are named in the refusal: a guard that says no without saying
+what to do instead gets worked around. `GITSAFE_ALLOW_PIPE_STATUS=1` is the
+deliberate, loud way past it.
+
+### What it must not refuse
+
+    go build ./... ; echo $?             # no pipeline: the status is the command's
+    set -o pipefail; a | b; echo $?      # the status is the pipeline's
+    go build ./... | tail -5             # nobody read a status
+    a | b && echo ok                     # a status USED, not read into a report
+    a || b; echo $?                      # `||` is not a pipeline
+    a | b && c; echo $?                  # $? is c's, and c is not a pipeline
+    echo 'about a | b and then $?'       # single quotes do not expand
+
+⛔ Double quotes **do** expand, so `echo "status=$?"` is the mistake itself and is
+not excused — which is exactly the spelling that was typed three times.
+
+### What it deliberately does not cover
+
+The sibling mistake from the same afternoon is not decidable from a command line:
+`| tail -40` on a report whose **body** is the answer threw away 350 lines and kept
+the summary. A `tail` is right for a build log, where the end is the verdict, and
+wrong for a census, where the end is the summary — and nothing in the text says which
+one it is. That one stays a note, and the package says so rather than pretending to
+it.
+
 ## Discarding uncommitted work
 
 `guard-bash` refuses a command that throws away what exists only in the working
