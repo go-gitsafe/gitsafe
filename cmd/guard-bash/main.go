@@ -35,6 +35,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/discard"
+	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 )
 
@@ -94,6 +95,19 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s\n\nIt matched %s\n\n%s",
 				f.Why, f.Match, discard.Advice))
+		}
+	}
+	// ⛔ A pipeline's status is its LAST stage's. On 2026-10-11 this shape was
+	// written three times in one afternoon — after `go build | head`, after
+	// `go build | tail`, and after a fleet scan piped into `tail -40` — and each
+	// time printed status=0 over a failed build and a scan that had found 350
+	// carriers. There is a memory for it, re-read between two of the three. See
+	// [pipestatus].
+	if os.Getenv("GITSAFE_ALLOW_PIPE_STATUS") == "" {
+		if f := pipestatus.Check(p.ToolInput.Command); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s.\n\n%s\n\n%s",
+				f.Why(), f.String(), pipestatus.Advice))
 		}
 	}
 	return 0
