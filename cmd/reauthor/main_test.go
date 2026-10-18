@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// ⛔ Les identités de ces tests sont des adresses en `.invalid`, le TLD que la
-// RFC 2606 réserve pour cela. Un test qui porterait une adresse réelle ferait
-// exactement ce que cet outil existe pour défaire.
+// ⛔ The identities in these tests are `.invalid` addresses, the TLD RFC 2606
+// reserves for exactly this. A test carrying a real address would do the very
+// thing this tool exists to undo.
 const (
 	mineEmail  = "someone@old.invalid"
 	mineName   = "Some One"
@@ -113,19 +113,19 @@ func TestYoursIsRewrittenAndNobodyElsesIs(t *testing.T) {
 	}
 	after := run2(t, dir, nil, "log", "--branches", "--tags", "--format=%an <%ae>%x09%aI%x09%cI%x09%s")
 
-	// ⭐ Les DATES doivent être identiques ligne pour ligne, et seules les
-	// identités doivent avoir bougé.
+	// ⭐ The DATES must be identical line for line, and only the identities may
+	// have moved.
 	bl, al := strings.Split(before, "\n"), strings.Split(after, "\n")
 	if len(bl) != len(al) {
-		t.Fatalf("%d commits avant, %d après", len(bl), len(al))
+		t.Fatalf("%d commits before, %d after", len(bl), len(al))
 	}
 	for i := range bl {
 		bf, af := strings.Split(bl[i], "\t"), strings.Split(al[i], "\t")
 		if bf[1] != af[1] || bf[2] != af[2] {
-			t.Errorf("dates changées sur %q: %v -> %v", bf[3], bf[1:3], af[1:3])
+			t.Errorf("dates changed on %q: %v -> %v", bf[3], bf[1:3], af[1:3])
 		}
 		if bf[3] != af[3] {
-			t.Errorf("message changé: %q -> %q", bf[3], af[3])
+			t.Errorf("message changed: %q -> %q", bf[3], af[3])
 		}
 		isMine := strings.Contains(bf[0], mineEmail)
 		wantWho := bf[0]
@@ -133,21 +133,21 @@ func TestYoursIsRewrittenAndNobodyElsesIs(t *testing.T) {
 			wantWho = wantName + " <" + wantEmail + ">"
 		}
 		if af[0] != wantWho {
-			t.Errorf("sur %q: auteur = %q, attendu %q", bf[3], af[0], wantWho)
+			t.Errorf("on %q: author = %q, want %q", bf[3], af[0], wantWho)
 		}
 	}
 
-	// L'autre contributeur doit être intact, nom ET adresse.
+	// The other contributor must be untouched, name AND address.
 	if !strings.Contains(after, otherName+" <"+otherEmail+">") {
-		t.Errorf("le commit d'un tiers a été touché:\n%s", after)
+		t.Errorf("a third party's commit was touched:\n%s", after)
 	}
 	if strings.Contains(after, mineEmail) {
-		t.Errorf("l'ancienne adresse survit:\n%s", after)
+		t.Errorf("the old address survives:\n%s", after)
 	}
 }
 
-// ⛔ Le défaut que le script shell portait: `git tag -a -m "$subject"` ne garde
-// que la première ligne, donc tout tag annoté avec un corps le perdait.
+// ⛔ The defect the shell script carried: `git tag -a -m "$subject"` keeps only
+// the first line, so every annotated tag with a body lost it.
 func TestAnAnnotatedTagKeepsItsWholeMessageAndMovesWithIt(t *testing.T) {
 	hermetic(t)
 	dir := repoWith(t)
@@ -161,19 +161,19 @@ func TestAnAnnotatedTagKeepsItsWholeMessageAndMovesWithIt(t *testing.T) {
 	body := run2(t, dir, nil, "for-each-ref", "--format=%(contents)", "refs/tags/v0.1.0")
 	for _, want := range []string{"A body that must survive.", "Two lines of it."} {
 		if !strings.Contains(body, want) {
-			t.Errorf("le message du tag annoté a perdu %q; il dit:\n%s", want, body)
+			t.Errorf("the annotated tag's message lost %q; it says:\n%s", want, body)
 		}
 	}
-	// ⛔ Et il doit pointer sur le commit RECONSTRUIT, pas sur l'ancien.
+	// ⛔ And it must point at the REWRITTEN commit, not the old one.
 	if onto := run2(t, dir, nil, "rev-parse", "v0.1.0^{commit}"); onto == wasHead {
-		t.Error("le tag annoté pointe encore sur l'ancien commit")
+		t.Error("the annotated tag still points at the old commit")
 	}
 	if tagger := run2(t, dir, nil, "for-each-ref", "--format=%(taggeremail)", "refs/tags/v0.1.0"); strings.Contains(tagger, mineEmail) {
-		t.Errorf("le tagger porte encore l'ancienne adresse: %s", tagger)
+		t.Errorf("the tagger still carries the old address: %s", tagger)
 	}
-	// Le tag léger doit avoir suivi aussi.
+	// The lightweight tag must have followed too.
 	if run2(t, dir, nil, "rev-parse", "v0.0.1-light") == wasHead {
-		t.Error("le tag léger pointe encore sur l'ancien commit")
+		t.Error("the lightweight tag still points at the old commit")
 	}
 }
 
@@ -188,15 +188,15 @@ func TestEveryTreeIsUnchangedAndTheMergeKeepsItsShape(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
 	}
 	if got := run2(t, dir, nil, "rev-parse", "main^{tree}"); got != treeBefore {
-		t.Errorf("l'arbre de main a changé: %s -> %s", treeBefore, got)
+		t.Errorf("main's tree changed: %s -> %s", treeBefore, got)
 	}
 	if got := len(strings.Fields(run2(t, dir, nil, "rev-list", "--parents", "-n1", "main"))); got != len(strings.Fields(parentsBefore)) {
-		t.Errorf("la fusion a perdu un parent: %d champs contre %d", got, len(strings.Fields(parentsBefore)))
+		t.Errorf("the merge lost a parent: %d field(s) against %d", got, len(strings.Fields(parentsBefore)))
 	}
 }
 
-// Un nom est à vous quelle que soit l'adresse — c'est le cas où l'adresse d'un
-// inconnu porte votre nom. Et réciproquement.
+// A name is yours whatever the address — this is the case where a stranger's
+// address carries your name. And the other way round.
 func TestANameMatchesWhateverTheAddressIs(t *testing.T) {
 	hermetic(t)
 	dir := repoWith(t)
@@ -206,37 +206,37 @@ func TestANameMatchesWhateverTheAddressIs(t *testing.T) {
 	}
 	after := run2(t, dir, nil, "log", "--branches", "--tags", "--format=%an <%ae>")
 	if strings.Contains(after, mineName) {
-		t.Errorf("l'ancien NOM survit:\n%s", after)
+		t.Errorf("the old NAME survives:\n%s", after)
 	}
 	if !strings.Contains(after, otherName) {
-		t.Errorf("le tiers a disparu:\n%s", after)
+		t.Errorf("the third party has disappeared:\n%s", after)
 	}
 }
 
 func TestRefusals(t *testing.T) {
 	hermetic(t)
-	t.Run("sans -identities", func(t *testing.T) {
+	t.Run("without -identities", func(t *testing.T) {
 		if code, _, errb := exec2(t, t.TempDir()); code != 2 || !strings.Contains(errb, "-identities is required") {
 			t.Errorf("exit %d, stderr %q", code, errb)
 		}
 	})
-	t.Run("fichier d'identités vide", func(t *testing.T) {
-		ids := identitiesFile(t, "# rien que des commentaires")
+	t.Run("an empty identities file", func(t *testing.T) {
+		ids := identitiesFile(t, "# nothing but comments")
 		if code, _, errb := exec2(t, "-identities", ids, t.TempDir()); code != 1 ||
 			!strings.Contains(errb, "names no identity") {
 			t.Errorf("exit %d, stderr %q", code, errb)
 		}
 	})
-	t.Run("ligne mal formée", func(t *testing.T) {
+	t.Run("a malformed line", func(t *testing.T) {
 		ids := identitiesFile(t, "someone@old.invalid")
 		if code, _, errb := exec2(t, "-identities", ids, t.TempDir()); code != 1 ||
 			!strings.Contains(errb, "expected") {
 			t.Errorf("exit %d, stderr %q", code, errb)
 		}
 	})
-	t.Run("arbre sale", func(t *testing.T) {
+	t.Run("a dirty work tree", func(t *testing.T) {
 		dir := repoWith(t)
-		if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changé\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		ids := identitiesFile(t, "email: "+mineEmail)
@@ -245,21 +245,21 @@ func TestRefusals(t *testing.T) {
 			t.Errorf("exit %d, stderr %q", code, errb)
 		}
 	})
-	t.Run("un fichier NON suivi ne suffit pas à refuser", func(t *testing.T) {
+	t.Run("an UNTRACKED file is not enough to refuse", func(t *testing.T) {
 		dir := repoWith(t)
 		if err := os.WriteFile(filepath.Join(dir, "build.log"), []byte("x\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		ids := identitiesFile(t, "email: "+mineEmail)
 		if code, out, errb := exec2(t, "-identities", ids, dir); code != 0 {
-			t.Errorf("un fichier non suivi a fait refuser: exit %d\n%s%s", code, out, errb)
+			t.Errorf("an untracked file caused a refusal: exit %d\n%s%s", code, out, errb)
 		}
 	})
-	t.Run("sans branche ni tag", func(t *testing.T) {
+	t.Run("no branch and no tag", func(t *testing.T) {
 		dir := t.TempDir()
 		run2(t, dir, nil, "init", "-q", "-b", "main", ".")
-		// ⛔ Il faut une identité configurée, sinon le refus vient de son absence
-		// et ce test affirmerait le mauvais refus.
+		// ⛔ An identity has to be configured, or the refusal comes from its
+		// absence and this test would assert the wrong refusal.
 		run2(t, dir, nil, "config", "user.name", wantName)
 		run2(t, dir, nil, "config", "user.email", wantEmail)
 		ids := identitiesFile(t, "email: "+mineEmail)
@@ -270,9 +270,9 @@ func TestRefusals(t *testing.T) {
 	})
 }
 
-// ⛔ Tuer le shell qui a lancé une réécriture ne tue pas la réécriture: en août
-// 2026 deux d'entre elles tournaient sur le même dépôt, toutes deux en route
-// vers update-ref et un reset --hard sur les mêmes refs.
+// ⛔ Killing the shell that started a rewrite does not kill the rewrite: in
+// August 2026 two of them were running on the same repository, both on their way
+// to update-ref and a reset --hard on the same refs.
 func TestASecondRewriteIsRefusedWhileOneIsRunning(t *testing.T) {
 	hermetic(t)
 	dir := repoWith(t)
@@ -286,7 +286,7 @@ func TestASecondRewriteIsRefusedWhileOneIsRunning(t *testing.T) {
 		t.Errorf("exit %d, stderr %q", code, errb)
 	}
 	if !strings.Contains(errb, "rmdir") {
-		t.Errorf("le refus ne dit pas comment lever un verrou orphelin: %q", errb)
+		t.Errorf("the refusal does not say how to clear an orphaned lock: %q", errb)
 	}
 }
 
@@ -300,11 +300,11 @@ func TestADryRunWritesNothing(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
 	}
 	if got := run2(t, dir, nil, "rev-parse", "main"); got != before {
-		t.Errorf("un essai à blanc a réécrit main: %s -> %s", before, got)
+		t.Errorf("a dry run rewrote main: %s -> %s", before, got)
 	}
 	for _, want := range []string{"4 commits: 3 yours, 1 left alone", "nothing was written"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("stdout ne dit pas %q:\n%s", want, out)
+			t.Errorf("stdout does not say %q:\n%s", want, out)
 		}
 	}
 }
@@ -313,14 +313,14 @@ func TestToOverridesTheConfiguredIdentity(t *testing.T) {
 	hermetic(t)
 	dir := repoWith(t)
 	ids := identitiesFile(t, "email: "+mineEmail)
-	if code, out, errb := exec2(t, "-identities", ids, "-to", "Autre <autre@example.invalid>", dir); code != 0 {
+	if code, out, errb := exec2(t, "-identities", ids, "-to", "Someone Else <else@example.invalid>", dir); code != 0 {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
 	}
-	if after := run2(t, dir, nil, "log", "--branches", "--format=%an <%ae>"); !strings.Contains(after, "autre@example.invalid") {
-		t.Errorf("-to n'a pas été employé:\n%s", after)
+	if after := run2(t, dir, nil, "log", "--branches", "--format=%an <%ae>"); !strings.Contains(after, "else@example.invalid") {
+		t.Errorf("-to was not used:\n%s", after)
 	}
-	t.Run("forme refusée", func(t *testing.T) {
-		if code, _, errb := exec2(t, "-identities", ids, "-to", "pas une identité", dir); code != 1 ||
+	t.Run("a refused form", func(t *testing.T) {
+		if code, _, errb := exec2(t, "-identities", ids, "-to", "not an identity", dir); code != 1 ||
 			!strings.Contains(errb, `-to must be`) {
 			t.Errorf("exit %d, stderr %q", code, errb)
 		}
