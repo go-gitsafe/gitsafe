@@ -153,12 +153,32 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 		return 1
 	}
-	if why := refuse(pr, runs, sts); why != "" {
+	// Asked for ONLY when something is red, which keeps the ordinary green
+	// merge at the calls it has always made: the hourly budget is shared with
+	// Renovate and every other session on this machine.
+	var excused map[int64]bool
+	if anyRed(runs) {
+		excused, err = dispensations(token, repo, pr.Head.SHA)
+		if err != nil {
+			fmt.Fprintf(stderr, "ghmerge: %v\n", err)
+			return 1
+		}
+	}
+	why, advisory := refuse(pr, runs, sts, excused)
+	if why != "" {
 		fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — %s\n", repo, number, why)
 		return 1
 	}
-
-	fmt.Fprintf(stdout, "%s#%d: %d check(s), %d status(es), all green\n", repo, number, len(runs), len(sts))
+	for _, a := range advisory {
+		fmt.Fprintf(stdout, "%s#%d: %s — ADVISORY, the workflow run that produced "+
+			"it concluded success, so the repository does not gate on it\n", repo, number, a)
+	}
+	if len(advisory) > 0 {
+		fmt.Fprintf(stdout, "%s#%d: %d check(s), %d status(es), green but for the "+
+			"%d advisory lane(s) above\n", repo, number, len(runs), len(sts), len(advisory))
+	} else {
+		fmt.Fprintf(stdout, "%s#%d: %d check(s), %d status(es), all green\n", repo, number, len(runs), len(sts))
+	}
 	if err := merge(token, repo, number, *squash); err != nil {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 		return 1
@@ -205,14 +225,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 // The order is deliberate: mergeability first, because a pull request that
 // cannot be merged is ALSO the one that never gets checks, and reporting the
 // silence rather than the cause would send a reader looking at the wrong thing.
-func refuse(pr *pr, runs []checkRun, sts []status) string {
+// It also hands back the lanes it EXCUSED, because a dispensation must never be
+// silent: a lane quietly marked `continue-on-error` to get a merge through has
+// to be visible in this tool's output, not inferred from it going quiet.
+func refuse(pr *pr, runs []checkRun, sts []status, excused map[int64]bool) (string, []string) {
 	if pr.Mergeable != nil && !*pr.Mergeable {
 		return "GitHub says it cannot be merged (conflicts, most likely) — " +
-			"and that is also why it has no checks: with no merge ref, no workflow runs"
+			"and that is also why it has no checks: with no merge ref, no workflow runs", nil
 	}
 	if pr.Draft {
 		return "it is a draft. GitHub will not merge one, and saying so here is " +
-			"better than a 405 that names nothing"
+			"better than a 405 that names nothing", nil
 	}
 	// ⛔ mergeable:true does NOT mean "may be merged now".
 	//
@@ -233,24 +256,28 @@ func refuse(pr *pr, runs []checkRun, sts []status) string {
 	case "blocked":
 		return "branch protection is holding it: mergeable is true but " +
 			"mergeable_state is \"blocked\", which means a required review or a " +
-			"required check has not been satisfied. Merging it is a person's call"
+			"required check has not been satisfied. Merging it is a person's call", nil
 	case "behind":
 		return "the branch is behind its base and this repository requires them " +
 			"up to date. Update it first — its checks ran against an older base " +
-			"than the one it would land on"
+			"than the one it would land on", nil
 	case "draft":
-		return "GitHub reports it as a draft"
+		return "GitHub reports it as a draft", nil
 	}
 	if len(runs) == 0 {
 		return "no check has run against it. Nothing failing is not everything passing: " +
-			"either the workflows have not started yet, or there is no merge ref for them to run against"
+			"either the workflows have not started yet, or there is no merge ref for them to run against", nil
 	}
-	var bad []string
+	var bad, advisory []string
 	for _, r := range runs {
 		switch {
 		case r.Status != "completed":
 			bad = append(bad, fmt.Sprintf("%s is %s", r.Name, r.Status))
-		case r.Conclusion != "success" && r.Conclusion != "neutral" && r.Conclusion != "skipped":
+		case r.Conclusion == "success" || r.Conclusion == "neutral" || r.Conclusion == "skipped":
+			// green
+		case excused[r.CheckSuite.ID]:
+			advisory = append(advisory, fmt.Sprintf("%s %s", r.Name, r.Conclusion))
+		default:
 			bad = append(bad, fmt.Sprintf("%s %s", r.Name, r.Conclusion))
 		}
 	}
@@ -269,9 +296,9 @@ func refuse(pr *pr, runs []checkRun, sts []status) string {
 		}
 	}
 	if len(bad) > 0 {
-		return strings.Join(bad, ", ")
+		return strings.Join(bad, ", "), advisory
 	}
-	return ""
+	return "", advisory
 }
 
 // target reads the repository and pull-request number from the arguments,
@@ -399,6 +426,12 @@ type checkRun struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	StartedAt  string `json:"started_at"`
+	// CheckSuite is how a check run is joined to the workflow run that
+	// produced it: the run object carries the same id as check_suite_id.
+	// Nothing else in either object links them.
+	CheckSuite struct {
+		ID int64 `json:"id"`
+	} `json:"check_suite"`
 }
 
 func pullRequest(token, repo string, number int) (*pr, error) {
@@ -415,6 +448,63 @@ func pullRequest(token, repo string, number int) (*pr, error) {
 type status struct {
 	Context string `json:"context"`
 	State   string `json:"state"`
+}
+
+// anyRed reports whether a check run is neither green nor still running, which
+// is the only case where a dispensation could change the verdict. A run still
+// in progress is already a refusal on its own and needs no extra call.
+func anyRed(runs []checkRun) bool {
+	for _, r := range runs {
+		if r.Status == "completed" &&
+			r.Conclusion != "success" && r.Conclusion != "neutral" && r.Conclusion != "skipped" {
+			return true
+		}
+	}
+	return false
+}
+
+// dispensations returns the check suites whose own workflow run concluded
+// SUCCESS -- which, for a suite holding a failed job, means that job carried
+// `continue-on-error`.
+//
+// ⛔ WHY THIS IS NOT A SECOND OPINION TO WEIGH AGAINST THE CHECK RUNS.
+//
+// GitHub concludes a workflow run `success` with a failed job only in that one
+// case. So the run's conclusion is not a softer reading of the same evidence:
+// it is the REPOSITORY stating which of its own lanes gate. The check runs
+// cannot carry that, because a dispensed job still reports `failure` as a check
+// run -- which is what makes the failure visible, and is the entire point of an
+// advisory lane.
+//
+// Measured on go-gfx/gfx#74, head 12757cb: twelve check runs SUCCESS, one
+// FAILURE (`arch loong64 (qemu)`), and run 38218557261 that produced all
+// thirteen concluded `success`. Before this, that pull request could never be
+// merged by this tool, although the lane was red on purpose -- it watches an
+// open upstream compiler bug (golang/go#81147) and is meant to report, not to
+// block. Every advisory lane in the fleet had the same problem.
+//
+// A run that has not finished dispenses nothing: only `completed` plus
+// `success` counts, so a suite still building is judged by its check runs as
+// before.
+func dispensations(token, repo, sha string) (map[int64]bool, error) {
+	var out struct {
+		Runs []struct {
+			CheckSuiteID int64  `json:"check_suite_id"`
+			Status       string `json:"status"`
+			Conclusion   string `json:"conclusion"`
+		} `json:"workflow_runs"`
+	}
+	url := fmt.Sprintf("%s/repos/%s/actions/runs?head_sha=%s&per_page=100", apiBase, repo, sha)
+	if err := get(token, url, &out); err != nil {
+		return nil, err
+	}
+	excused := map[int64]bool{}
+	for _, r := range out.Runs {
+		if r.Status == "completed" && r.Conclusion == "success" {
+			excused[r.CheckSuiteID] = true
+		}
+	}
+	return excused, nil
 }
 
 // statuses reads the COMBINED status for a commit, which already collapses
