@@ -42,6 +42,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/go-gitsafe/gitsafe/cliflags"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -131,8 +133,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	install := fs.Bool("install", false, "wire "+wantHook+" into the settings, backing them up first, then report")
 	settings := fs.String("settings", "", "the settings file to read (default ~/.claude/settings.json)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := cliflags.ParseFlags(fs, args); !ok {
+		return code
 	}
 	path := *settings
 	if path == "" {

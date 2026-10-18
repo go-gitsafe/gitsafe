@@ -86,7 +86,51 @@ is being careful.
 | `glscopes` | `ghscopes` for **GitLab**: which account a token belongs to, its scopes and when it expires — asked of the instance with the token in a header, never read out of the file. Exits non-zero if a demanded scope is missing, and knows GitLab's containments (`api` ⊃ `read_api`, `write_repository` ⊃ `read_repository`, but **not** `write_registry` ⊃ `read_registry`). |
 | `glci` | How the latest **GitLab** pipeline of a branch, tag or merge request (`'!1'`) went, job by job, with the end of each failed job's log, cleaned and **masked**. `-watch` waits for the end. Exits 4 when there is **no pipeline at all**: nothing ran, so nothing passed. |
 
-`credurl`, `credfix`, `redact`, `protect`, `ghauth` and `glauth` are the libraries under
+### Every one of them answers `-h` with 0
+
+Measured 2026-10-18 by building each command and asking it: **10 of 12 answered
+`-h` with a non-zero status.** Now 0 of 12. `ghrelease -h`, typed to read its
+flags, printed its usage and exited 2 — which is what started this.
+
+The flag package reports a help request as an error like any other,
+`flag.ErrHelp`, and the shape every command here was written with cannot tell
+it from a typo:
+
+```go
+if err := fs.Parse(args); err != nil {
+	return 2
+}
+```
+
+`flag.ExitOnError` *does* tell them apart — `os.Exit(0)` for `ErrHelp` — but
+every command here uses `flag.ContinueOnError` so that `run()` can be tested
+instead of exiting the process, and that choice silently gave the distinction
+up. `cliflags` decides it in one place now, and that is also the only place the
+help branch has to be covered: ten hand-written copies would be ten branches,
+and **none** of the ten had covered it.
+
+These are the tools somebody reaches for while holding a credential they must
+not print, so the moment to find out what `ghpkg delete` takes is before
+running it — and a tool that answers the asking with an error is one people
+stop asking.
+
+⛔ **Two measures, two different blind spots, and each caught what the other
+missed.** Reading sources said `credscan` was broken and said nothing about
+`ghscopes`; running the binaries said the opposite. Both were right:
+`credscan -h` was already 0 while `credscan scan -h` was **2**, which only the
+source could show; and `ghscopes` has no flag set at all, so its parse loop
+appended `-h` to the list of **demanded scopes** — it read the token, asked
+GitHub, and reported that a scope called `-h` was missing. Three commands
+dispatch on a subcommand, where `-h` is not a verb: `ghpkg -h` reached "no such
+command" and exited 2 with the flag set never seeing it.
+
+⛔ **And no two of the commands that asked this by hand knew the same spellings
+of it.** `credscan` knew three of the four and missed `-help`, so `credscan
+-help` printed the same usage text as `credscan -h` and exited **2** instead of
+0; `gitpush` knew two, `-h` and `--help`; `ghpkg` and `ghscopes` knew none.
+`cliflags.IsHelpRequest` is the one list.
+
+`credurl`, `credfix`, `redact`, `protect`, `ghauth`, `glauth` and `cliflags` are the libraries under
 them: one answers "is the part before the `@` a secret or a username" and holds
 the one table of issuer prefixes every guard here asks, one walks a machine and
 repairs what it finds, one hides

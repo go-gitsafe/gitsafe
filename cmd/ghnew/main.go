@@ -41,6 +41,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 )
 
@@ -84,6 +85,13 @@ func run(args []string, out io.Writer) error {
 		tokenFile = fs.String("token-file", "", "the file holding the token (default ~/.github-token)")
 	)
 	if err := fs.Parse(args); err != nil {
+		// ⛔ `ghnew -h` is somebody reading the flags of a command that CREATES
+		// a repository, which is exactly when to read them. The usage text has
+		// already been printed by the flag set; returning the error would make
+		// main print it a second time and exit 2.
+		if cliflags.IsHelpError(err) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() < 1 || fs.NArg() > 2 {

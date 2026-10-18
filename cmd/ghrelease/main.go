@@ -60,6 +60,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"net/http"
@@ -94,8 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	tokenFile := fs.String("token-file", "", "the file holding the token (default ~/"+defaultToken+")")
 	dry := fs.Bool("dry-run", false, "say what would happen, merge nothing and tag nothing")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := cliflags.ParseFlags(fs, args); !ok {
+		return code
 	}
 	repo, number, tag, err := target(fs.Args())
 	if err != nil {

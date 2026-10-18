@@ -51,6 +51,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 )
 
@@ -102,6 +103,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	verb, rest := args[0], args[1:]
+	// ⛔ `-h` IS NOT A VERB, and this dispatch had no way to know: the flag set
+	// below never saw it (it is a positional, so it became the verb), and the
+	// switch at the end answered "no such command" with 2. The one command here
+	// that DELETES things was the last one still refusing to say what it takes.
+	if cliflags.IsHelpRequest(verb) {
+		usage(stdout)
+		return 0
+	}
 
 	fset := flag.NewFlagSet("ghpkg", flag.ContinueOnError)
 	fset.SetOutput(stderr)
@@ -120,8 +129,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		pos = append(pos, a)
 	}
-	if err := fset.Parse(flags); err != nil {
-		return 2
+	if code, ok := cliflags.ParseFlags(fset, flags); !ok {
+		return code
 	}
 	pos = append(pos, fset.Args()...)
 

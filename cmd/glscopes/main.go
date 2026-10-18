@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/glauth"
 )
 
@@ -40,8 +41,8 @@ func run(args []string, dir string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	host := fs.String("host", "", "GitLab instance (default: this clone's origin, else gitlab.com)")
 	file := fs.String("f", "", "token file (default: ~/.gitlab-token-<host>, else ~/.gitlab-token)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := cliflags.ParseFlags(fs, args); !ok {
+		return code
 	}
 	want := fs.Args()
 

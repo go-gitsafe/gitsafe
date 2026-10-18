@@ -30,6 +30,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"maps"
@@ -75,8 +76,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	squash := fs.Bool("squash", true, "squash the commits into one")
 	del := fs.Bool("delete-branch", true, "delete the head branch after merging")
 	tokenFile := fs.String("token-file", "", "the file holding the token (default ~/"+defaultToken+")")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := cliflags.ParseFlags(fs, args); !ok {
+		return code
 	}
 	repo, number, err := target(fs.Args())
 	if err != nil {
