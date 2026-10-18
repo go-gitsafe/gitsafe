@@ -37,6 +37,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
+	"github.com/go-gitsafe/gitsafe/sigpipe"
 )
 
 // payload is the part of the PreToolUse event this reads.
@@ -108,6 +109,18 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s.\n\n%s\n\n%s",
 				f.Why(), f.String(), pipestatus.Advice))
+		}
+	}
+	// ⛔ The SIBLING damage of the one above, and separable from it: a consumer
+	// that stops reading kills the producer, so the work is ABANDONED rather
+	// than merely mis-reported. On 2026-09-06 `timeout 400 go mod tidy 2>&1 |
+	// head -5` was written up as a defect in a third party's module; re-run
+	// without the pipe it exited 0 and the repository was fine. See [sigpipe].
+	if os.Getenv("GITSAFE_ALLOW_SIGPIPE") == "" {
+		if f := sigpipe.Check(p.ToolInput.Command); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s.\n\n%s\n\n%s",
+				f.Why(), f.String(), sigpipe.Advice))
 		}
 	}
 	return 0

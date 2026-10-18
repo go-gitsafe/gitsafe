@@ -70,6 +70,10 @@ var corpus = []struct {
 	// status=0 over a failed build. hookcheck has to know the rule exists, or
 	// its "right on all N" is a verdict on a smaller table than the guard.
 	{"a status after a pipeline", `go build ./... | tail -5; echo "status=$?"`, "refuse"},
+	// ⛔ The SIBLING damage: run on 2026-09-06 against a third party's
+	// repository and written up as a defect in THEIR module. Re-run without the
+	// pipe it exited 0. `head` had killed `tidy` five lines in.
+	{"a producer killed by its consumer", `timeout 400 go mod tidy 2>&1 | head -5`, "refuse"},
 
 	{"writing about it, quoted", "cat <<'EOF'\n" + gitPush + "\nEOF", "allow"},
 	{"a message that mentions it", "git commit -m 'about " + gitPush + "'", "allow"},
@@ -79,6 +83,12 @@ var corpus = []struct {
 	{"asking for help", ghMerge + " --help", "allow"},
 	{"the same read with pipefail set", `set -o pipefail; go build ./... | tail -5; echo "status=$?"`, "allow"},
 	{"a status with no pipeline before it", "go build ./...; echo $?", "allow"},
+	// ⭐ The three that keep the sibling rule from refusing ordinary work:
+	// `tail` reads to the end so the build finishes, a file can be read again
+	// for free, and a read-only producer abandons nothing.
+	{"tail reads to the end, so nothing is abandoned", `go build ./... | tail -5`, "allow"},
+	{"a file can be read again for free", `cat go.mod | head -5`, "allow"},
+	{"a read-only producer", `go list ./... | head -5`, "allow"},
 	{"harmless", "go test ./...", "allow"},
 }
 
