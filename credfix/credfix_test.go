@@ -329,6 +329,71 @@ func TestWalkCountsRefusedDirectories(t *testing.T) {
 	if st.DenyErrors == 0 {
 		t.Error("a directory that refused listing was not counted")
 	}
+	// ⛔ A bare total is what this reports nothing with. A chmod 000 directory
+	// is EACCES — ordinary permissions a person could grant — and must not be
+	// filed under the policy refusals, which no chmod will open.
+	if st.DeniedByPermission == 0 {
+		t.Errorf("a chmod 000 directory was not counted as an ordinary permission refusal: %+v", st)
+	}
+	if st.DeniedByPolicy != 0 {
+		t.Errorf("a chmod 000 directory was filed as a POLICY refusal, which no chmod would open: %+v", st)
+	}
+	// And the path is remembered, or a caller cannot print what it could not
+	// read.
+	if len(st.Denied) == 0 || !strings.Contains(strings.Join(st.Denied, " "), "locked") {
+		t.Errorf("the refused path was not remembered: %v", st.Denied)
+	}
+	// ⭐ The half that keeps the warning from crying wolf: an ordinary refusal
+	// is NOT a Trash, so it must not be reported as one.
+	if got := st.DeniedCouldHoldACheckout(); len(got) != 0 {
+		t.Errorf("an ordinary unreadable directory was named as a Trash: %v", got)
+	}
+}
+
+// ⭐ And the other direction: a Trash among the refusals IS reported, because a
+// checkout moved there keeps its .git/config and its remote URL — which is what
+// this tool hunts. The whole point of the split is that one of these two
+// answers is reassuring and the other is not.
+func TestATrashAmongTheRefusalsIsNamed(t *testing.T) {
+	root := t.TempDir()
+	trash := filepath.Join(root, ".Trash")
+	if err := os.MkdirAll(filepath.Join(trash, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(trash, 0o000); err != nil {
+		t.Skip("cannot make a directory unreadable here")
+	}
+	t.Cleanup(func() { _ = os.Chmod(trash, 0o755) })
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	st := Walk([]string{root}, Inspect, func(Report) {})
+	got := st.DeniedCouldHoldACheckout()
+	if len(got) != 1 || filepath.Base(got[0]) != ".Trash" {
+		t.Errorf("a refused Trash was not named: %v (denied: %v)", got, st.Denied)
+	}
+}
+
+// ⛔ The list is capped and the COUNTS are not, because a caller that printed
+// the list would otherwise be the one deciding how much memory a walk takes. A
+// home directory here produced 243 refusals; the cap is well above that, and
+// this asserts the two do not drift apart.
+func TestTheRefusedListIsCappedButTheCountIsNot(t *testing.T) {
+	if MaxDenied < 243 {
+		t.Errorf("MaxDenied is %d, below the 243 a real home directory produced: "+
+			"the list would truncate on an ordinary machine", MaxDenied)
+	}
+	var st Stats
+	for i := 0; i < MaxDenied+10; i++ {
+		st.DenyErrors++
+		if len(st.Denied) < MaxDenied {
+			st.Denied = append(st.Denied, "x")
+		}
+	}
+	if st.DenyErrors != MaxDenied+10 || len(st.Denied) != MaxDenied {
+		t.Errorf("count %d, list %d: the count must stay complete while the list is capped",
+			st.DenyErrors, len(st.Denied))
+	}
 }
 
 // TestUnreadableRepositoriesAreReportedNotSkipped.

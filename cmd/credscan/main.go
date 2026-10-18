@@ -190,8 +190,68 @@ func sweep(verb string, roots []string, write, verbose bool, stdout, stderr io.W
 		// "incomplete" verdict.
 		fmt.Fprintf(stdout, "skipped %d .git entr(ies) holding no configuration at all — objects and refs with no config, or a worktree pointer whose target is gone. No configuration means no remote URL, so no credential.\n", st.NotRepos)
 	}
-	fmt.Fprintf(stdout, "found %d checkouts, %d distinct configurations, %d unreadable, %d directories refused listing\n",
-		st.Repos, st.Unique, st.Unreadable, st.DenyErrors)
+	fmt.Fprintf(stdout, "found %d checkouts, %d distinct configurations, %d unreadable\n",
+		st.Repos, st.Unique, st.Unreadable)
+	// ⛔ THE REFUSALS GET THEIR OWN LINE AND A REASON, like the .git line above.
+	// Until 2026-10-18 the count sat inside the line above with no reason at
+	// all, two lines from "0 of them carry a credential" — so a reader could
+	// not tell a coverage gap from a non-gap, and this is a tool whose whole
+	// output is a claim about coverage.
+	if st.Vanished > 0 {
+		// ⛔ Said apart from the refusals, because it is NOT a coverage gap: a
+		// 7-minute walk of a live home directory crosses caches being written
+		// and deleted underneath it. Counting these as refusals diluted the
+		// ones that mean something — 106 of 243 on this machine.
+		fmt.Fprintf(stdout, "skipped %d entr(ies) that were gone by the time the walk reached them — "+
+			"a cache being written under a long walk. Nothing can be in a directory that no longer exists.\n",
+			st.Vanished)
+	}
+	if st.DenyErrors > 0 {
+		fmt.Fprintf(stdout, "skipped %d director(ies) that refused listing: %d the system refuses on policy "+
+			"(on macOS, a privacy container — a Messages store, a Safari profile, a Photos library, the Trash — "+
+			"which no chmod will open), %d for ordinary permissions a person could grant",
+			st.DenyErrors, st.DeniedByPolicy, st.DeniedByPermission)
+		if st.DeniedOther > 0 {
+			// ⛔ WITH AN EXAMPLE. An "other" bucket that only counts is the
+			// unexplained number this whole line replaced.
+			fmt.Fprintf(stdout, ", %d for another reason (%s)", st.DeniedOther, st.DeniedOtherExample)
+		}
+		fmt.Fprintln(stdout, ".")
+		// ⛔ And the one that is not reassuring. A checkout moved to the Trash
+		// keeps its .git/config and its remote URL — which is precisely what
+		// this tool hunts — so a Trash among the refusals is a real gap in the
+		// verdict below, not a container of application data.
+		if trash := st.DeniedCouldHoldACheckout(); len(trash) > 0 {
+			// ⛔ Plural, because there were TWO on the machine this was written
+			// for and the singular wording was written before anyone counted:
+			// ~/.Trash and a phone's Trash mounted under Library/CloudStorage.
+			were := "is a Trash"
+			if len(trash) > 1 {
+				were = "are Trashes"
+			}
+			fmt.Fprintf(stdout, "  ⚠ %d of them %s, where a deleted checkout keeps its configuration "+
+				"and its remote URL: the verdict below does not speak for %s.\n",
+				len(trash), were, map[bool]string{true: "them", false: "it"}[len(trash) > 1])
+			// Not when verbose: the full list below already names it, and a
+			// path printed twice reads as two findings.
+			if !verbose {
+				for _, p := range trash {
+					fmt.Fprintf(stdout, "      %s\n", p)
+				}
+			}
+		}
+		if verbose {
+			for _, p := range st.Denied {
+				fmt.Fprintf(stdout, "      %s\n", p)
+			}
+			if st.DenyErrors > len(st.Denied) {
+				fmt.Fprintf(stdout, "      ... and %d more, not remembered (the counts above are complete)\n",
+					st.DenyErrors-len(st.Denied))
+			}
+		} else {
+			fmt.Fprintln(stdout, "  --verbose names them.")
+		}
+	}
 	fmt.Fprintf(stdout, "%d of them carry a credential: %d URL(s) still do", dirty, remaining)
 	if repaired > 0 {
 		fmt.Fprintf(stdout, ", %d stripped and verified", repaired)

@@ -378,3 +378,86 @@ func TestAGitDirectoryWithoutAConfigIsNotACheckout(t *testing.T) {
 		t.Errorf("the one real checkout should be the only one counted:\n%s", out)
 	}
 }
+
+// ⛔ A COUNT WITH NO REASON, two lines above a verdict about coverage. Until
+// 2026-10-18 this tool said, on a real home directory:
+//
+//	found 2538 checkouts, 2283 distinct configurations, 0 unreadable, 243 directories refused listing
+//	0 of them carry a credential: 0 URL(s) still do
+//
+// while the line above it explained its own number in full. A reader could not
+// tell a coverage gap from a non-gap — in the output of a tool whose entire
+// purpose is a claim about coverage.
+func TestTheRefusedDirectoriesGetTheirOwnLineAndAReason(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	repo(t, filepath.Join(root, "fine"), "https://github.com/o/r.git")
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(filepath.Join(locked, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Skip("cannot make a directory unreadable here")
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+
+	_, out, _ := exec1(t, "scan", root)
+	// The count has left the "found" line.
+	if strings.Contains(out, "unreadable, 1 directories refused") {
+		t.Errorf("the refusal count is still buried in the counts line:\n%s", out)
+	}
+	for _, want := range []string{
+		"skipped 1 director(ies) that refused listing",
+		"ordinary permissions a person could grant",
+		"--verbose names them",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal line does not say %q:\n%s", want, out)
+		}
+	}
+	// ⭐ And it must NOT cry wolf: an ordinary unreadable directory is not a
+	// Trash, so the warning about a trashed checkout must stay silent.
+	if strings.Contains(out, "is a Trash") {
+		t.Errorf("an ordinary refusal was reported as a Trash:\n%s", out)
+	}
+	// --verbose names the path, which is what makes the number auditable.
+	if _, v, _ := exec1(t, "scan", "--verbose", root); !strings.Contains(v, locked) {
+		t.Errorf("--verbose does not name the refused directory:\n%s", v)
+	}
+}
+
+// ⭐ The other direction, and the reason this split exists: a Trash among the
+// refusals is a REAL gap in the verdict, because a checkout moved there keeps
+// its .git/config and its remote URL.
+func TestARefusedTrashIsCalledOutAgainstTheVerdict(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	repo(t, filepath.Join(root, "fine"), "https://github.com/o/r.git")
+	trash := filepath.Join(root, ".Trash")
+	if err := os.MkdirAll(filepath.Join(trash, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(trash, 0o000); err != nil {
+		t.Skip("cannot make a directory unreadable here")
+	}
+	t.Cleanup(func() { _ = os.Chmod(trash, 0o755) })
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+
+	_, out, _ := exec1(t, "scan", root)
+	for _, want := range []string{"is a Trash", "does not speak for it", trash} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a refused Trash is not called out (%q):\n%s", want, out)
+		}
+	}
+	// ⛔ And it must not be printed twice when --verbose already lists it: a
+	// path repeated reads as two findings.
+	_, v, _ := exec1(t, "scan", "--verbose", root)
+	if n := strings.Count(v, trash); n != 1 {
+		t.Errorf("the Trash appears %d times under --verbose, want 1:\n%s", n, v)
+	}
+}
