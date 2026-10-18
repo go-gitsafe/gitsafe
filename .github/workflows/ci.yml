@@ -53,6 +53,50 @@ jobs:
       - run: go build ./...
       - run: go test -count=1 ./...
       - run: CGO_ENABLED=1 go test -race -count=1 ./...
+  vulns:
+    name: govulncheck, judged by vulngate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.2' }
+      - run: go version
+      # ⛔ WHY THIS REPOSITORY OF ALL OF THEM. gitsafe is what the fleet trusts
+      # to keep a credential out of a URL, and it had no lane asking whether
+      # its own dependencies carry a known advisory. Measured 2026-10-18, built
+      # with go1.27.1: EIGHT standard-library advisories reachable from this
+      # module, every one of them through glauth.Client.Get -> http.Client.Do,
+      # which is real client code and not an init artefact --
+      # GO-2026-6603/6605/6607/6608/6610/6611/6613/6617, all fixed in 1.27.2.
+      #
+      # Nothing shipped was exposed: this CI pins 1.27.2 literally, and the
+      # installed binaries and both hook copies are built with 1.27.2. The
+      # exposure was the DECLARED FLOOR -- go.mod said `go 1.27.1`, which lets a
+      # consumer running `go install ...@latest` with GOTOOLCHAIN=local on
+      # 1.27.1 build a vulnerable binary in silence. The floor is now 1.27.2, so
+      # that build refuses instead. This lane is what notices the next time.
+      #
+      # ⛔ NO `set -o pipefail`, deliberately. govulncheck exits non-zero over
+      # findings it has decided this module does not call, and zero over some it
+      # has -- which is the whole reason vulngate exists. An unread scan is
+      # caught instead by the emptiness check and by vulngate, which believes a
+      # run only when it carried a config AND an SBOM.
+      #
+      # ⛔ -go holds the scan to the toolchain that actually ran: the standard
+      # library is judged by ONE version, and a lane that silently resolved
+      # another answers a different question. Measured here the same day: the
+      # same source built with 1.27.1 reports 8 and with 1.27.2 reports 0, so
+      # the toolchain IS the verdict.
+      - name: govulncheck, judged by vulngate
+        run: |
+          set -eu
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/go-fleettools/fleettools/cmd/vulngate@v0.20.1
+          BIN="$(go env GOPATH)/bin"
+          "$BIN/govulncheck" -format json ./... > /tmp/vuln.json || true
+          test -s /tmp/vuln.json || { echo "::error::govulncheck wrote nothing at all"; exit 1; }
+          "$BIN/vulngate" -go "$(go env GOVERSION)" /tmp/vuln.json
+
   cross:
     name: cross ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
