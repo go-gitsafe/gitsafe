@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-gitsafe/gitsafe/credfix"
 )
 
 // fakeToken is SHAPED like a GitHub classic personal access token and is not
@@ -376,5 +378,181 @@ func TestAGitDirectoryWithoutAConfigIsNotACheckout(t *testing.T) {
 	}
 	if !strings.Contains(out, "found 1 checkouts") {
 		t.Errorf("the one real checkout should be the only one counted:\n%s", out)
+	}
+}
+
+// ⛔ A COUNT WITH NO REASON, two lines above a verdict about coverage. Until
+// 2026-10-18 this tool said, on a real home directory:
+//
+//	found 2538 checkouts, 2283 distinct configurations, 0 unreadable, 243 directories refused listing
+//	0 of them carry a credential: 0 URL(s) still do
+//
+// while the line above it explained its own number in full. A reader could not
+// tell a coverage gap from a non-gap — in the output of a tool whose entire
+// purpose is a claim about coverage.
+func TestTheRefusedDirectoriesGetTheirOwnLineAndAReason(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	repo(t, filepath.Join(root, "fine"), "https://github.com/o/r.git")
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(filepath.Join(locked, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Skip("cannot make a directory unreadable here")
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+
+	_, out, _ := exec1(t, "scan", root)
+	// The count has left the "found" line.
+	if strings.Contains(out, "unreadable, 1 directories refused") {
+		t.Errorf("the refusal count is still buried in the counts line:\n%s", out)
+	}
+	for _, want := range []string{
+		"skipped 1 director(ies) that refused listing",
+		"ordinary permissions a person could grant",
+		"--verbose names them",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal line does not say %q:\n%s", want, out)
+		}
+	}
+	// ⭐ And it must NOT cry wolf: an ordinary unreadable directory is not a
+	// Trash, so the warning about a trashed checkout must stay silent.
+	if strings.Contains(out, "is a Trash") {
+		t.Errorf("an ordinary refusal was reported as a Trash:\n%s", out)
+	}
+	// --verbose names the path, which is what makes the number auditable.
+	if _, v, _ := exec1(t, "scan", "--verbose", root); !strings.Contains(v, locked) {
+		t.Errorf("--verbose does not name the refused directory:\n%s", v)
+	}
+}
+
+// ⭐ The other direction, and the reason this split exists: a Trash among the
+// refusals is a REAL gap in the verdict, because a checkout moved there keeps
+// its .git/config and its remote URL.
+func TestARefusedTrashIsCalledOutAgainstTheVerdict(t *testing.T) {
+	hermetic(t)
+	root := t.TempDir()
+	repo(t, filepath.Join(root, "fine"), "https://github.com/o/r.git")
+	trash := filepath.Join(root, ".Trash")
+	if err := os.MkdirAll(filepath.Join(trash, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(trash, 0o000); err != nil {
+		t.Skip("cannot make a directory unreadable here")
+	}
+	t.Cleanup(func() { _ = os.Chmod(trash, 0o755) })
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+
+	_, out, _ := exec1(t, "scan", root)
+	for _, want := range []string{"is a Trash", "does not speak for it", trash} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a refused Trash is not called out (%q):\n%s", want, out)
+		}
+	}
+	// ⛔ And it must not be printed twice when --verbose already lists it: a
+	// path repeated reads as two findings.
+	_, v, _ := exec1(t, "scan", "--verbose", root)
+	if n := strings.Count(v, trash); n != 1 {
+		t.Errorf("the Trash appears %d times under --verbose, want 1:\n%s", n, v)
+	}
+}
+
+// ⛔⛔ THE TIMEOUT BRANCH IS REACHABLE BY NO TEST THAT WALKS A FILESYSTEM. It
+// needs a network or device mount that actually times out, and a branch no test
+// can reach is a branch nobody has checked — which is how the defect this whole
+// report fixes got in. That is why reportRefusals takes Stats: with the numbers
+// passed in, every category has a case.
+//
+// The numbers below are the ones measured on 2026-10-18 on a home directory of
+// 1.38M directories, classified by errno:
+//
+//	EPERM    136   e.g. ~/.Trash: operation not permitted
+//	EACCES     1   e.g. …/Java-Updater/…/Version 17: permission denied
+//	ETIMEDOUT 106   e.g. …/CloudStorage/MacDroid-…/.Trash: fdopendir: operation timed out
+//
+// ⛔ Those 106 were GUESSED to be vanished entries, and written up as such
+// before being measured. They are a phone mounted over a network filesystem,
+// which is the opposite conclusion: a vanished directory cannot hold anything,
+// while one that timed out may hold everything and a later run may read it.
+func TestTheRefusalReportNamesEveryCategory(t *testing.T) {
+	st := credfix.Stats{
+		Repos:              2555,
+		Unique:             2293,
+		DenyErrors:         243,
+		DeniedByPolicy:     136,
+		DeniedByPermission: 1,
+		DeniedByTimeout:    106,
+		Denied: []string{
+			"/Users/x/.Trash",
+			"/Users/x/Library/CloudStorage/MacDroid-POCO/.Trash",
+			"/Users/x/Library/Messages",
+		},
+	}
+	var b bytes.Buffer
+	reportRefusals(&b, st, false)
+	out := b.String()
+	for _, want := range []string{
+		"skipped 243 director(ies) that refused listing",
+		"136 the system refuses on policy",
+		"1 for ordinary permissions a person could grant",
+		"106 that did not answer in time",
+		"did not answer in time — a network or device mount, not a refusal",
+		"a later run may read them",
+		// Two Trashes, so the wording must be plural — it was written singular
+		// before anybody counted.
+		"2 of them are Trashes",
+		"does not speak for them",
+		"--verbose names them",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+	// A Messages store is NOT named as a possible checkout: that is the whole
+	// point of separating the reassuring refusals from the one that is not.
+	if strings.Contains(out, "Library/Messages\n") && !strings.Contains(out, "--verbose") {
+		t.Errorf("a privacy container was listed as if it could hold a checkout:\n%s", out)
+	}
+}
+
+// ⛔ An "other" bucket that only COUNTS is the unexplained number the whole
+// report replaced, so it must carry an example. This is also what revealed the
+// timeouts above: the example named them.
+func TestTheOtherBucketCarriesAnExample(t *testing.T) {
+	st := credfix.Stats{
+		DenyErrors:         5,
+		DeniedOther:        5,
+		DeniedOtherExample: "/some/where: fdopendir /some/where: operation timed out",
+	}
+	var b bytes.Buffer
+	reportRefusals(&b, st, false)
+	out := b.String()
+	if !strings.Contains(out, "5 for another reason") {
+		t.Errorf("the other bucket is not counted:\n%s", out)
+	}
+	if !strings.Contains(out, "operation timed out") {
+		t.Errorf("the other bucket carries no example, so its number is unexplained:\n%s", out)
+	}
+}
+
+// ⭐ A vanished entry is NOT a refusal and must not be counted as one: nothing
+// can be in a directory that no longer exists, and lumping the two together
+// dilutes the refusals that do mean something.
+func TestAVanishedEntryIsSaidApartFromTheRefusals(t *testing.T) {
+	var b bytes.Buffer
+	reportRefusals(&b, credfix.Stats{Vanished: 7}, false)
+	out := b.String()
+	if !strings.Contains(out, "7 entr(ies) that were gone") {
+		t.Errorf("a vanished entry is not reported:\n%s", out)
+	}
+	if strings.Contains(out, "refused listing") {
+		t.Errorf("a vanished entry was reported as a refusal:\n%s", out)
 	}
 }

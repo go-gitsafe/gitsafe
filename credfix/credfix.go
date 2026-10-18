@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/go-gitsafe/gitsafe/credurl"
 )
@@ -284,8 +285,88 @@ type Stats struct {
 	// directory always has some, and they are not a reason to fail — but they
 	// are a reason not to claim the walk was complete.
 	DenyErrors int
+	// DeniedByPolicy and DeniedByPermission split DenyErrors by WHY, because
+	// the two mean different things to a reader and a bare total means neither.
+	//
+	// ⛔ The split is by errno, NOT by a list of directory names. On macOS a
+	// privacy container answers EPERM — the system refuses on policy, and no
+	// chmod will change it — while an ordinary directory a person could grant
+	// answers EACCES. Measured 2026-10-18: ~/.Trash, ~/Library/Messages and
+	// ~/Library/Safari all give EPERM; a chmod 000 directory gives EACCES. A
+	// name list would have inherited the blind spot of whoever wrote it, and
+	// would have said nothing at all on Linux.
+	DeniedByPolicy     int
+	DeniedByPermission int
+	// Vanished is how many entries were gone by the time the walk reached
+	// them. ⛔ THIS IS NOT A COVERAGE GAP: a long walk of a live home
+	// directory crosses caches being written and deleted underneath it, and a
+	// directory that no longer exists cannot hold a checkout. It is counted
+	// apart so the refusals that DO mean something are not diluted.
+	//
+	// Measured 2026-10-18 on a home of 1.38M directories: ZERO. It was written
+	// on the guess that this was the unexplained third of the refusals, and
+	// the guess was wrong — see DeniedByTimeout. It is kept because the
+	// distinction is right, not because it fired.
+	Vanished int
+	// DeniedByTimeout is how many did not answer in time.
+	//
+	// ⛔⛔ THIS IS THE MOST SERIOUS KIND, and it was the unexplained third.
+	// Measured 2026-10-18: 106 of 243, every one of them
+	// `fdopendir ...: operation timed out` under
+	// ~/Library/CloudStorage/MacDroid-…/ — a PHONE mounted over a network
+	// filesystem. Unlike a vanished entry, a directory that timed out may well
+	// hold a checkout, and retrying may read it. One of them is that phone's
+	// .Trash, which is exactly where a deleted clone keeps its remote URL.
+	//
+	// So it is not folded in with the policy refusals, which are reassuring
+	// (no chmod opens a Messages store, and no checkout lives in one). This
+	// one says: ask again.
+	DeniedByTimeout int
+	// DeniedOther is everything else, and DeniedOtherExample is the first of
+	// them with the error the filesystem gave.
+	//
+	// ⛔ AN "OTHER" BUCKET WITHOUT AN EXAMPLE IS THE DEFECT THIS WHOLE SPLIT
+	// EXISTS AGAINST. The first version had EPERM and EACCES only, and
+	// measured on this machine it filed 106 of 243 under a reason it did not
+	// name — an unexplained number, which is exactly what it replaced.
+	DeniedOther        int
+	DeniedOtherExample string
+	// Denied names the directories that refused, up to [MaxDenied]. The counts
+	// above are always complete; this is for a caller that wants to print them.
+	//
+	// It exists because "243 directories refused listing" sat in the same line
+	// as "0 of them carry a credential" with no reason given, while the line
+	// above it explained its own number in full. A reader could not tell a
+	// coverage gap from a non-gap — and one of those 243 was ~/.Trash, where a
+	// trashed checkout keeps its configuration and its remote URL, which is
+	// exactly what this tool hunts.
+	Denied []string
 	// Roots are the roots that were walked.
 	Roots []string
+}
+
+// MaxDenied caps how many refused paths [Stats] remembers. The counts are not
+// capped; only the list is, so a pathological walk cannot be made to hold an
+// unbounded number of strings. A home directory here produced 243.
+const MaxDenied = 512
+
+// DeniedCouldHoldACheckout returns the refused directories that plausibly hold
+// one, which on this fleet means a Trash: a checkout moved there keeps its
+// .git/config, and its remote URL with it.
+//
+// The other refusals are containers for application data — a Messages store, a
+// Safari profile, a Photos library — and a checkout does not live in one. That
+// is a judgement about what the directory IS, so it is offered separately from
+// the counts rather than folded into them.
+func (s Stats) DeniedCouldHoldACheckout() []string {
+	var out []string
+	for _, p := range s.Denied {
+		switch filepath.Base(p) {
+		case ".Trash", "Trash", ".local/share/Trash":
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Complete reports whether the walk saw enough to be evidence of anything. A
@@ -342,7 +423,28 @@ func Walk(roots []string, inspect func(dir string) Report, fn func(Report)) Stat
 	for _, root := range roots {
 		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
+				switch {
+				case errors.Is(err, fs.ErrNotExist):
+					// Gone, not refused: nothing can be in it. Counted apart,
+					// and NOT as a directory this walk failed to cover.
+					st.Vanished++
+					return nil
+				case errors.Is(err, syscall.EPERM):
+					st.DeniedByPolicy++
+				case errors.Is(err, syscall.EACCES):
+					st.DeniedByPermission++
+				case errors.Is(err, syscall.ETIMEDOUT):
+					st.DeniedByTimeout++
+				default:
+					st.DeniedOther++
+					if st.DeniedOtherExample == "" {
+						st.DeniedOtherExample = p + ": " + err.Error()
+					}
+				}
 				st.DenyErrors++
+				if len(st.Denied) < MaxDenied {
+					st.Denied = append(st.Denied, p)
+				}
 				return nil
 			}
 			if d.Name() != ".git" {

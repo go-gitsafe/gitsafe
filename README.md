@@ -478,14 +478,67 @@ decision was wrong.
 
 ### It says what it walked
 
-    walked 899556 directories in 2m38s
-    found 2155 checkouts, 2133 distinct configurations, 0 unreadable, 243 directories refused listing
+    walked 1379709 directories in 6m57s
+    skipped 152 .git entr(ies) holding no configuration at all — … so no credential.
+    found 2555 checkouts, 2293 distinct configurations, 0 unreadable
+    skipped 243 director(ies) that refused listing: 136 the system refuses on policy
+      (on macOS, a privacy container — a Messages store, a Safari profile, a Photos
+      library, the Trash — which no chmod will open), 1 for ordinary permissions a
+      person could grant, 106 that did not answer in time.
+      ⚠ 106 did not answer in time — a network or device mount, not a refusal.
+        Those are unread, and a later run may read them.
+      ⚠ 2 of them are Trashes, where a deleted checkout keeps its configuration and
+        its remote URL: the verdict below does not speak for them.
+          /Users/…/.Trash
+          /Users/…/Library/CloudStorage/MacDroid-…/.Trash
+      --verbose names them.
     0 of them carry a credential: 0 URL(s) still do
 
 Every run prints those counts, whether it found anything or not, and a
 repository and its linked worktrees count once. A scan that could not read must
 not report zero: a sweep here once printed "4 files" for 4413 because the
 command it used had no such flag, and it read as a success.
+
+**The refusals used to be a bare number inside the line above**, two lines from
+the verdict — `0 unreadable, 243 directories refused listing` — while the `.git`
+line right above it explained its own number in full. A reader could not tell a
+coverage gap from a non-gap, in the output of a tool whose whole purpose is a
+claim about coverage. Now:
+
+- **the split is by `errno`, not by a list of directory names.** A macOS privacy
+  container answers `EPERM` — the system refuses on policy and no `chmod` will
+  change it — while a directory somebody could grant answers `EACCES`, and a
+  mount that did not answer gives `ETIMEDOUT`. Measured 2026-10-18 over that
+  home directory, by classifying every error the walk saw:
+
+      EPERM      136   e.g. ~/.Trash: operation not permitted
+      EACCES       1   e.g. …/Java-Updater/…/Version 17: permission denied
+      ETIMEDOUT  106   e.g. …/CloudStorage/MacDroid-…/.Trash: fdopendir: timed out
+
+  A name list would have inherited the blind spot of whoever wrote it and said
+  nothing at all on Linux.
+- ⛔ **a timeout is the one worth acting on, and it was the unexplained third.**
+  The first version of this split had `EPERM` and `EACCES` only, so 106 of the
+  243 fell into "another reason" — an unexplained number, which is what the
+  whole change replaces. They were written up as *vanished* entries on the
+  reasoning that a 7-minute walk crosses caches being deleted underneath it.
+  **That guess was wrong.** They are a phone mounted over a network filesystem,
+  and the conclusion is the opposite one: a vanished directory cannot hold
+  anything, while one that timed out may hold everything and a later run may
+  read it. The category that found this is the **example** now carried by
+  "another reason": a bucket that only counts is the defect again.
+- **a Trash among them is called out against the verdict.** The other refusals
+  hold application data, and a checkout does not live in a Messages store — but
+  a checkout moved to the Trash keeps its `.git/config` and its remote URL,
+  which is exactly what this hunts. That one is a real gap, and it says so.
+  There were **two** on the machine this was written for — `~/.Trash` and a
+  phone's Trash under `Library/CloudStorage` — and the singular wording had
+  been written before anybody counted.
+- `--verbose` names them, so the number is auditable rather than merely printed.
+
+The exit status is deliberately unchanged: a home directory always has
+refusals, and failing on them would make the tool useless where it matters.
+What changed is that the number now carries its reason.
 
 | exit | |
 |---|---|
