@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-gitsafe/gitsafe/credfix"
 )
 
 // fakeToken is SHAPED like a GitHub classic personal access token and is not
@@ -459,5 +461,98 @@ func TestARefusedTrashIsCalledOutAgainstTheVerdict(t *testing.T) {
 	_, v, _ := exec1(t, "scan", "--verbose", root)
 	if n := strings.Count(v, trash); n != 1 {
 		t.Errorf("the Trash appears %d times under --verbose, want 1:\n%s", n, v)
+	}
+}
+
+// ⛔⛔ THE TIMEOUT BRANCH IS REACHABLE BY NO TEST THAT WALKS A FILESYSTEM. It
+// needs a network or device mount that actually times out, and a branch no test
+// can reach is a branch nobody has checked — which is how the defect this whole
+// report fixes got in. That is why reportRefusals takes Stats: with the numbers
+// passed in, every category has a case.
+//
+// The numbers below are the ones measured on 2026-10-18 on a home directory of
+// 1.38M directories, classified by errno:
+//
+//	EPERM    136   e.g. ~/.Trash: operation not permitted
+//	EACCES     1   e.g. …/Java-Updater/…/Version 17: permission denied
+//	ETIMEDOUT 106   e.g. …/CloudStorage/MacDroid-…/.Trash: fdopendir: operation timed out
+//
+// ⛔ Those 106 were GUESSED to be vanished entries, and written up as such
+// before being measured. They are a phone mounted over a network filesystem,
+// which is the opposite conclusion: a vanished directory cannot hold anything,
+// while one that timed out may hold everything and a later run may read it.
+func TestTheRefusalReportNamesEveryCategory(t *testing.T) {
+	st := credfix.Stats{
+		Repos:              2555,
+		Unique:             2293,
+		DenyErrors:         243,
+		DeniedByPolicy:     136,
+		DeniedByPermission: 1,
+		DeniedByTimeout:    106,
+		Denied: []string{
+			"/Users/x/.Trash",
+			"/Users/x/Library/CloudStorage/MacDroid-POCO/.Trash",
+			"/Users/x/Library/Messages",
+		},
+	}
+	var b bytes.Buffer
+	reportRefusals(&b, st, false)
+	out := b.String()
+	for _, want := range []string{
+		"skipped 243 director(ies) that refused listing",
+		"136 the system refuses on policy",
+		"1 for ordinary permissions a person could grant",
+		"106 that did not answer in time",
+		"did not answer in time — a network or device mount, not a refusal",
+		"a later run may read them",
+		// Two Trashes, so the wording must be plural — it was written singular
+		// before anybody counted.
+		"2 of them are Trashes",
+		"does not speak for them",
+		"--verbose names them",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+	// A Messages store is NOT named as a possible checkout: that is the whole
+	// point of separating the reassuring refusals from the one that is not.
+	if strings.Contains(out, "Library/Messages\n") && !strings.Contains(out, "--verbose") {
+		t.Errorf("a privacy container was listed as if it could hold a checkout:\n%s", out)
+	}
+}
+
+// ⛔ An "other" bucket that only COUNTS is the unexplained number the whole
+// report replaced, so it must carry an example. This is also what revealed the
+// timeouts above: the example named them.
+func TestTheOtherBucketCarriesAnExample(t *testing.T) {
+	st := credfix.Stats{
+		DenyErrors:         5,
+		DeniedOther:        5,
+		DeniedOtherExample: "/some/where: fdopendir /some/where: operation timed out",
+	}
+	var b bytes.Buffer
+	reportRefusals(&b, st, false)
+	out := b.String()
+	if !strings.Contains(out, "5 for another reason") {
+		t.Errorf("the other bucket is not counted:\n%s", out)
+	}
+	if !strings.Contains(out, "operation timed out") {
+		t.Errorf("the other bucket carries no example, so its number is unexplained:\n%s", out)
+	}
+}
+
+// ⭐ A vanished entry is NOT a refusal and must not be counted as one: nothing
+// can be in a directory that no longer exists, and lumping the two together
+// dilutes the refusals that do mean something.
+func TestAVanishedEntryIsSaidApartFromTheRefusals(t *testing.T) {
+	var b bytes.Buffer
+	reportRefusals(&b, credfix.Stats{Vanished: 7}, false)
+	out := b.String()
+	if !strings.Contains(out, "7 entr(ies) that were gone") {
+		t.Errorf("a vanished entry is not reported:\n%s", out)
+	}
+	if strings.Contains(out, "refused listing") {
+		t.Errorf("a vanished entry was reported as a refusal:\n%s", out)
 	}
 }

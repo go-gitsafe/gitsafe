@@ -298,12 +298,30 @@ type Stats struct {
 	DeniedByPolicy     int
 	DeniedByPermission int
 	// Vanished is how many entries were gone by the time the walk reached
-	// them. ⛔ THIS IS NOT A COVERAGE GAP, and lumping it in with the refusals
-	// was the first version's mistake: a 7-minute walk of a live home
-	// directory crosses caches that are being written and deleted underneath
-	// it, and a directory that no longer exists cannot hold a checkout. It is
-	// counted apart so the refusals that DO mean something are not diluted.
+	// them. ⛔ THIS IS NOT A COVERAGE GAP: a long walk of a live home
+	// directory crosses caches being written and deleted underneath it, and a
+	// directory that no longer exists cannot hold a checkout. It is counted
+	// apart so the refusals that DO mean something are not diluted.
+	//
+	// Measured 2026-10-18 on a home of 1.38M directories: ZERO. It was written
+	// on the guess that this was the unexplained third of the refusals, and
+	// the guess was wrong — see DeniedByTimeout. It is kept because the
+	// distinction is right, not because it fired.
 	Vanished int
+	// DeniedByTimeout is how many did not answer in time.
+	//
+	// ⛔⛔ THIS IS THE MOST SERIOUS KIND, and it was the unexplained third.
+	// Measured 2026-10-18: 106 of 243, every one of them
+	// `fdopendir ...: operation timed out` under
+	// ~/Library/CloudStorage/MacDroid-…/ — a PHONE mounted over a network
+	// filesystem. Unlike a vanished entry, a directory that timed out may well
+	// hold a checkout, and retrying may read it. One of them is that phone's
+	// .Trash, which is exactly where a deleted clone keeps its remote URL.
+	//
+	// So it is not folded in with the policy refusals, which are reassuring
+	// (no chmod opens a Messages store, and no checkout lives in one). This
+	// one says: ask again.
+	DeniedByTimeout int
 	// DeniedOther is everything else, and DeniedOtherExample is the first of
 	// them with the error the filesystem gave.
 	//
@@ -415,6 +433,8 @@ func Walk(roots []string, inspect func(dir string) Report, fn func(Report)) Stat
 					st.DeniedByPolicy++
 				case errors.Is(err, syscall.EACCES):
 					st.DeniedByPermission++
+				case errors.Is(err, syscall.ETIMEDOUT):
+					st.DeniedByTimeout++
 				default:
 					st.DeniedOther++
 					if st.DeniedOtherExample == "" {

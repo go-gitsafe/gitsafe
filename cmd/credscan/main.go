@@ -192,16 +192,57 @@ func sweep(verb string, roots []string, write, verbose bool, stdout, stderr io.W
 	}
 	fmt.Fprintf(stdout, "found %d checkouts, %d distinct configurations, %d unreadable\n",
 		st.Repos, st.Unique, st.Unreadable)
-	// ⛔ THE REFUSALS GET THEIR OWN LINE AND A REASON, like the .git line above.
-	// Until 2026-10-18 the count sat inside the line above with no reason at
-	// all, two lines from "0 of them carry a credential" — so a reader could
-	// not tell a coverage gap from a non-gap, and this is a tool whose whole
-	// output is a claim about coverage.
+	reportRefusals(stdout, st, verbose)
+	fmt.Fprintf(stdout, "%d of them carry a credential: %d URL(s) still do", dirty, remaining)
+	if repaired > 0 {
+		fmt.Fprintf(stdout, ", %d stripped and verified", repaired)
+	}
+	fmt.Fprintln(stdout)
+
+	// The incompleteness is printed whether or not anything was found: a run that
+	// could not read part of the machine has not cleared that part, and that is
+	// true even when it found something elsewhere.
+	if !st.Complete() {
+		fmt.Fprintf(stderr, "\ncredscan: this run did not cover everything.%s\n", incomplete(st))
+		fmt.Fprintln(stderr, "  A scan that could not read must not be reported as a clean machine.")
+	}
+	// A finding outranks an incomplete walk, because it is the more actionable
+	// answer: 3 says "ask again", 1 says "there is a disclosed credential".
+	// Measured on this machine: a full $HOME scan found 3 credentials AND 21
+	// checkouts it could not read, and reporting only the second would have
+	// buried the first.
+	if remaining == 0 && !st.Complete() {
+		return exitInconclusive
+	}
+	if remaining > 0 {
+		if verb == "scan" || !write {
+			fmt.Fprintf(stdout, "\nThese must be treated as DISCLOSED: git prints a remote URL on any fetch.\n")
+			fmt.Fprintf(stdout, "Revoke and reissue the credential, then:  credscan clean <root> --write\n")
+		}
+		return exitFound
+	}
+	return exitClean
+}
+
+// reportRefusals says what the walk could not read, and why.
+//
+// ⛔ IT IS A FUNCTION SO THAT IT CAN BE TESTED. The timeout branch below is
+// reachable only from a network or device mount that actually times out, and a
+// branch no test can reach is a branch nobody has checked — which is how the
+// defect this whole block fixes got in. With Stats passed in, every category
+// has a case.
+//
+// ⛔ THE REFUSALS GET THEIR OWN LINE AND A REASON, like the .git line above
+// them. Until 2026-10-18 the count sat inside the counts line with no reason at
+// all, two lines from "0 of them carry a credential" — so a reader could not
+// tell a coverage gap from a non-gap, in a tool whose whole output is a claim
+// about coverage.
+func reportRefusals(stdout io.Writer, st credfix.Stats, verbose bool) {
 	if st.Vanished > 0 {
 		// ⛔ Said apart from the refusals, because it is NOT a coverage gap: a
-		// 7-minute walk of a live home directory crosses caches being written
-		// and deleted underneath it. Counting these as refusals diluted the
-		// ones that mean something — 106 of 243 on this machine.
+		// long walk of a live home directory crosses caches being written and
+		// deleted underneath it, and nothing can be in a directory that no
+		// longer exists.
 		fmt.Fprintf(stdout, "skipped %d entr(ies) that were gone by the time the walk reached them — "+
 			"a cache being written under a long walk. Nothing can be in a directory that no longer exists.\n",
 			st.Vanished)
@@ -211,12 +252,26 @@ func sweep(verb string, roots []string, write, verbose bool, stdout, stderr io.W
 			"(on macOS, a privacy container — a Messages store, a Safari profile, a Photos library, the Trash — "+
 			"which no chmod will open), %d for ordinary permissions a person could grant",
 			st.DenyErrors, st.DeniedByPolicy, st.DeniedByPermission)
+		if st.DeniedByTimeout > 0 {
+			fmt.Fprintf(stdout, ", %d that did not answer in time", st.DeniedByTimeout)
+		}
 		if st.DeniedOther > 0 {
 			// ⛔ WITH AN EXAMPLE. An "other" bucket that only counts is the
-			// unexplained number this whole line replaced.
+			// unexplained number this whole line replaced — and the example is
+			// what revealed the timeouts above, which had been guessed to be
+			// vanished entries and were not.
 			fmt.Fprintf(stdout, ", %d for another reason (%s)", st.DeniedOther, st.DeniedOtherExample)
 		}
 		fmt.Fprintln(stdout, ".")
+		// ⛔⛔ A TIMEOUT IS THE ONE WORTH ACTING ON. A policy refusal is
+		// reassuring: no chmod opens a Messages store and no checkout lives in
+		// one. A directory that did not answer may hold anything, and asking
+		// again may read it — so it is said separately rather than counted
+		// alongside them.
+		if st.DeniedByTimeout > 0 {
+			fmt.Fprintf(stdout, "  ⚠ %d did not answer in time — a network or device mount, not a refusal. "+
+				"Those are unread, and a later run may read them.\n", st.DeniedByTimeout)
+		}
 		// ⛔ And the one that is not reassuring. A checkout moved to the Trash
 		// keeps its .git/config and its remote URL — which is precisely what
 		// this tool hunts — so a Trash among the refusals is a real gap in the
@@ -252,35 +307,6 @@ func sweep(verb string, roots []string, write, verbose bool, stdout, stderr io.W
 			fmt.Fprintln(stdout, "  --verbose names them.")
 		}
 	}
-	fmt.Fprintf(stdout, "%d of them carry a credential: %d URL(s) still do", dirty, remaining)
-	if repaired > 0 {
-		fmt.Fprintf(stdout, ", %d stripped and verified", repaired)
-	}
-	fmt.Fprintln(stdout)
-
-	// The incompleteness is printed whether or not anything was found: a run that
-	// could not read part of the machine has not cleared that part, and that is
-	// true even when it found something elsewhere.
-	if !st.Complete() {
-		fmt.Fprintf(stderr, "\ncredscan: this run did not cover everything.%s\n", incomplete(st))
-		fmt.Fprintln(stderr, "  A scan that could not read must not be reported as a clean machine.")
-	}
-	// A finding outranks an incomplete walk, because it is the more actionable
-	// answer: 3 says "ask again", 1 says "there is a disclosed credential".
-	// Measured on this machine: a full $HOME scan found 3 credentials AND 21
-	// checkouts it could not read, and reporting only the second would have
-	// buried the first.
-	if remaining == 0 && !st.Complete() {
-		return exitInconclusive
-	}
-	if remaining > 0 {
-		if verb == "scan" || !write {
-			fmt.Fprintf(stdout, "\nThese must be treated as DISCLOSED: git prints a remote URL on any fetch.\n")
-			fmt.Fprintf(stdout, "Revoke and reissue the credential, then:  credscan clean <root> --write\n")
-		}
-		return exitFound
-	}
-	return exitClean
 }
 
 func incomplete(st credfix.Stats) string {
