@@ -692,6 +692,105 @@ wrong for a census, where the end is the summary — and nothing in the text say
 one it is. That one stays a note, and the package says so rather than pretending to
 it.
 
+## A producer killed by its consumer
+
+`guard-bash` refuses a pipeline that would kill the command whose work matters.
+This is the **third** damage a pipe does, and it is separable from the other two:
+
+| | what is lost |
+|---|---|
+| a status read after a pipeline | the verdict — guarded by `pipestatus` |
+| `\| tail -40` on a census | the body of a report — a note, not decidable |
+| **a producer killed mid-work** | **the work itself** — guarded by `sigpipe` |
+
+A consumer that stops reading closes the pipe, and the producer dies of SIGPIPE
+wherever it had got to:
+
+```
+timeout 400 go mod tidy 2>&1 | head -5
+```
+
+On 2026-09-06 that was run against a **third party's** repository,
+`Polytechnique-IDCS/dashboard#20`, and the conclusion written down was "tidy
+failed". Re-run without the pipe it exited 0, and `go build` and `go vet` were
+green afterwards. `head` had returned after five lines and killed `tidy` in the
+middle of its downloads. Nothing had ever been wrong — and the report had already
+gone out.
+
+### The consumer half is a question, not a list
+
+Whether a program can return before its input ends is decidable, and nothing has
+to be kept up to date:
+
+```
+head            returns after N lines or bytes, by definition
+grep -q         returns at the FIRST match
+grep -m N       returns at the Nth
+```
+
+while `tail`, `wc`, `sort`, `uniq`, plain `grep`, `grep -c` and a streaming `sed`
+all have to read to the end before they can answer anything — so they abandon
+nothing and go straight through.
+
+That is the line that keeps this from being the undecidable case above:
+`go build ./... | tail -5` **finishes the build** and is allowed; `go mod tidy |
+head -5` does not and is not.
+
+### The producer half is a list, and the package says so
+
+"Does this command's completion matter?" is a question about what the program
+does, not about its text, so it is answered by a named list — the build, fetch
+and install commands this fleet runs (`go` minus its read-only subcommands,
+`git clone/fetch/pull/submodule`, `make`, `docker`, `cargo`, `npm`, `pip`,
+`wget`, `rsync`, and `curl` only when told to write a file).
+
+A list inherits the blind spot of its own taxonomy: a producer nobody thought of
+goes through in silence. That is the honest trade, because the alternative —
+refusing every `| head` — would refuse `cat f | head` fifty times a day and be
+worked around by lunchtime.
+
+So these are allowed, and the allow table in the test is the longer half on
+purpose:
+
+```
+cat f.txt | head -5          a file can be read again for free
+git log --oneline | head -20 a read-only producer abandons nothing
+go list ./... | head -5      likewise
+go build ./... | tail -5     tail reads to the end
+go test ./... | grep -c PASS so does grep -c
+```
+
+### The escape, and what the refusal says instead
+
+`GITSAFE_ALLOW_SIGPIPE=1` in front of **one** command, for a producer that is
+MEANT to be sampled rather than finished — a log follow piped into `head` is a
+real thing to want.
+
+The refusal names both stages and prints the form that keeps everything:
+
+```
+cmd > /tmp/out.txt 2>&1; head -5 /tmp/out.txt
+```
+
+which also keeps the command's own exit status, and keeps the rest of the output
+for when five lines turn out not to be the answer.
+
+### Measured, both directions
+
+`hookcheck` grew four cases — one refusal and the three allowances that stop the
+rule from being a nuisance — and it was run against both binaries:
+
+```
+v0.10.0 as installed    guard-bash is wrong on 1 of 23
+                        a producer killed by its consumer  refuse  allow ←
+with this change        guard-bash is right on all 23
+```
+
+Ablations, each of which compiles: making `head` not count as an early exit turns
+**9** refusals red and leaves every allowance green; making every producer count
+turns **11** allowances red and leaves every refusal green. Neither half of the
+table is blind.
+
 ## Discarding uncommitted work
 
 `guard-bash` refuses a command that throws away what exists only in the working

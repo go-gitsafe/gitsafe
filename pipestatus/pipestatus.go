@@ -104,7 +104,7 @@ func Check(cmd string) Finding {
 	if pipefail.MatchString(cmd) {
 		return Finding{}
 	}
-	stmts := statements(cmd)
+	stmts := shellcmd.Statements(cmd)
 	for i, st := range stmts {
 		if !readsStatus.MatchString(st) || quotedOnly(st) {
 			continue
@@ -115,83 +115,13 @@ func Check(cmd string) Finding {
 			if prev == "" {
 				continue
 			}
-			if hasPipe(prev) {
+			if shellcmd.HasPipe(prev) {
 				return Finding{Statement: strings.TrimSpace(st), Pipeline: prev}
 			}
 			break
 		}
 	}
 	return Finding{}
-}
-
-// statements splits on the separators that end a command, keeping order.
-//
-// ⛔ `||` and `&&` have to be recognised BEFORE a bare `|`, or every `||` reads
-// as a pipeline and `a || b; echo $?` would be refused for nothing.
-func statements(cmd string) []string {
-	var out []string
-	cur := &strings.Builder{}
-	q := byte(0)
-	for i := 0; i < len(cmd); i++ {
-		c := cmd[i]
-		if q != 0 {
-			cur.WriteByte(c)
-			if c == q {
-				q = 0
-			}
-			continue
-		}
-		switch c {
-		case '\'', '"':
-			q = c
-			cur.WriteByte(c)
-		case ';', '\n':
-			out = append(out, cur.String())
-			cur.Reset()
-		case '&':
-			if i+1 < len(cmd) && cmd[i+1] == '&' {
-				out = append(out, cur.String())
-				cur.Reset()
-				i++
-				continue
-			}
-			cur.WriteByte(c)
-		case '|':
-			if i+1 < len(cmd) && cmd[i+1] == '|' {
-				// `||` ends a statement and is NOT a pipeline.
-				out = append(out, cur.String())
-				cur.Reset()
-				i++
-				continue
-			}
-			cur.WriteByte(c)
-		default:
-			cur.WriteByte(c)
-		}
-	}
-	out = append(out, cur.String())
-	return out
-}
-
-// hasPipe reports whether a statement contains a pipe outside quotes.
-func hasPipe(st string) bool {
-	q := byte(0)
-	for i := 0; i < len(st); i++ {
-		c := st[i]
-		if q != 0 {
-			if c == q {
-				q = 0
-			}
-			continue
-		}
-		switch c {
-		case '\'', '"':
-			q = c
-		case '|':
-			return true
-		}
-	}
-	return false
 }
 
 // quotedOnly reports whether every $? in the statement is inside single quotes,
