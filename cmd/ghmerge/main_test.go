@@ -48,6 +48,12 @@ func server(t *testing.T, prBody map[string]any, runs []map[string]any, sts ...m
 			fmt.Fprint(w, `{"merged":true}`)
 		case strings.Contains(r.URL.Path, "/check-runs"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": runs})
+		case strings.Contains(r.URL.Path, "/actions/runs"):
+			// Asked ONLY when a check run is red, to find out whether the
+			// workflow run that produced it excused that job. Empty by
+			// default: nothing is excused, so a test that says nothing about
+			// workflow runs judges its check runs exactly as before.
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": fakeWorkflowRuns})
 		case strings.HasSuffix(r.URL.Path, "/status"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": sts})
 		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
@@ -69,7 +75,19 @@ func server(t *testing.T, prBody map[string]any, runs []map[string]any, sts ...m
 	was := apiBase
 	apiBase = s.URL
 	t.Cleanup(func() { apiBase = was })
+	t.Cleanup(func() { fakeWorkflowRuns = nil })
 	return &m, &d
+}
+
+// fakeWorkflowRuns is what the fake GitHub answers for /actions/runs. server
+// clears it on cleanup, so it cannot leak into the next test.
+var fakeWorkflowRuns []map[string]any
+
+// suiteRun is one workflow run over one check suite, as /actions/runs sends it.
+func suiteRun(suite int64, status, conclusion string) map[string]any {
+	return map[string]any{
+		"check_suite_id": suite, "status": status, "conclusion": conclusion,
+	}
 }
 
 // withToken points the tool at a token file that is not anybody's real one.
@@ -771,6 +789,12 @@ func TestASecondPageIsRead(t *testing.T) {
 				}
 			}
 			_ = json.NewEncoder(w).Encode(body)
+		case strings.Contains(r.URL.Path, "/actions/runs"):
+			// Asked ONLY when a check run is red, to find out whether the
+			// workflow run that produced it excused that job. Empty by
+			// default: nothing is excused, so a test that says nothing about
+			// workflow runs judges its check runs exactly as before.
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": fakeWorkflowRuns})
 		case strings.HasSuffix(r.URL.Path, "/status"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": []map[string]any{}})
 		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
@@ -919,5 +943,118 @@ func TestAnAbsentBranchIsNotReportedAsDeleted(t *testing.T) {
 	}
 	if !strings.Contains(out, "already gone") {
 		t.Errorf("it did not say what actually happened:\n%s", out)
+	}
+}
+
+// TestAnAdvisoryLaneDoesNotBlockTheMerge is go-gfx/gfx#74, reduced.
+//
+// Twelve lanes green, one red, and the workflow run that produced all thirteen
+// concluded SUCCESS -- which GitHub does with a failed job only when that job
+// carried `continue-on-error`. Before this, every advisory lane in the fleet
+// made its pull request permanently unmergeable by this tool, although the lane
+// was red on purpose.
+func TestAnAdvisoryLaneDoesNotBlockTheMerge(t *testing.T) {
+	fakeWorkflowRuns = []map[string]any{suiteRun(7, "completed", "success")}
+	merged, _ := server(t, green(), []map[string]any{
+		{"id": 1, "name": "gofmt", "status": "completed", "conclusion": "success",
+			"check_suite": map[string]any{"id": 7}},
+		{"id": 2, "name": "arch loong64 (qemu)", "status": "completed", "conclusion": "failure",
+			"check_suite": map[string]any{"id": 7}},
+	})
+	code, out, errb := try(t, "o/r", "1")
+	if code != 0 || !*merged {
+		t.Errorf("an advisory lane blocked the merge: code=%d merged=%v\n%s", code, *merged, errb)
+	}
+	// A dispensation must never be SILENT. A lane quietly marked
+	// continue-on-error to get a merge through has to be visible in this
+	// tool's output, not inferred from it going quiet.
+	if !strings.Contains(out, "ADVISORY") || !strings.Contains(out, "arch loong64 (qemu)") {
+		t.Errorf("the dispensation was not named in the output:\n%s", out)
+	}
+}
+
+// TestARedLaneInAFailedRunStillRefuses is the negative control, and it is the
+// half that matters: widening a gate must not widen it to everything.
+//
+// The same red check in the same suite -- but the run concluded FAILURE, so
+// nothing was excused and the refusal stands.
+func TestARedLaneInAFailedRunStillRefuses(t *testing.T) {
+	fakeWorkflowRuns = []map[string]any{suiteRun(7, "completed", "failure")}
+	merged, _ := server(t, green(), []map[string]any{
+		{"id": 1, "name": "gofmt", "status": "completed", "conclusion": "success",
+			"check_suite": map[string]any{"id": 7}},
+		{"id": 2, "name": "test", "status": "completed", "conclusion": "failure",
+			"check_suite": map[string]any{"id": 7}},
+	})
+	if code, _, errb := try(t, "o/r", "1"); code == 0 || *merged {
+		t.Errorf("a red lane inside a FAILED run was merged: %s", errb)
+	}
+}
+
+// TestAnUnfinishedRunExcusesNothing: a run still going has concluded nothing,
+// and reading an empty conclusion as a dispensation would merge over a lane
+// that is about to go red.
+func TestAnUnfinishedRunExcusesNothing(t *testing.T) {
+	fakeWorkflowRuns = []map[string]any{suiteRun(7, "in_progress", "")}
+	merged, _ := server(t, green(), []map[string]any{
+		{"id": 2, "name": "test", "status": "completed", "conclusion": "failure",
+			"check_suite": map[string]any{"id": 7}},
+	})
+	if code, _, errb := try(t, "o/r", "1"); code == 0 || *merged {
+		t.Errorf("an unfinished run excused a failure: %s", errb)
+	}
+}
+
+// TestADispensationIsNotTransferredBetweenSuites: one run concluding success
+// does not excuse a red check belonging to a DIFFERENT suite. The join is the
+// suite id and nothing looser -- a commit can carry several workflow runs, and
+// one of them passing says nothing about another's jobs.
+func TestADispensationIsNotTransferredBetweenSuites(t *testing.T) {
+	fakeWorkflowRuns = []map[string]any{suiteRun(7, "completed", "success")}
+	merged, _ := server(t, green(), []map[string]any{
+		{"id": 2, "name": "test", "status": "completed", "conclusion": "failure",
+			"check_suite": map[string]any{"id": 9}},
+	})
+	if code, _, errb := try(t, "o/r", "1"); code == 0 || *merged {
+		t.Errorf("a dispensation crossed from suite 7 to suite 9: %s", errb)
+	}
+}
+
+// TestTheGreenPathAsksForNoWorkflowRuns pins the budget decision. The hourly
+// REST allowance is shared with Renovate and every other session on this
+// machine, so the ordinary green merge must not pay for a call whose answer it
+// cannot use.
+func TestTheGreenPathAsksForNoWorkflowRuns(t *testing.T) {
+	asked := false
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/actions/runs"):
+			asked = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []any{}})
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			fmt.Fprint(w, `{"merged":true}`)
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 1, "check_runs": []map[string]any{
+				{"id": 1, "name": "gofmt", "status": "completed", "conclusion": "success",
+					"check_suite": map[string]any{"id": 7}},
+			}})
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": []map[string]any{}})
+		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			_ = json.NewEncoder(w).Encode(green())
+		}
+	}))
+	t.Cleanup(s.Close)
+	was := apiBase
+	apiBase = s.URL
+	t.Cleanup(func() { apiBase = was })
+	if code, _, errb := try(t, "o/r", "1"); code != 0 {
+		t.Fatalf("a green merge failed: %s", errb)
+	}
+	if asked {
+		t.Error("the green path asked for /actions/runs; that answer buys nothing " +
+			"when no check is red, and the budget is shared")
 	}
 }
