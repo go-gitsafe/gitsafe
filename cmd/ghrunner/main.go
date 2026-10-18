@@ -56,6 +56,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 	"github.com/go-gitsafe/gitsafe/redact"
 )
@@ -82,8 +83,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&o.group, "group", "Default", "runner group")
 	fs.StringVar(&o.work, "work", "_work", "the runner's work directory, relative to its install")
 	fs.BoolVar(&o.remove, "remove", false, "unregister instead: config.sh remove on the machine, and the API entry here")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := cliflags.ParseFlags(fs, args); !ok {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(stderr, "usage: ghrunner -host user@machine [-name n] [-labels a,b] owner/repo")

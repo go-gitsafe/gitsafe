@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/redact"
 )
 
@@ -31,7 +32,7 @@ const helperName = "tokenfile"
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr *os.File) int {
-	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+	if len(args) == 1 && cliflags.IsHelpRequest(args[0]) {
 		fmt.Fprintln(stdout, "usage: gitpush [git push arguments]")
 		fmt.Fprintln(stdout, "pushes with a credential helper, so no token is ever on a command line")
 		return 0

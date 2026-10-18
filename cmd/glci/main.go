@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/glauth"
 	"github.com/go-gitsafe/gitsafe/redact"
 )
@@ -95,8 +96,8 @@ func run(args []string, dir string, stdout, stderr io.Writer) int {
 	watch := fs.Bool("watch", false, "wait until the pipeline is finished")
 	every := fs.Duration("every", 20*time.Second, "polling interval with -watch")
 	tail := fs.Int("log", 40, "lines of each failed job's log to show (0: none)")
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	if code, ok := cliflags.ParseFlags(fs, args); !ok {
+		return code
 	}
 	if fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "glci: at most one ref or !merge-request")

@@ -25,6 +25,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"net/http"
@@ -52,6 +53,22 @@ var userHomeDir = os.UserHomeDir
 func main() { osExit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// ⛔ ASKING IS NOT DEMANDING. The parse loop below appends anything it does
+	// not recognise to the list of scopes to demand, so until 2026-10-18
+	// `ghscopes -h` read the token, asked GitHub about it, and reported that a
+	// scope called `-h` was missing -- exit 1, for a question.
+	for _, a := range args {
+		if cliflags.IsHelpRequest(a) {
+			fmt.Fprintln(stdout, "usage: ghscopes [-f TOKEN-FILE] [scope...]")
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "Says which account a token belongs to and what it may do, without")
+			fmt.Fprintln(stdout, "printing the token. With scopes named, exits non-zero if one is missing:")
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "    ghscopes workflow")
+			fmt.Fprintln(stdout, "    ghscopes -f ~/.github-token-wide repo workflow")
+			return 0
+		}
+	}
 	// Where home is decided once. It was asked for in three places, which is
 	// three ways of not having one and one behaviour.
 	home, err := userHomeDir()

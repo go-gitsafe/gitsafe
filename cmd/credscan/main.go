@@ -42,6 +42,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/credfix"
 )
 
@@ -82,10 +83,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	verb, rest := args[0], args[1:]
-	switch verb {
-	case "-h", "--help", "help":
+	if cliflags.IsHelpRequest(verb) {
+		// ⛔ This knew three of the four spellings, so `credscan -help` printed
+		// the usage and exited 2 while `credscan -h` printed the same usage and
+		// exited 0. Measured 2026-10-18.
 		usage(stdout)
 		return exitClean
+	}
+	switch verb {
 	case "scan", "clean":
 	default:
 		fmt.Fprintf(stderr, "credscan: no such command %q\n", verb)
@@ -108,8 +113,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		roots = append(roots, a)
 	}
-	if err := fset.Parse(flags); err != nil {
-		return exitUsage
+	if code, ok := cliflags.ParseFlags(fset, flags); !ok {
+		return code
 	}
 	roots = append(roots, fset.Args()...)
 

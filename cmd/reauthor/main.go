@@ -79,6 +79,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/go-gitsafe/gitsafe/cliflags"
 )
 
 func main() {
@@ -93,8 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	dry := fs.Bool("dry-run", false, "say what would change, write nothing")
 	doScan := fs.Bool("scan", false, "walk the given roots for checkouts and say which ones still "+
 		"carry an identity of yours; read-only, and non-zero when it finds any")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := cliflags.ParseFlags(fs, args); !ok {
+		return code
 	}
 	if *identities == "" {
 		fmt.Fprintln(stderr, "reauthor: -identities is required: a list of identities in the source "+
