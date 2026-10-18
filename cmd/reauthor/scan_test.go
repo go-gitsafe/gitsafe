@@ -39,25 +39,25 @@ func TestAScanNamesOnlyTheCheckoutsThatCarryYou(t *testing.T) {
 	ids := identitiesFile(t, "email: "+mineEmail)
 	code, out, errb := exec2(t, "-identities", ids, "-scan", root)
 	if code != 1 {
-		t.Errorf("un balayage qui TROUVE doit sortir non-zéro, a rendu %d\n%s%s", code, out, errb)
+		t.Errorf("a scan that FINDS something must exit non-zero, got %d\n%s%s", code, out, errb)
 	}
 	if !strings.Contains(out, "nested/dirty") {
-		t.Errorf("le dépôt porteur n'est pas nommé:\n%s", out)
+		t.Errorf("the carrying repository is not named:\n%s", out)
 	}
 	if strings.Contains(out, filepath.Join(root, "tidy")) {
-		t.Errorf("un dépôt propre a été rapporté:\n%s", out)
+		t.Errorf("a clean repository was reported:\n%s", out)
 	}
 	if !strings.Contains(out, "2 checkouts") {
-		t.Errorf("le compte de dépôts est faux:\n%s", out)
+		t.Errorf("the checkout count is wrong:\n%s", out)
 	}
-	// La synthèse dit REPOSITORIES depuis le repliement des worktrees: un
-	// worktree n'est pas une publication distincte.
+	// The summary says REPOSITORIES because worktrees are folded in: a worktree
+	// is not a separate publication.
 	if !strings.Contains(out, "1 checkout(s) carry") {
-		t.Errorf("le compte de porteurs est faux:\n%s", out)
+		t.Errorf("the carrier count is wrong:\n%s", out)
 	}
-	// ⭐ L'adresse de l'autre contributeur ne doit PAS être comptée.
+	// ⭐ The other contributor's address must NOT be counted.
 	if strings.Contains(out, otherEmail) {
-		t.Errorf("l'identité d'un tiers a été comptée:\n%s", out)
+		t.Errorf("a third party's identity was counted:\n%s", out)
 	}
 }
 
@@ -76,9 +76,9 @@ func TestAScanOfCleanCheckoutsExitsZero(t *testing.T) {
 	}
 }
 
-// ⛔ Le committer compte autant que l'auteur: un commit écrit par quelqu'un
-// d'autre et rebasé par vous porte VOTRE adresse comme committer, et elle est
-// publiée tout aussi visiblement.
+// ⛔ The committer counts as much as the author: a commit written by somebody
+// else and rebased by you carries YOUR address as committer, and it is published
+// just as visibly.
 func TestTheCommitterCountsToo(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
@@ -96,7 +96,7 @@ func TestTheCommitterCountsToo(t *testing.T) {
 	ids := identitiesFile(t, "email: "+mineEmail)
 	code, out, _ := exec2(t, "-identities", ids, "-scan", root)
 	if code != 1 || !strings.Contains(out, mineEmail) {
-		t.Errorf("une adresse de committer n'a pas été vue: exit %d\n%s", code, out)
+		t.Errorf("a committer address went unseen: exit %d\n%s", code, out)
 	}
 }
 
@@ -109,9 +109,9 @@ func TestAScanRefusesWithoutRoots(t *testing.T) {
 	}
 }
 
-// ⭐ Un balayage n'a besoin ni d'identité configurée ni d'écriture, donc il ne
-// doit PAS refuser faute de user.name — sinon la moitié détection serait
-// inutilisable là où elle sert le plus.
+// ⭐ A scan needs neither a configured identity nor any write, so it must NOT
+// refuse for want of user.name — otherwise the detecting half would be unusable
+// exactly where it helps most.
 func TestAScanWorksWithNoConfiguredIdentity(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
@@ -122,13 +122,13 @@ func TestAScanWorksWithNoConfiguredIdentity(t *testing.T) {
 	run2(t, dir, nil, "init", "-q", "-b", "main", ".")
 	ids := identitiesFile(t, "email: "+mineEmail)
 	if code, out, errb := exec2(t, "-identities", ids, "-scan", root); code != 0 {
-		t.Errorf("exit %d (une identité configurée ne doit pas être requise)\n%s%s", code, out, errb)
+		t.Errorf("exit %d (a configured identity must not be required)\n%s%s", code, out, errb)
 	}
 }
 
-// ⛔ Un dépôt vide n'est pas un dépôt illisible: git refuse `log` avec un statut
-// non nul, et prendre cela pour une panne de lecture rendrait tout balayage
-// « incomplet ».
+// ⛔ An empty repository is not an unreadable one: git refuses `log` with a
+// non-zero status, and taking that for a read failure would make every scan
+// report itself "incomplete".
 func TestAnEmptyRepositoryIsNotUnreadable(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
@@ -140,24 +140,24 @@ func TestAnEmptyRepositoryIsNotUnreadable(t *testing.T) {
 	ids := identitiesFile(t, "email: "+mineEmail)
 	code, out, errb := exec2(t, "-identities", ids, "-scan", root)
 	if code != 0 {
-		t.Errorf("exit %d: un dépôt vide a été pris pour illisible\n%s%s", code, out, errb)
+		t.Errorf("exit %d: an empty repository was taken for an unreadable one\n%s%s", code, out, errb)
 	}
 	if strings.Contains(errb, "did not cover everything") {
-		t.Errorf("stderr annonce un balayage incomplet: %q", errb)
+		t.Errorf("stderr announces an incomplete scan: %q", errb)
 	}
 }
 
-// ⛔ La première lecture du balayage de flotte a été « 350 dépôts portent une
-// identité » — alors que 215 étaient sur le GitLab d'une institution, où son
-// adresse est à sa place, et 71 n'avaient aucun remote. Le total seul est le
-// mauvais chiffre pour agir, et j'ai fait la décomposition à la main, hors de
-// l'outil. Elle est donc dans l'outil.
+// ⛔ The first reading of the fleet scan was "350 repositories carry an
+// identity" — while 215 were on an institution's GitLab, where that address
+// belongs, and 71 had no remote at all. The total alone is the wrong number to
+// act on, and the breakdown was done by hand, outside the tool. So it is in the
+// tool now.
 func TestTheSummaryGroupsByWhereOriginPoints(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
 
-	// Trois porteurs: un publié sur un hôte public, un sur une forge interne,
-	// un sans aucun remote.
+	// Three carriers: one published on a public host, one on an internal forge,
+	// one with no remote at all.
 	mk := func(name, remote string) {
 		dir := filepath.Join(root, name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -179,8 +179,8 @@ func TestTheSummaryGroupsByWhereOriginPoints(t *testing.T) {
 		}, "commit", "-q", "-m", "mine")
 	}
 	mk("public", "https://github.invalid/o/r.git")
-	// ⭐ La forme scp n'a pas de schéma: c'est credurl qui sait la lire, et c'est
-	// la raison de ne pas écrire un second parseur d'URL ici.
+	// ⭐ The scp form has no scheme: credurl is what knows how to read it, and
+	// that is the reason not to write a second URL parser here.
 	mk("internal", "git@gitlab.internal.invalid:group/proj.git")
 	mk("nowhere", "")
 
@@ -196,30 +196,30 @@ func TestTheSummaryGroupsByWhereOriginPoints(t *testing.T) {
 		"(no remote — published nowhere)",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("la synthèse ne dit pas %q:\n%s", want, out)
+			t.Errorf("the summary does not say %q:\n%s", want, out)
 		}
 	}
-	// Chaque groupe tient exactement un dépôt et un commit.
+	// Each group holds exactly one repository and one commit.
 	if n := strings.Count(out, "commit(s) in    1 repo(s)"); n != 3 {
-		t.Errorf("3 groupes d'un dépôt attendus, %d trouvés:\n%s", n, out)
+		t.Errorf("3 single-repository groups expected, %d found:\n%s", n, out)
 	}
-	// ⛔ Et l'hôte doit figurer sur la ligne de CHAQUE dépôt: un tableau qui
-	// compte 88 dépôts sur un hôte public sans les nommer n'est pas
-	// exploitable, et le lecteur regroupe alors la sortie par CHEMIN pour les
-	// retrouver — la faute même que ce groupement existe pour éviter.
-	// ⛔ L'AMONT sur la ligne, pas seulement son hôte: la synthèse compte des
-	// amonts, et ne nommer que l'hôte laisse le lecteur chercher lesquels.
+	// ⛔ And the host must appear on EVERY repository's line: a table counting 88
+	// repositories on a public host without naming them is not actionable, and
+	// the reader then regroups the output by PATH to find them — the very
+	// mistake this grouping exists to avoid.
+	// ⛔ The UPSTREAM on the line, not only its host: the summary counts
+	// upstreams, and naming only the host leaves the reader hunting for which.
 	for _, want := range []string{
 		filepath.Join(root, "public") + "\n    github.invalid/o/r",
 		filepath.Join(root, "nowhere") + "\n    (no remote",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("la ligne du dépôt ne nomme pas son hôte (%q):\n%s", want, out)
+			t.Errorf("the repository's line does not name its host (%q):\n%s", want, out)
 		}
 	}
 }
 
-// Un chemin local comme remote EST un remote, et ce n'est pas « aucun remote ».
+// A local path as a remote IS a remote, and it is not "no remote".
 func TestALocalPathRemoteIsNotNoRemote(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
@@ -243,17 +243,17 @@ func TestALocalPathRemoteIsNotNoRemote(t *testing.T) {
 	ids := identitiesFile(t, "email: "+mineEmail)
 	_, out, _ := exec2(t, "-identities", ids, "-scan", root)
 	if !strings.Contains(out, "(a local path)") {
-		t.Errorf("un remote qui est un chemin local n'est pas nommé comme tel:\n%s", out)
+		t.Errorf("a remote that is a local path is not named as one:\n%s", out)
 	}
 	if strings.Contains(out, "no remote") {
-		t.Errorf("un chemin local a été pris pour une absence de remote:\n%s", out)
+		t.Errorf("a local path was taken for an absent remote:\n%s", out)
 	}
 }
 
-// ⛔⛔ Le défaut qui a fait bouger le chiffre une troisième fois. Le premier
-// balayage groupé annonçait « 89 dépôts GitHub porteurs, 13323 commits » — dont
-// une quatre-vingtaine étaient des worktrees d'agents d'UN SEUL fork, chacun
-// comptant la même histoire. Un worktree n'est pas une publication distincte.
+// ⛔⛔ The defect that moved the number a third time. The first grouped scan
+// announced "89 carrying GitHub repositories, 13323 commits" — of which some
+// eighty were agent worktrees of a SINGLE fork, each counting the same history.
+// A worktree is not a separate publication.
 func TestAWorktreeIsFoldedIntoItsRepository(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
@@ -273,7 +273,7 @@ func TestAWorktreeIsFoldedIntoItsRepository(t *testing.T) {
 		"GIT_AUTHOR_NAME=" + mineName, "GIT_AUTHOR_EMAIL=" + mineEmail,
 		"GIT_COMMITTER_NAME=" + mineName, "GIT_COMMITTER_EMAIL=" + mineEmail,
 	}, "commit", "-q", "-m", "mine")
-	// Deux worktrees, sous le dépôt lui-même, comme les worktrees d'agents.
+	// Two worktrees, under the repository itself, as agent worktrees are.
 	run2(t, main, nil, "worktree", "add", "-q", "-b", "wt1", filepath.Join(main, "wt", "one"))
 	run2(t, main, nil, "worktree", "add", "-q", "-b", "wt2", filepath.Join(main, "wt", "two"))
 
@@ -283,28 +283,28 @@ func TestAWorktreeIsFoldedIntoItsRepository(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
 	}
 	if !strings.Contains(out, "1 checkout(s) carry") || !strings.Contains(out, "1 distinct upstream(s)") {
-		t.Errorf("le dépôt et ses 2 worktrees ne sont pas repliés en UN:\n%s", out)
+		t.Errorf("the repository and its 2 worktrees are not folded into ONE:\n%s", out)
 	}
 	if !strings.Contains(out, "2 of the carriers were worktrees") {
-		t.Errorf("le repliement n'est pas dit:\n%s", out)
+		t.Errorf("the folding is not stated:\n%s", out)
 	}
-	// ⭐ Et c'est le dépôt LUI-MÊME qui est nommé, pas un de ses worktrees: c'est
-	// le répertoire sur lequel on agit.
+	// ⭐ And it is the repository ITSELF that is named, not one of its
+	// worktrees: that is the directory somebody acts on.
 	if !strings.Contains(out, main+"\n") {
-		t.Errorf("le dépôt principal n'est pas celui qui est nommé:\n%s", out)
+		t.Errorf("the main repository is not the one named:\n%s", out)
 	}
-	// Le tableau par hôte compte UN dépôt, pas trois.
+	// The per-host table counts ONE repository, not three.
 	if !strings.Contains(out, "in    1 repo(s)   github.invalid") {
-		t.Errorf("le tableau par hôte compte les worktrees:\n%s", out)
+		t.Errorf("the per-host table is counting the worktrees:\n%s", out)
 	}
 }
 
-// ⛔⛔ Le quatrième déplacement du chiffre, et la même cause: l'unité comptée.
-// Trois clones d'un même projet étaient comptés trois fois, et douze clones
-// bac-à-sable d'un fork douze fois. Ce qu'on corrige est l'AMONT, une seule fois.
+// ⛔⛔ The fourth time the number moved, and the same cause: the unit being
+// counted. Three clones of one project were counted three times, and twelve
+// sandbox clones of a fork twelve times. What gets fixed is the UPSTREAM, once.
 //
-// ⭐ Et les deux orthographes doivent répondre pareil: `git@host:o/r.git` et
-// `https://host/o/r` sont le même dépôt.
+// ⭐ And both spellings must answer alike: `git@host:o/r.git` and
+// `https://host/o/r` are the same repository.
 func TestSeveralClonesOfOneUpstreamCountOnce(t *testing.T) {
 	hermetic(t)
 	root := t.TempDir()
@@ -336,15 +336,15 @@ func TestSeveralClonesOfOneUpstreamCountOnce(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
 	}
 	if !strings.Contains(out, "3 checkout(s) carry") {
-		t.Errorf("les 3 checkouts doivent être listés, aucun n'est caché:\n%s", out)
+		t.Errorf("all 3 checkouts must be listed, none hidden:\n%s", out)
 	}
 	if !strings.Contains(out, "2 distinct upstream(s) to fix") {
-		t.Errorf("deux orthographes d'un même amont n'ont pas été repliées:\n%s", out)
+		t.Errorf("two spellings of one upstream were not folded together:\n%s", out)
 	}
 	if !strings.Contains(out, "1 of the carriers are further clones") {
-		t.Errorf("le clone replié n'est pas dit:\n%s", out)
+		t.Errorf("the folded clone is not stated:\n%s", out)
 	}
 	if !strings.Contains(out, "in    2 repo(s)   github.invalid") {
-		t.Errorf("le tableau par hôte doit compter 2 amonts:\n%s", out)
+		t.Errorf("the per-host table must count 2 upstreams:\n%s", out)
 	}
 }
