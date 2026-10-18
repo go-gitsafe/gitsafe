@@ -164,8 +164,16 @@ func quoted(stage string) bool {
 // a name on a list: `head` is bounded by construction, `grep -q` and `grep -m`
 // return at a match, and everything else here has to read to the end before it
 // can say anything at all.
+// ⛔ THE WRAPPERS HAVE TO BE SKIPPED ON THIS SIDE TOO. The first version of this
+// skipped them only on the producer, and the live control caught it at once:
+//
+//	timeout 400 go mod tidy 2>&1 | command head -5
+//
+// went straight through, because `command head` reads as the program `command`.
+// `command head` is the spelling the operator who wrote this rule types by
+// habit, so the guard would have been blind to its own author.
 func stopsEarly(stage string) bool {
-	w := words(stage)
+	w := skipPrefix(words(stage))
 	if len(w) == 0 {
 		return false
 	}

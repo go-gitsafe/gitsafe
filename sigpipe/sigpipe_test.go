@@ -31,6 +31,17 @@ func TestItRefusesAPipelineThatAbandonsTheWork(t *testing.T) {
 			`curl -o out.bin https://example.invalid/x | head -1`},
 		{"an absolute path to the consumer",
 			`go mod download | /usr/bin/head -2`},
+		// ⛔ Found by running the real command through the real harness after
+		// the first version shipped. `command head` reads as the program
+		// `command` unless the consumer's wrappers are skipped too — and it is
+		// the spelling this rule's own author types by habit, so the guard was
+		// blind to exactly the person it protects.
+		{"the consumer behind a shell builtin wrapper",
+			`timeout 400 go mod tidy 2>&1 | command head -5`},
+		{"the consumer behind env",
+			`go mod tidy | env head -5`},
+		{"the consumer behind both a path and a wrapper",
+			`go build ./... | command /usr/bin/head -5`},
 		{"the second statement is the offender",
 			"go list ./... | head -3\ngo mod tidy | head -3"},
 	} {
@@ -78,6 +89,12 @@ EOF`},
 		{"a pipe inside a string is not a pipeline", `go list ./... > f; grep "a|b" f`},
 		{"empty command", ``},
 		{"a different go subcommand that is a read", `go doc fmt.Println | head -5`},
+		// ⭐ The wrapper skipping must not turn a read-only producer into a
+		// refusal: `command` on either side changes nothing about who abandons
+		// what.
+		{"a wrapped consumer on a read-only producer", `cat f.txt | command head -5`},
+		{"a wrapped producer that is still a read", `command git log | command head -5`},
+		{"tail behind a wrapper still reads to the end", `go build ./... | command tail -5`},
 	} {
 		if f := Check(c.cmd); f.Found() {
 			t.Errorf("%s: wrongly refused (%s): %q", c.name, f, c.cmd)

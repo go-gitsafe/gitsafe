@@ -74,6 +74,10 @@ var corpus = []struct {
 	// repository and written up as a defect in THEIR module. Re-run without the
 	// pipe it exited 0. `head` had killed `tidy` five lines in.
 	{"a producer killed by its consumer", `timeout 400 go mod tidy 2>&1 | head -5`, "refuse"},
+	// ⛔ The spelling that went through the FIRST version of that rule, found by
+	// running the real command in the real harness rather than only in a table:
+	// `command head` reads as the program `command`.
+	{"the consumer behind a wrapper", `timeout 400 go mod tidy 2>&1 | command head -5`, "refuse"},
 
 	{"writing about it, quoted", "cat <<'EOF'\n" + gitPush + "\nEOF", "allow"},
 	{"a message that mentions it", "git commit -m 'about " + gitPush + "'", "allow"},
@@ -89,6 +93,7 @@ var corpus = []struct {
 	{"tail reads to the end, so nothing is abandoned", `go build ./... | tail -5`, "allow"},
 	{"a file can be read again for free", `cat go.mod | head -5`, "allow"},
 	{"a read-only producer", `go list ./... | head -5`, "allow"},
+	{"a wrapped consumer on a read-only producer", `cat go.mod | command head -5`, "allow"},
 	{"harmless", "go test ./...", "allow"},
 }
 
