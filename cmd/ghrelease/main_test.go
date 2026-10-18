@@ -287,16 +287,16 @@ func TestABurstLimitIsNotADeadCredential(t *testing.T) {
 	}
 }
 
-// ⛔ Ces trois tests fixent la raison d'être du changement du 2026-10-11.
+// ⛔ These three tests pin down the reason for the change of 2026-10-11.
 //
-// L'essai à blanc disait « would merge o/r#3, then tag its merge commit v1.0.0 »
-// quelle que soit l'état de la PR. Pour une PR DÉJÀ fusionnée cela se lit comme
-// « va tenter de fusionner » — alors que ghmerge rend 0 sur une PR déjà fusionnée,
-// donc ghrelease aurait enchaîné sur l'étiquetage du bon commit. Cette formulation a
-// envoyé quelqu'un contourner la commande, le 2026-10-10, pour poser l'étiquette
-// avec `gh api .../git/refs` et un sha lu dans `commits/main`; main avait bougé
-// entre-temps sous la fusion d'un pair. C'est la quatrième occurrence de la faute
-// décrite en tête de ce fichier, dans une orthographe neuve.
+// The dry run said "would merge o/r#3, then tag its merge commit v1.0.0"
+// whatever state the pull request was in. For an ALREADY merged request that
+// reads as "will attempt to merge" — whereas ghmerge returns 0 on an already
+// merged request, so ghrelease would have gone on to tag the right commit. That
+// wording sent somebody around the command on 2026-10-10, to place the tag with
+// `gh api .../git/refs` and a sha read from `commits/main`; main had moved in the
+// meantime under a peer's merge. It is the fourth occurrence of the mistake
+// described at the head of this file, in a new spelling.
 func TestADryRunOnAnAlreadyMergedRequestNamesTheCommitItWouldTag(t *testing.T) {
 	s := &stub{byPath: map[string]*http.Response{
 		"GET /repos/o/r/pulls/3": reply(http.StatusOK,
@@ -336,18 +336,17 @@ func TestADryRunOnAnOpenRequestSaysTheMergeCommitDoesNotExistYet(t *testing.T) {
 	}
 }
 
-// ⭐ Et le cas qui doit rester UTILISABLE: un essai à blanc qui trouve l'étiquette
-// libre mais ne peut pas lire la PR dit ce qu'il tenterait, dit sur stderr qu'il n'a
-// pas pu nommer le commit, et sort 0. Refuser ici rendrait -dry-run inutile
-// précisément quand on est prudent.
+// ⭐ And the case that must stay USABLE: a dry run that finds the tag free but
+// cannot read the pull request says what it would attempt, says on stderr that
+// it could not name the commit, and exits 0. Refusing here would make -dry-run
+// useless exactly when somebody is being careful.
 //
-// ⛔ Une première version de ce test employait doErr pour couper le réseau entier.
-// C'était une prémisse fausse: tagExists tourne AVANT ce bloc, donc un essai à blanc
-// ne survivait déjà pas à une panne générale. La branche n'est atteinte que quand la
-// recherche d'étiquette aboutit — 404 veut dire « libre » — et que la lecture de la
-// PR échoue.
+// ⛔ A first version of this test used doErr to cut the whole network. That was a
+// false premise: tagExists runs BEFORE this block, so a dry run already did not
+// survive a general outage. The branch is only reached when the tag lookup
+// succeeds — a 404 means "free" — and reading the pull request fails.
 func TestADryRunThatCannotReadTheRequestSaysSoAndStillWorks(t *testing.T) {
-	s := &stub{} // 404 partout: l'étiquette est libre, la PR illisible
+	s := &stub{} // 404 everywhere: the tag is free, the request unreadable
 	install(t, s)
 	var out, errb bytes.Buffer
 	if code := run([]string{"-token-file", withToken(t, "t"), "-dry-run", "o/r", "3", "v1.0.0"}, &out, &errb); code != 0 {

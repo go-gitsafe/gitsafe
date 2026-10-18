@@ -10,26 +10,27 @@ import (
 	"testing"
 )
 
-// ⛔ Ce test répond à la question que le paquet pose, retournée vers NOUS: est-ce que
-// l'un de NOS outils met le jeton là où tout le monde le lit?
+// ⛔ This test asks the question the package asks, turned back on US: does one
+// of OUR tools put the token where everybody can read it?
 //
-// L'audit du 2026-10-10 a suivi les six commandes qui appellent ghauth.Read et n'a
-// rien trouvé: le jeton ne va que vers des aides HTTP.
+// The audit of 2026-10-10 followed the six commands that call ghauth.Read and
+// found nothing: the token only ever reaches HTTP helpers.
 //
-// ⛔⛔ Et ce test ne suivait QUE ghauth.Read. `glauth.Read` est un second lecteur de
-// jeton — glscopes et glci s'en servent — donc le garde-fou était posé à UN SEUL des
-// deux endroits, ce qui est exactement la faute qu'il existe pour empêcher. Corrigé
-// le 2026-10-11, avec un troisième test qui ÉNUMÈRE les lecteurs du dépôt et échoue
-// si un quatrième paquet d'authentification apparaît sans être couvert: une liste
-// écrite à la main hérite de l'angle mort de celui qui l'a écrite. Mais une lecture n'est pas une
-// garantie. ghrunner montre la pression exacte: actions/runner veut le jeton en
-// `--token`, et son en-tête explique longuement comment il l'évite. La prochaine
-// personne qui en aura besoin atteindra `--token`.
+// ⛔⛔ And this test followed ONLY ghauth.Read. `glauth.Read` is a second token
+// reader — glscopes and glci use it — so the guard was placed at ONE of the two
+// sites, which is exactly the mistake it exists to prevent. Fixed on 2026-10-11,
+// with a third test that ENUMERATES the repository's readers and fails if a
+// fourth authentication package appears uncovered: a hand-written list inherits
+// the blind spot of whoever wrote it. But a reading is not a guarantee. ghrunner
+// shows the exact pressure: actions/runner wants the token in `--token`, and its
+// own header explains at length how it avoids that. The next person who needs it
+// will reach for `--token`.
 //
-// La règle: un identifiant qui tient la valeur rendue par un lecteur de jeton
-// (ghauth.Read, glauth.Read) ne doit apparaître dans AUCUN argument de
-// exec.Command/CommandContext, ni dans os.Setenv, ni dans une affectation à .Env. Peu importe par combien de Sprintf il passe: on
-// cherche l'identifiant n'importe où dans le sous-arbre de l'argument.
+// The rule: an identifier holding the value returned by a token reader
+// (ghauth.Read, glauth.Read) must appear in NO argument of
+// exec.Command/CommandContext, nor in os.Setenv, nor in an assignment to .Env.
+// However many Sprintf calls it passes through makes no difference: the
+// identifier is looked for anywhere in the argument's subtree.
 func TestNoToolPutsTheTokenOnACommandLineOrInTheEnvironment(t *testing.T) {
 	root := moduleRoot(t)
 	var files, withToken int
@@ -61,9 +62,9 @@ func TestNoToolPutsTheTokenOnACommandLineOrInTheEnvironment(t *testing.T) {
 		}
 		for _, v := range leaksToArgvOrEnv(f, holders) {
 			rel, _ := filepath.Rel(root, p)
-			t.Errorf("%s: « %s » tient la valeur d'un lecteur de jeton et atteint %s — "+
-				"une ligne de commande va dans la liste des processus, et un "+
-				"environnement se lit dans /proc et dans tout vidage de plantage",
+			t.Errorf("%s: %q holds the value of a token reader and reaches %s — "+
+				"a command line goes into the process list, and an environment "+
+				"is readable in /proc and in every crash dump",
 				rel, v.ident, v.where)
 		}
 		return nil
@@ -72,39 +73,39 @@ func TestNoToolPutsTheTokenOnACommandLineOrInTheEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// ⭐ Les deux moitiés. Un balayage qui ne lit rien ne rapporte rien, et passe.
+	// ⭐ Both halves. A scan that reads nothing reports nothing, and passes.
 	if files < 20 {
-		t.Fatalf("seulement %d fichiers .go lus: le balayage ne voit pas le module", files)
+		t.Fatalf("only %d .go file(s) read: the scan cannot see the module", files)
 	}
 	if withToken < 6 {
-		t.Fatalf("seulement %d fichiers tiennent un jeton; il y en avait 7 "+
-			"le 2026-10-10. Si le nom a changé, ce test ne contrôle plus rien", withToken)
+		t.Fatalf("only %d file(s) hold a token; there were 7 on 2026-10-10. "+
+			"If the name has changed, this test no longer checks anything", withToken)
 	}
-	t.Logf("%d fichiers .go, %d tiennent la valeur d'un lecteur de jeton", files, withToken)
+	t.Logf("%d .go files, %d hold the value of a token reader", files, withToken)
 }
 
-// ⭐ Et l'autre moitié: le détecteur doit RECONNAÎTRE une violation plantée. Sans ce
-// témoin, « aucune fuite » ne dit que « je n'ai pas su chercher ».
+// ⭐ And the other half: the detector must RECOGNISE a planted violation.
+// Without that witness, "no leak" only says "I did not know how to look".
 func TestTheDetectorCatchesAPlantedLeak(t *testing.T) {
 	for _, c := range []struct {
 		name, src string
 		want      bool
 	}{
-		{"argv direct", `package p
+		{"straight into argv", `package p
 func f() { tok, _ := ghauth.Read(p); exec.Command("gh", "api", "-H", tok) }`, true},
-		{"argv par Sprintf", `package p
+		{"into argv through Sprintf", `package p
 func f() { tok, _ := ghauth.Read(p); exec.Command("sh", "-c", fmt.Sprintf("x %s", tok)) }`, true},
-		{"environnement", `package p
+		{"into the environment", `package p
 func f() { tok, _ := ghauth.Read(p); cmd.Env = append(cmd.Env, "GH_TOKEN="+tok) }`, true},
 		{"os.Setenv", `package p
 func f() { tok, _ := ghauth.Read(p); os.Setenv("GH_TOKEN", tok) }`, true},
-		{"argv, lecteur GitLab", `package p
+		{"into argv, from the GitLab reader", `package p
 func f() { tok, _ := glauth.Read(p); exec.Command("glab", "--token", tok) }`, true},
-		{"en-tête HTTP, admis", `package p
+		{"an HTTP header, allowed", `package p
 func f() { tok, _ := ghauth.Read(p); req.Header.Set("Authorization", "Bearer "+tok) }`, false},
-		{"redact, admis", `package p
+		{"redact, allowed", `package p
 func f() { tok, _ := ghauth.Read(p); red := redact.New(tok); _ = red }`, false},
-		{"argv sans jeton, admis", `package p
+		{"argv with no token in it, allowed", `package p
 func f() { exec.Command("git", "remote", "get-url", "origin") }`, false},
 	} {
 		f, err := parser.ParseFile(token.NewFileSet(), "x.go", c.src, 0)
@@ -113,7 +114,7 @@ func f() { exec.Command("git", "remote", "get-url", "origin") }`, false},
 		}
 		got := len(leaksToArgvOrEnv(f, tokenHolders(f))) > 0
 		if got != c.want {
-			t.Errorf("%s: fuite détectée = %v, attendu %v", c.name, got, c.want)
+			t.Errorf("%s: leak detected = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
@@ -122,8 +123,7 @@ func f() { exec.Command("git", "remote", "get-url", "origin") }`, false},
 // Both halves of the fleet have one, and the test below asserts there are no others.
 var tokenReaders = map[string]string{"ghauth": "Read", "glauth": "Read"}
 
-// tokenHolders rend les identifiants auxquels la valeur d'un lecteur de jeton est
-// affectée.
+// tokenHolders returns the identifiers a token reader's value is assigned to.
 func tokenHolders(f *ast.File) map[string]bool {
 	out := map[string]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -155,9 +155,9 @@ func tokenHolders(f *ast.File) map[string]bool {
 
 type leak struct{ ident, where string }
 
-// leaksToArgvOrEnv rend les endroits où un identifiant porteur atteint un argv ou un
-// environnement. Il regarde tout le sous-arbre de chaque argument, donc un Sprintf
-// intermédiaire ne cache rien.
+// leaksToArgvOrEnv returns the places where a holding identifier reaches an argv
+// or an environment. It looks at each argument's whole subtree, so an
+// intervening Sprintf hides nothing.
 func leaksToArgvOrEnv(f *ast.File, holders map[string]bool) []leak {
 	if len(holders) == 0 {
 		return nil
@@ -179,7 +179,7 @@ func leaksToArgvOrEnv(f *ast.File, holders map[string]bool) []leak {
 			var where string
 			switch {
 			case isSelector(x.Fun, "exec", "Command"), isSelector(x.Fun, "exec", "CommandContext"):
-				where = "une ligne de commande"
+				where = "a command line"
 			case isSelector(x.Fun, "os", "Setenv"):
 				where = "os.Setenv"
 			default:
@@ -198,7 +198,7 @@ func leaksToArgvOrEnv(f *ast.File, holders map[string]bool) []leak {
 				}
 				for _, r := range x.Rhs {
 					if id := mentions(r); id != "" {
-						out = append(out, leak{id, "l'environnement d'un sous-processus"})
+						out = append(out, leak{id, "a subprocess's environment"})
 					}
 				}
 			}
@@ -229,20 +229,20 @@ func moduleRoot(t *testing.T) string {
 		}
 		d = filepath.Dir(d)
 	}
-	t.Skip("racine du module introuvable")
+	t.Skip("module root not found")
 	return ""
 }
 
-// ⛔⛔ Ce test existe parce que la liste `tokenReaders` est écrite à la main, et
-// qu'une liste écrite à la main hérite de l'angle mort de qui l'a écrite: la première
-// version ne contenait que `ghauth`, donc le garde-fou ci-dessus ne regardait pas
-// `glscopes` ni `glci`, qui lisent un jeton par `glauth.Read`. Le garde-fou était
-// posé à UN SEUL des deux endroits — la faute même qu'il sert à empêcher.
+// ⛔⛔ This test exists because the `tokenReaders` list is written by hand, and a
+// hand-written list inherits the blind spot of whoever wrote it: the first
+// version held only `ghauth`, so the guard above was not looking at `glscopes`
+// or `glci`, which read a token through `glauth.Read`. The guard was placed at
+// ONE of the two sites — the very mistake it serves to prevent.
 //
-// Il énumère donc les lecteurs que le dépôt contient réellement et échoue si l'un
-// n'est pas couvert. Le critère est la SIGNATURE — `func Read(path string) (string,
-// error)` dans un paquet qui n'est pas `main` — et non le nom du paquet: un troisième
-// fournisseur ne s'appellera pas forcément `*auth`.
+// So it enumerates the readers the repository actually contains and fails if one
+// is uncovered. The criterion is the SIGNATURE — `func Read(path string)
+// (string, error)` in a package that is not `main` — and not the package name: a
+// third provider will not necessarily be called `*auth`.
 func TestEveryTokenReaderInTheRepositoryIsCovered(t *testing.T) {
 	root := moduleRoot(t)
 	found := map[string]string{}
@@ -282,25 +282,25 @@ func TestEveryTokenReaderInTheRepositoryIsCovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	if scanned < 20 {
-		t.Fatalf("seulement %d fichiers lus: le balayage ne voit pas le module", scanned)
+		t.Fatalf("only %d file(s) read: the scan cannot see the module", scanned)
 	}
 	if len(found) == 0 {
-		t.Fatal("aucun lecteur de jeton trouvé: la signature recherchée ne correspond plus " +
-			"à rien, et ce test ne contrôle donc rien")
+		t.Fatal("no token reader found: the signature being looked for no longer " +
+			"matches anything, so this test checks nothing")
 	}
 	for pkg, where := range found {
 		if _, ok := tokenReaders[pkg]; !ok {
-			t.Errorf("%s expose un lecteur de jeton (%s) que tokenReaders ne nomme pas: "+
-				"le garde-fou ne suit donc pas ce qu'il rend. L'ajouter.", pkg, where)
+			t.Errorf("%s exposes a token reader (%s) that tokenReaders does not name, "+
+				"so the guard does not follow what it returns. Add it.", pkg, where)
 		}
 	}
 	for pkg := range tokenReaders {
 		if _, ok := found[pkg]; !ok {
-			t.Errorf("tokenReaders nomme %s, qui n'expose plus de lecteur de jeton: "+
-				"une entrée morte fait croire à une couverture qui n'existe plus", pkg)
+			t.Errorf("tokenReaders names %s, which no longer exposes a token reader: "+
+				"a dead entry suggests a coverage that no longer exists", pkg)
 		}
 	}
-	t.Logf("%d fichiers lus, lecteurs trouvés: %v", scanned, found)
+	t.Logf("%d file(s) read, readers found: %v", scanned, found)
 }
 
 // readsACredential matches `func Read(path string) (string, error)`.

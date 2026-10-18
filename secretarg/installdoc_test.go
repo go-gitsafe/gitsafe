@@ -8,22 +8,23 @@ import (
 	"testing"
 )
 
-// ⛔ Ce test existe parce que la liste d'installation du README nommait 9 des 15
-// commandes. Les absences qui comptaient:
+// ⛔ This test exists because the README's install list named 9 of the 15
+// commands. The absences that mattered:
 //
-//   - `git-credential-tokenfile`, que `gitpush` EXIGE — il nomme `tokenfile` comme
-//     pourvoyeur et git le résout en `git-credential-tokenfile` sur le PATH. Sans
-//     lui, rien ne sert le jeton et le premier push échoue, ce qui est exactement
-//     le moment où quelqu'un met un identifiant dans une URL.
-//   - `ghrelease`, à qui le README consacre pourtant une section entière.
+//   - `git-credential-tokenfile`, which `gitpush` REQUIRES — it names
+//     `tokenfile` as the helper and git resolves that to
+//     `git-credential-tokenfile` on the PATH. Without it nothing serves the
+//     token and the first push fails, which is exactly the moment somebody puts
+//     a credential in a URL.
+//   - `ghrelease`, to which the README devotes a whole section.
 //
-// Une commande qu'on n'installe pas est une commande qui n'existe pas, et la liste
-// se périme en silence à chaque commande ajoutée.
+// A command nobody installs is a command that does not exist, and the list goes
+// stale in silence every time a command is added.
 func TestTheInstallListNamesEveryCommand(t *testing.T) {
 	root := moduleRoot(t)
 	ents, err := os.ReadDir(filepath.Join(root, "cmd"))
 	if err != nil {
-		t.Skipf("pas de répertoire cmd: %v", err)
+		t.Skipf("no cmd directory: %v", err)
 	}
 	var cmds []string
 	for _, e := range ents {
@@ -32,23 +33,24 @@ func TestTheInstallListNamesEveryCommand(t *testing.T) {
 		}
 	}
 	if len(cmds) < 5 {
-		t.Fatalf("seulement %d commandes vues: la lecture de cmd/ ne rend presque rien", len(cmds))
+		t.Fatalf("only %d command(s) seen: reading cmd/ returns almost nothing", len(cmds))
 	}
 
 	b, err := os.ReadFile(filepath.Join(root, "README.md"))
 	if err != nil {
-		t.Skipf("pas de README: %v", err)
+		t.Skipf("no README: %v", err)
 	}
 	listed := map[string]bool{}
 	for _, m := range regexp.MustCompile(`cmd/([a-z0-9-]+)@latest`).FindAllStringSubmatch(string(b), -1) {
 		listed[m[1]] = true
 	}
-	// ⭐ L'autre moitié: si le motif ne reconnaît plus une ligne d'installation, il
-	// ne trouve rien et le test rapporterait « tout manque » — ou, si on inversait
-	// la comparaison, « rien ne manque ». Les deux sont faux pour la même raison.
+	// ⭐ The other half: if the pattern stops recognising an install line it
+	// finds nothing, and this test would report "everything is missing" — or,
+	// with the comparison the other way round, "nothing is missing". Both are
+	// wrong for the same reason.
 	if len(listed) == 0 {
-		t.Fatal("aucune ligne `go install .../cmd/X@latest` reconnue dans le README: " +
-			"le motif ne lit plus la liste, et ce test ne contrôle rien")
+		t.Fatal("no `go install .../cmd/X@latest` line recognised in the README: " +
+			"the pattern no longer reads the list, and this test checks nothing")
 	}
 
 	var missing []string
@@ -58,14 +60,14 @@ func TestTheInstallListNamesEveryCommand(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("%d commande(s) que la liste d'installation du README ne nomme pas: %s\n  "+
-			"Une commande qu'on n'installe pas est une commande qui n'existe pas.",
+		t.Errorf("%d command(s) the README's install list does not name: %s\n  "+
+			"A command nobody installs is a command that does not exist.",
 			len(missing), strings.Join(missing, " "))
 	}
 	for name := range listed {
 		if _, err := os.Stat(filepath.Join(root, "cmd", name)); err != nil {
-			t.Errorf("le README fait installer cmd/%s, qui n'existe pas", name)
+			t.Errorf("the README installs cmd/%s, which does not exist", name)
 		}
 	}
-	t.Logf("%d commandes, %d nommées dans la liste", len(cmds), len(listed))
+	t.Logf("%d commands, %d named in the list", len(cmds), len(listed))
 }
