@@ -844,6 +844,76 @@ Ablations, each of which compiles: making `head` not count as an early exit turn
 turns **11** allowances red and leaves every refusal green. Neither half of the
 table is blind.
 
+## Work the shell should not be doing
+
+`guard-bash` refuses a command that **processes** rather than invokes: a
+pipeline, a shell loop, `awk`/`sed`/`perl`/`python` doing the work, or a commit
+message taken from stdin instead of a file.
+
+The rule is not new. It is the second section of this machine's own
+instructions — *"No awk, sed, shell, python or perl — write the tool in Go …
+Bash only invokes tools … no pipes, loops"* — and that file says of itself that
+*"The user has had to ask for"* it repeatedly.
+
+### One session is the whole argument
+
+On **2026-10-18** the same operator, in the same hours, met both kinds of rule:
+
+| rule | where it lived | what happened |
+|---|---|---|
+| a status read after a pipeline | **a guard** (`pipestatus`) | refused at 09:35, could not be worked around |
+| no pipes, loops or interpreters | **a written file**, read three times, agreed to twice | broken for twelve hours |
+
+What the unenforced one cost, in that single session:
+
+- a measurement that walked **669** files where a Go program walks **1003**;
+- *"0 of 120 pins are ahead of their tag"* reported, where there are **8**;
+- a whole pass reporting **zero** findings from a column offset — which is what
+  a clean fleet looks like;
+- a proxy error sorted to the end of a version list and published as a release;
+- an exit status read from `tail` instead of from the command.
+
+Five wrong answers, one cause. That is why it is here and not only written down.
+
+### What it must not refuse, and that half is longer
+
+This is the broadest rule in the repository, so the allow table is the bigger
+one — a guard that refuses ordinary work gets switched off wholesale rather than
+once:
+
+```
+go test ./...                       invoking a tool
+go run ./internal/thing             the sanctioned way to process
+go test ./... > /tmp/out.txt 2>&1   a REDIRECT is not a pipe, and
+                                    redirect-then-read is what the rule asks for
+git commit -F /tmp/msg.txt          a body in a file
+gh pr create --body-file /tmp/b.md  likewise
+grep -rn sed --include="*.go" .     an interpreter NAMED is not one RUNNING
+echo 'never write a | b'            writing about a form is not that form
+cat <<'EOF' … EOF                   a quoted heredoc is literal
+```
+
+Only the command word of a stage decides, or the guard would refuse every `grep`
+for the rule's own text — including the ones in this README.
+
+`GITSAFE_ALLOW_SHELLWORK=1` in front of **one** command is the escape, and it
+exists because the breadth is real.
+
+### It cost four of hookcheck's own cases, and that is said rather than hidden
+
+Five cases in `hookcheck`'s corpus were `allow` and are now `refuse`: they were
+written to prove that `pipestatus` and `sigpipe` do not over-refuse, and they
+contain pipes. Nothing is lost by flipping them, because the discrimination they
+were written for lives in `pipestatus_test.go` and `sigpipe_test.go` in exactly
+those forms; this corpus tests the **wiring**, and a case whose verdict now comes
+from a third rule still tests that. `hookcheck` is what caught the four
+duplicates left behind while editing it.
+
+```
+v0.14.0 as installed    wrong on 8 of 32
+with this change        right on all 32
+```
+
 ## Discarding uncommitted work
 
 `guard-bash` refuses a command that throws away what exists only in the working

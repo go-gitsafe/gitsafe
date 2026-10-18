@@ -85,15 +85,33 @@ var corpus = []struct {
 	{"the wrapper itself", "gitpush origin main", "allow"},
 	{"a subcommand that shares the word", "git stash push -m wip", "allow"},
 	{"asking for help", ghMerge + " --help", "allow"},
-	{"the same read with pipefail set", `set -o pipefail; go build ./... | tail -5; echo "status=$?"`, "allow"},
+	// ⛔ THESE FIVE USED TO BE "allow", and each proved that pipestatus or
+	// sigpipe does not over-refuse. They are refused now — by shellwork, for a
+	// different reason: the instruction file's second section says Bash invokes
+	// tools and does not pipe. Nothing is lost by flipping them here, because
+	// the discrimination they were written for lives in pipestatus_test.go and
+	// sigpipe_test.go, in exactly these forms. What this corpus tests is the
+	// WIRING, and a case whose verdict now comes from a third rule still tests
+	// that.
+	{"pipefail does not excuse a pipeline from the Go rule", `set -o pipefail; go build ./... | tail -5; echo "status=$?"`, "refuse"},
+	{"tail reads to the end, and is still a pipeline", `go build ./... | tail -5`, "refuse"},
+	{"a file read again for free, still a pipeline", `cat go.mod | head -5`, "refuse"},
+	{"a read-only producer, still a pipeline", `go list ./... | head -5`, "refuse"},
+	{"a wrapped consumer, still a pipeline", `cat go.mod | command head -5`, "refuse"},
+	// And the three shapes of shell work the file names, which the operator
+	// typed on 2026-10-18 after reading the rule three times.
+	{"awk doing the processing", `go version -m ~/.local/bin/gitpush | awk '/build/ {print $3}'`, "refuse"},
+	{"a shell loop", `for i in 1 2 3; do echo "$i"; done`, "refuse"},
+	{"a commit body on stdin rather than in a file", "git commit -F -", "refuse"},
+
 	{"a status with no pipeline before it", "go build ./...; echo $?", "allow"},
+	{"a redirect is not a pipe, and is what the rule asks for", `go test ./... > /tmp/out.txt 2>&1`, "allow"},
+	{"a commit body in a FILE", `git commit -F /tmp/msg.txt`, "allow"},
+	{"go run, the sanctioned way to process", `go run ./internal/macapp -install`, "allow"},
+	{"an interpreter named as an argument is not running", `grep -rn sed --include="*.go" .`, "allow"},
 	// ⭐ The three that keep the sibling rule from refusing ordinary work:
 	// `tail` reads to the end so the build finishes, a file can be read again
 	// for free, and a read-only producer abandons nothing.
-	{"tail reads to the end, so nothing is abandoned", `go build ./... | tail -5`, "allow"},
-	{"a file can be read again for free", `cat go.mod | head -5`, "allow"},
-	{"a read-only producer", `go list ./... | head -5`, "allow"},
-	{"a wrapped consumer on a read-only producer", `cat go.mod | command head -5`, "allow"},
 	{"harmless", "go test ./...", "allow"},
 }
 

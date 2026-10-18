@@ -37,6 +37,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
+	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
 )
 
@@ -121,6 +122,25 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s.\n\n%s\n\n%s",
 				f.Why(), f.String(), sigpipe.Advice))
+		}
+	}
+	// ⛔ THE INSTRUCTION FILE'S SECOND SECTION, which until now lived only
+	// there: "No awk, sed, shell, python or perl — write the tool in Go …
+	// Bash only invokes tools … no pipes, loops".
+	//
+	// 2026-10-18 is the control for why it belongs here. The one rule of this
+	// family that was already a guard — pipestatus, above — refused the
+	// operator at 09:35 and could not be worked around. This one, written down
+	// three times in the same file and agreed to twice, was broken for twelve
+	// hours, and cost five wrong measurements in one session. See [shellwork].
+	//
+	// It is the broadest rule here, which is why its own allow table is the
+	// longer one and why the escape exists.
+	if os.Getenv("GITSAFE_ALLOW_SHELLWORK") == "" {
+		if f := shellwork.Check(p.ToolInput.Command); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s.\n\n%s\n\n%s\n\n%s",
+				f.Why(), f.String(), f.Instead, shellwork.Advice))
 		}
 	}
 	return 0
