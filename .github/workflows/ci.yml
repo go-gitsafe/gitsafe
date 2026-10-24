@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2' }
+        with: { go-version: '1.27.3' }
       # ⛔ SAY WHICH TOOLCHAIN RAN. A green check that does not record the
       # compiler behind it makes every figure measured under it unattributable:
       # go.mod said 1.26 on a sibling repository for weeks while its CI asked
@@ -53,13 +53,30 @@ jobs:
       - run: go build ./...
       - run: go test -count=1 ./...
       - run: CGO_ENABLED=1 go test -race -count=1 ./...
+  # redact.Find is fed whatever a language model or its user writes, through
+  # the go-llmflow gateway's hide_secrets guard: untrusted input.
+  fuzz:
+    name: fuzz smoke ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: FuzzFind, pkg: ./redact }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.3' }
+      - run: go version
+      - run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 45s ${{ matrix.pkg }}
+
   vulns:
     name: govulncheck, judged by vulngate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2' }
+        with: { go-version: '1.27.3' }
       - run: go version
       # ⛔ WHY THIS REPOSITORY OF ALL OF THEM. gitsafe is what the fleet trusts
       # to keep a credential out of a URL, and it had no lane asking whether
@@ -75,6 +92,8 @@ jobs:
       # consumer running `go install ...@latest` with GOTOOLCHAIN=local on
       # 1.27.1 build a vulnerable binary in silence. The floor is now 1.27.2, so
       # that build refuses instead. This lane is what notices the next time.
+      # It did, on 2026-10-24: GO-2026-6809 (stdlib, fixed in 1.27.3); the CI
+      # and the floor moved to 1.27.3.
       #
       # ⛔ NO `set -o pipefail`, deliberately. govulncheck exits non-zero over
       # findings it has decided this module does not call, and zero over some it
@@ -112,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2' }
+        with: { go-version: '1.27.3' }
       # ⛔ SAY WHICH TOOLCHAIN RAN. A green check that does not record the
       # compiler behind it makes every figure measured under it unattributable:
       # go.mod said 1.26 on a sibling repository for weeks while its CI asked

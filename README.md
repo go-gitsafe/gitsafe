@@ -134,7 +134,11 @@ of it.** `credscan` knew three of the four and missed `-help`, so `credscan
 them: one answers "is the part before the `@` a secret or a username" and holds
 the one table of issuer prefixes every guard here asks, one walks a machine and
 repairs what it finds, one hides
-secrets by their shape wherever they appear, one answers "does this push write
+secrets by their shape wherever they appear (`redact.Find` also says where
+each one lies and what kind it is — a literal, an issuer's token, a URL's
+userinfo — without returning the value, for callers that mask a stream or must
+report what they masked; the go-llmflow gateway's `hide_secrets` guardrail is
+one), one answers "does this push write
 the branch pull requests land on", and one reads a credential without ever
 putting it where a second process could see it — and knows that GitHub's scopes
 are a hierarchy, so a token ticked `write:packages` is not told it cannot read
