@@ -53,6 +53,23 @@ jobs:
       - run: go build ./...
       - run: go test -count=1 ./...
       - run: CGO_ENABLED=1 go test -race -count=1 ./...
+  # redact.Find is fed whatever a language model or its user writes, through
+  # the go-llmflow gateway's hide_secrets guard: untrusted input.
+  fuzz:
+    name: fuzz smoke ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: FuzzFind, pkg: ./redact }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.2' }
+      - run: go version
+      - run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 45s ${{ matrix.pkg }}
+
   vulns:
     name: govulncheck, judged by vulngate
     runs-on: ubuntu-latest
