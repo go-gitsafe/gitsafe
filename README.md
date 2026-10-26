@@ -138,7 +138,13 @@ secrets by their shape wherever they appear (`redact.Find` also says where
 each one lies and what kind it is — a literal, an issuer's token, a URL's
 userinfo — without returning the value, for callers that mask a stream or must
 report what they masked; the go-llmflow gateway's `hide_secrets` guardrail is
-one), one answers "does this push write
+one — since v0.17.1 it finds the issuers' prefixes and `://` with
+`strings.Index` and runs its patterns only on the word around them instead
+of stepping a regexp automaton through the whole text: identical results,
+compared on 20,000 generated texts and by a fuzz target, and about 30 times
+faster on the gateway's 2 KB benchmark prompt, 4 µs instead of 130 µs on an
+Apple M4 Max on 2026-10-26, measured on a loaded machine and so only an order
+of magnitude), one answers "does this push write
 the branch pull requests land on", and one reads a credential without ever
 putting it where a second process could see it — and knows that GitHub's scopes
 are a hierarchy, so a token ticked `write:packages` is not told it cannot read

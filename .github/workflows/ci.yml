@@ -63,6 +63,7 @@ jobs:
       matrix:
         include:
           - { target: FuzzFind, pkg: ./redact }
+          - { target: FuzzLocateMatchesWholeText, pkg: ./redact }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

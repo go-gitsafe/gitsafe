@@ -63,17 +63,29 @@ func (r *Redactor) String(s string) string {
 	for _, lit := range r.literals {
 		s = strings.ReplaceAll(s, lit, Mask)
 	}
-	for _, re := range shapes {
-		s = re.ReplaceAllStringFunc(s, func(m string) string {
-			// The URL shape carries the scheme and the host around the secret;
-			// keeping them makes the redacted line still readable.
-			if strings.HasPrefix(m, "://") {
-				return "://" + Mask + "@"
-			}
-			return Mask
-		})
+	// The same replacements as ReplaceAllStringFunc on each shape, which
+	// replaces exactly FindAll's matches; locate finds them without running
+	// the regexp over the whole text.
+	s = replaceAt(s, locateTokens(s), Mask)
+	// The URL shape carries the scheme and the host around the secret;
+	// keeping them makes the redacted line still readable.
+	return replaceAt(s, locateURLCredentials(s), "://"+Mask+"@")
+}
+
+// replaceAt replaces the ordered, non-overlapping locs of s with repl.
+func replaceAt(s string, locs [][]int, repl string) string {
+	if len(locs) == 0 {
+		return s
 	}
-	return s
+	var b strings.Builder
+	last := 0
+	for _, l := range locs {
+		b.WriteString(s[last:l[0]])
+		b.WriteString(repl)
+		last = l[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 // Span is where a secret lies in a text: s[Start:End], and why it was taken
@@ -118,10 +130,10 @@ func (r *Redactor) Find(s string) []Span {
 			i += j + len(lit)
 		}
 	}
-	for _, loc := range shapes[0].FindAllStringIndex(s, -1) {
+	for _, loc := range locateTokens(s) {
 		spans = append(spans, Span{loc[0], loc[1], Token})
 	}
-	for _, loc := range shapes[1].FindAllStringIndex(s, -1) {
+	for _, loc := range locateURLCredentials(s) {
 		// The match is "://userinfo@": the secret is between the two.
 		spans = append(spans, Span{loc[0] + len("://"), loc[1] - 1, URLCredential})
 	}
