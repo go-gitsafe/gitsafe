@@ -23,6 +23,7 @@ func reply(code int, body string) *http.Response {
 // stub installs a fake GitHub and a fake merge, and reports what was asked.
 type stub struct {
 	calls  []string
+	bodies map[string]string // request body, by "METHOD path"
 	byPath map[string]*http.Response
 	doErr  error
 	merged error
@@ -35,6 +36,13 @@ func install(t *testing.T, s *stub) {
 	t.Cleanup(func() { httpDo, runMerge, userHomeDir = oh, om, ou })
 	httpDo = func(req *http.Request) (*http.Response, error) {
 		s.calls = append(s.calls, req.Method+" "+req.URL.Path)
+		if req.Body != nil {
+			b, _ := io.ReadAll(req.Body)
+			if s.bodies == nil {
+				s.bodies = map[string]string{}
+			}
+			s.bodies[req.Method+" "+req.URL.Path] = string(b)
+		}
 		if s.doErr != nil {
 			return nil, s.doErr
 		}
@@ -145,6 +153,7 @@ func TestAMergeThatWorksIsTaggedAtItsMergeCommit(t *testing.T) {
 	s := &stub{byPath: map[string]*http.Response{
 		"GET /repos/o/r/pulls/3":   reply(http.StatusOK, `{"merged":true,"merge_commit_sha":"cafebabe0000"}`),
 		"POST /repos/o/r/git/refs": reply(http.StatusCreated, `{}`),
+		"POST /repos/o/r/releases": reply(http.StatusCreated, `{}`),
 	}}
 	install(t, s)
 	var out, errb bytes.Buffer
@@ -156,6 +165,97 @@ func TestAMergeThatWorksIsTaggedAtItsMergeCommit(t *testing.T) {
 	}
 	if s.ran != 1 {
 		t.Errorf("merged %d time(s)", s.ran)
+	}
+	// go-gitsafe/gitsafe#59: the GitHub release is created too, for this
+	// tag, with GitHub's generated notes.
+	rel := s.bodies["POST /repos/o/r/releases"]
+	if !strings.Contains(rel, `"tag_name":"v1.0.0"`) || !strings.Contains(rel, `"generate_release_notes":true`) ||
+		!strings.Contains(rel, `"make_latest":"legacy"`) || !strings.Contains(out.String(), "released v1.0.0") {
+		t.Errorf("release request %q, stdout %q", rel, out.String())
+	}
+}
+
+// The notes of -notes-file are the release's body, not GitHub's.
+func TestNotesFile(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/pulls/3":   reply(http.StatusOK, `{"merged":true,"merge_commit_sha":"cafebabe0000"}`),
+		"POST /repos/o/r/git/refs": reply(http.StatusCreated, `{}`),
+		"POST /repos/o/r/releases": reply(http.StatusCreated, `{}`),
+	}}
+	install(t, s)
+	notes := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(notes, []byte("Hand-written notes."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", withToken(t, "t"), "-notes-file", notes, "o/r", "3", "v1.0.0"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	rel := s.bodies["POST /repos/o/r/releases"]
+	if !strings.Contains(rel, `"body":"Hand-written notes."`) || strings.Contains(rel, "generate_release_notes") {
+		t.Errorf("release request %q", rel)
+	}
+}
+
+// The release fails after the tag was pushed: the command fails loudly, says
+// what exists and what does not, and names the resume, which then creates
+// the release for the EXISTING tag without asking to tag anything.
+func TestReleaseMissingAfterTheTagAndItsResume(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/pulls/3":   reply(http.StatusOK, `{"merged":true,"merge_commit_sha":"cafebabe0000"}`),
+		"POST /repos/o/r/git/refs": reply(http.StatusCreated, `{}`),
+		"POST /repos/o/r/releases": reply(http.StatusUnprocessableEntity, `{"message":"Validation Failed"}`),
+	}}
+	install(t, s)
+	tok := withToken(t, "t")
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", tok, "o/r", "3", "v1.0.0"}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "tag created, release missing") || !strings.Contains(errb.String(), "ghrelease -release-only o/r v1.0.0") {
+		t.Errorf("stderr = %q", errb.String())
+	}
+
+	// The resume: the tag exists, the release does not.
+	s2 := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK, `{}`),
+		"POST /repos/o/r/releases":           reply(http.StatusCreated, `{}`),
+	}}
+	install(t, s2)
+	out.Reset()
+	errb.Reset()
+	if code := run([]string{"-token-file", tok, "-release-only", "o/r", "v1.0.0"}, &out, &errb); code != 0 {
+		t.Fatalf("resume: exit %d: %s", code, errb.String())
+	}
+	for _, c := range s2.calls {
+		if c == "POST /repos/o/r/git/refs" || strings.HasPrefix(c, "PATCH") || strings.HasPrefix(c, "DELETE") {
+			t.Errorf("the resume touched the tag: %s", c)
+		}
+	}
+	if s2.ran != 0 {
+		t.Error("the resume merged")
+	}
+	if !strings.Contains(out.String(), "not moved") {
+		t.Errorf("stdout = %q", out.String())
+	}
+
+	// A tag that does not exist is not created by the resume.
+	install(t, &stub{})
+	errb.Reset()
+	if code := run([]string{"-token-file", tok, "-release-only", "o/r", "v9.9.9"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "does not create one") {
+		t.Errorf("resume without a tag: exit %d, %q", code, errb.String())
+	}
+
+	// A release that exists already: nothing to do.
+	install(t, &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/git/ref/tags/v1.0.0":  reply(http.StatusOK, `{}`),
+		"GET /repos/o/r/releases/tags/v1.0.0": reply(http.StatusOK, `{}`),
+	}})
+	out.Reset()
+	if code := run([]string{"-token-file", tok, "-release-only", "o/r", "v1.0.0"}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "already has a release") {
+		t.Errorf("resume with a release: exit %d, %q", code, out.String())
 	}
 }
 

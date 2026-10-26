@@ -95,8 +95,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	tokenFile := fs.String("token-file", "", "the file holding the token (default ~/"+defaultToken+")")
 	dry := fs.Bool("dry-run", false, "say what would happen, merge nothing and tag nothing")
+	notesFile := fs.String("notes-file", "", "the release notes (default: GitHub's, generated from the pull requests merged since the previous tag)")
+	releaseOnly := fs.Bool("release-only", false, "create the GitHub release of an EXISTING tag, and nothing else: "+
+		"[owner/repo] <tag> (the resume after \"tag created, release missing\")")
 	if code, ok := cliflags.ParseFlags(fs, args); !ok {
 		return code
+	}
+	var notes *string
+	if *notesFile != "" {
+		b, err := os.ReadFile(*notesFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "ghrelease: cannot read the notes file: %v\n", err)
+			return 2
+		}
+		s := string(b)
+		notes = &s
+	}
+	if *releaseOnly {
+		return resumeRelease(fs.Args(), *tokenFile, notes, stdout, stderr)
 	}
 	repo, number, tag, err := target(fs.Args())
 	if err != nil {
@@ -179,7 +195,113 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "tagged %s at %s, the merge commit of %s#%d\n", tag, short(sha), repo, number)
+	// The release is part of the job: a tag without one leaves the
+	// repository's Releases page, and its Latest badge, on the previous
+	// version (go-gitsafe/gitsafe#59: three times on 2026-10-26).
+	if err := createRelease(token, repo, tag, notes); err != nil {
+		return releaseMissing(stderr, repo, tag, err)
+	}
+	fmt.Fprintf(stdout, "released %s\n", tag)
 	return 0
+}
+
+// releaseMissing says, loudly, that the tag exists and its release does not,
+// and how to finish without touching the tag.
+func releaseMissing(stderr io.Writer, repo, tag string, err error) int {
+	fmt.Fprintf(stderr, "ghrelease: tag created, release missing: %v\n", err)
+	fmt.Fprintf(stderr, "ghrelease: the tag stays where it is; finish with:\n")
+	fmt.Fprintf(stderr, "  ghrelease -release-only %s %s\n", repo, tag)
+	return 1
+}
+
+// resumeRelease creates the release of a tag that already exists. It never
+// creates, moves or deletes a tag: a missing tag is an error.
+func resumeRelease(args []string, tokenFile string, notes *string, stdout, stderr io.Writer) int {
+	var repo, tag string
+	var err error
+	switch len(args) {
+	case 1:
+		tag = args[0]
+		repo, err = originRepo()
+	case 2:
+		repo, tag = args[0], args[1]
+	default:
+		err = errors.New("-release-only takes [owner/repo] <tag>")
+	}
+	if err == nil && !strings.HasPrefix(tag, "v") {
+		err = fmt.Errorf("%q is not a version tag; Go modules want a leading v", tag)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
+		return 2
+	}
+	token, err := token(tokenFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
+		return 1
+	}
+	switch exists, err := tagExists(token, repo, tag); {
+	case err != nil:
+		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
+		return 1
+	case !exists:
+		fmt.Fprintf(stderr, "ghrelease: %s has no tag %s; -release-only does not create one\n", repo, tag)
+		return 1
+	}
+	switch has, err := releaseExists(token, repo, tag); {
+	case err != nil:
+		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
+		return 1
+	case has:
+		fmt.Fprintf(stdout, "%s already has a release for %s; nothing to do\n", repo, tag)
+		return 0
+	}
+	if err := createRelease(token, repo, tag, notes); err != nil {
+		return releaseMissing(stderr, repo, tag, err)
+	}
+	fmt.Fprintf(stdout, "released %s (existing tag, not moved)\n", tag)
+	return 0
+}
+
+// createRelease publishes the GitHub release of an existing tag (REST
+// "Create a release", POST /repos/{owner}/{repo}/releases). Without notes,
+// GitHub generates them from the pull requests merged since the previous
+// tag (generate_release_notes). make_latest "legacy" lets GitHub mark it
+// Latest only when it is the newest by date and semantic version, so a
+// patch release of an older line does not take the badge.
+func createRelease(token, repo, tag string, notes *string) error {
+	body := map[string]any{"tag_name": tag, "name": tag, "make_latest": "legacy"}
+	if notes != nil {
+		body["body"] = *notes
+	} else {
+		body["generate_release_notes"] = true
+	}
+	resp, err := api(token, http.MethodPost, fmt.Sprintf("%s/repos/%s/releases", apiBase, repo), body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return refused("GitHub refused the release", resp)
+	}
+	return nil
+}
+
+// releaseExists reports whether the tag already has a release (REST "Get a
+// release by tag name").
+func releaseExists(token, repo, tag string) (bool, error) {
+	resp, err := api(token, http.MethodGet, fmt.Sprintf("%s/repos/%s/releases/tags/%s", apiBase, repo, tag), nil)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	return false, refused("looking for the release", resp)
 }
 
 // short is the abbreviated hash a person reads.
