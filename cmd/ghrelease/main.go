@@ -91,6 +91,9 @@ var (
 func main() { osExit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "backfill" {
+		return runBackfill(args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("ghrelease", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	tokenFile := fs.String("token-file", "", "the file holding the token (default ~/"+defaultToken+")")
@@ -98,6 +101,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	notesFile := fs.String("notes-file", "", "the release notes (default: GitHub's, generated from the pull requests merged since the previous tag)")
 	releaseOnly := fs.Bool("release-only", false, "create the GitHub release of an EXISTING tag, and nothing else: "+
 		"[owner/repo] <tag> (the resume after \"tag created, release missing\")")
+	noBackfill := fs.Bool("no-backfill", false, "do not create the missing releases of the repository's older tags")
+	backfillMax := fs.Int("backfill-max", defaultBackfillMax, "at most this many older tags released per run (oldest first)")
 	if code, ok := cliflags.ParseFlags(fs, args); !ok {
 		return code
 	}
@@ -202,6 +207,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return releaseMissing(stderr, repo, tag, err)
 	}
 	fmt.Fprintf(stdout, "released %s\n", tag)
+	// The gradual catch-up: this repository's older tags without a release.
+	// The new release is done whatever happens here, so a failure is said
+	// and does not change the exit status.
+	if !*noBackfill && *backfillMax > 0 {
+		b := newBudget(defaultMargin)
+		if _, _, err := backfillRepo(token, repo, tag, time.Time{}, *backfillMax, false, b, stdout); err != nil {
+			fmt.Fprintf(stderr, "ghrelease: %s is released; catching up older tags stopped: %v\n", tag, err)
+		}
+	}
 	return 0
 }
 

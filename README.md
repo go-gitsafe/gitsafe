@@ -25,6 +25,16 @@ release fails after the tag was pushed, it exits 1 saying **"tag created,
 release missing"** and prints the resume: `-release-only` creates the release
 of an existing tag, and never creates, moves or deletes a tag.
 
+**Catching up, since v0.19.0.** The older tags have no release either: 304 of 425 in four organisations on 2026-10-26.
+
+- **Per repository, gradually.** Each run that releases a new tag also creates the missing releases of the same repository's older tags. It goes oldest first, at most `-backfill-max` (default 20) per run; `-no-backfill` turns this off. Such a release:
+  - never takes the Latest badge (`make_latest: false`);
+  - never moves a tag;
+  - says what it is: "Release backfilled on <date>; tag created <date>", then the commits since the previous tag.
+- **Recent tags across the fleet.** `ghrelease backfill -since 14d [-dry-run] [-orgs a,b]` handles the tags created within the window. It reads the repository list from fleetfind's inventory, keeps only the repositories pushed within the window, and makes one GraphQL call per repository for its tags and releases.
+
+**API budget.** The budget is shared with the fleet's Renovate runners. It is read from the answers themselves: `rateLimit` in GraphQL, `X-RateLimit-Remaining` in REST. The run stops when either drops below `-margin` (default 1000), and reports the calls it made.
+
 Merging and tagging were two commands, and three times in one day the tag
 landed on a commit that did not contain the merge. Every time the shape was the
 same:
