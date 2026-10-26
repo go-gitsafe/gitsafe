@@ -11,9 +11,19 @@ no checks run against it, read by nobody.
 
 Documentation asks. A hook refuses. These are the tools that refuse.
 
-## `ghrelease` — merge and tag as one thing
+## `ghrelease` — merge, tag and release as one thing
 
-    ghrelease [owner/repo] <pr-number> <tag>
+    ghrelease [-notes-file F] [owner/repo] <pr-number> <tag>
+    ghrelease -release-only [-notes-file F] [owner/repo] <tag>
+
+Since v0.18.0 it also creates the **GitHub release** of the tag (REST "Create
+a release"): with `-notes-file` as its body, otherwise with GitHub's notes
+generated from the pull requests merged since the previous tag, marked Latest
+only when it is the newest version (`make_latest: legacy`). Until then it only
+pushed the git ref, and three tags of 2026-10-26 had no release (#59). If the
+release fails after the tag was pushed, it exits 1 saying **"tag created,
+release missing"** and prints the resume: `-release-only` creates the release
+of an existing tag, and never creates, moves or deletes a tag.
 
 Merging and tagging were two commands, and three times in one day the tag
 landed on a commit that did not contain the merge. Every time the shape was the
