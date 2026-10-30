@@ -1021,6 +1021,33 @@ heredoc whose tag is quoted is never expanded, so a commit message or a note tha
 quotes it goes through. `GITSAFE_ALLOW_DISCARD=1` in front of one command is the
 deliberate way past.
 
+## Working trees in directories that are emptied
+
+`guard-bash` refuses a command that would make a git working tree, or commit to
+one, under a directory this machine empties: `/tmp`, `/private/tmp` (where the
+Claude Code session scratchpad lives), `/var/folders` and `$TMPDIR`, `/dev/shm`,
+`/run/user`. A clone there is the only copy of every commit made in it until it
+is pushed.
+
+The written rule failed five times. The last loss, on 2026-10-28, was a whole
+branch — a dispatch package, a correctness fix and a 9 000-call golden file —
+purged with the scratchpad before its first push.
+
+```
+git clone <url> [dir]          refused when dir (or ./<name>) is volatile
+gh repo clone <repo> [dir]     likewise
+git init [dir]                 likewise
+git worktree add <path>        likewise
+git commit                     refused in a working tree under a volatile dir
+```
+
+It reads the hook payload's `cwd`, follows `cd` and `git -C` inside the
+command, and expands `~` and `$HOME`. What it does **not** refuse is what the
+scratchpad is for: a redirected log, a build output, `git status` or `git log`
+in a tree that is already there, and `/var/tmp`, which survives a reboot.
+`GITSAFE_ALLOW_VOLATILE=1` in front of one command is the way past for a
+throwaway repository meant to be thrown away.
+
 
 ## GitLab: `glscopes` and `glci`
 

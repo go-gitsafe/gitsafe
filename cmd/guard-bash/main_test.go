@@ -41,6 +41,18 @@ func TestDenies(t *testing.T) {
 	}
 }
 
+// The payload's cwd reaches the volatile rule: the same commit is refused in the
+// scratchpad and allowed in a durable clone.
+func TestVolatileReadsCwd(t *testing.T) {
+	out, _ := drive(t, `{"cwd":"/private/tmp/claude-501/s/scratchpad/r","tool_input":{"command":"git commit -m x"}}`)
+	if !strings.Contains(out, `"deny"`) || !strings.Contains(out, "GITSAFE_ALLOW_VOLATILE=1") {
+		t.Errorf("a commit in the scratchpad was not refused with its escape:\n%s", out)
+	}
+	if out, _ := drive(t, `{"cwd":"/Users/me/src/r","tool_input":{"command":"git commit -m x"}}`); out != "" {
+		t.Errorf("a commit in a durable clone was refused:\n%s", out)
+	}
+}
+
 // Everything else passes silently. A hook that printed on every command would
 // be noise, and noise is how a guard stops being read.
 func TestAllowsSilently(t *testing.T) {
