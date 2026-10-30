@@ -39,10 +39,14 @@ import (
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
+	"github.com/go-gitsafe/gitsafe/volatile"
 )
 
 // payload is the part of the PreToolUse event this reads.
 type payload struct {
+	// Cwd is the directory the command will run in; the harness sends it with
+	// every event.
+	Cwd       string `json:"cwd"`
 	ToolInput struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`
@@ -97,6 +101,17 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s\n\nIt matched %s\n\n%s",
 				f.Why, f.Match, discard.Advice))
+		}
+	}
+	// ⛔ A working tree in a directory this machine empties is the only copy of
+	// its commits until they are pushed. The session scratchpad is under
+	// /private/tmp; five losses were written down before this was a guard, the
+	// last a whole branch on 2026-10-28. See [volatile].
+	if os.Getenv(volatile.Escape) == "" {
+		if f := volatile.Check(p.ToolInput.Command, p.Cwd, os.Getenv("HOME"), os.Getenv("TMPDIR")); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s — %s.\n\nIt matched %s\n\n%s",
+				f.Dir, f.Why, f.Match, volatile.Advice))
 		}
 	}
 	// ⛔ A pipeline's status is its LAST stage's. On 2026-10-11 this shape was
