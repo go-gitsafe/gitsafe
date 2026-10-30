@@ -3,8 +3,8 @@ package volatile
 import "testing"
 
 const (
-	home   = "/Users/me"
-	tmpdir = "/var/folders/xy/T/"
+	home    = "/Users/me"
+	tmpdir  = "/var/folders/xy/T/"
 	scratch = "/private/tmp/claude-501/proj/session/scratchpad"
 	durable = "/Users/me/Documents/VCS/GIT/localhost"
 )
