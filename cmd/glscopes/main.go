@@ -15,7 +15,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/glauth"
+	"github.com/spf13/cobra"
 )
 
 var osExit = os.Exit
@@ -36,21 +36,50 @@ var newClient = glauth.New
 
 func main() { osExit(run(os.Args[1:], ".", os.Stdout, os.Stderr)) }
 
+// run builds the command and drives it, so the tests go through the same
+// argument handling a person gets -- including the single-dash spellings this
+// tool has always taken, which cobra alone would read as shorthand clusters.
 func run(args []string, dir string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("glscopes", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	host := fs.String("host", "", "GitLab instance (default: this clone's origin, else gitlab.com)")
-	file := fs.String("f", "", "token file (default: ~/.gitlab-token-<host>, else ~/.gitlab-token)")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
-	}
-	want := fs.Args()
+	cmd := RootCmd(dir)
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
 
-	if *host == "" {
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd(dir string) *cobra.Command {
+	var host, file string
+	c := &cobra.Command{
+		Use:   "glscopes [scope...]",
+		Short: "Say what a GitLab token is and may do, without showing it",
+		Long: `glscopes says which account a GitLab token belongs to, what it may do and
+until when, asking the instance rather than reading anything out of the file.
+
+Naming scopes makes it a check: it exits non-zero unless the token carries
+every one of them.`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, want []string) error {
+			if code := report(cmd, dir, host, file, want); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&host, "host", "",
+		"GitLab instance (default: this clone's origin, else gitlab.com)")
+	c.Flags().StringVarP(&file, "file", "f", "",
+		"token file (default: ~/.gitlab-token-<host>, else ~/.gitlab-token)")
+	return c
+}
+
+func report(cmd *cobra.Command, dir, host, file string, want []string) int {
+	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+
+	if host == "" {
 		if r, err := glauth.Origin(dir); err == nil {
-			*host = r.Host
+			host = r.Host
 		} else {
-			*host = "gitlab.com"
+			host = "gitlab.com"
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -58,7 +87,7 @@ func run(args []string, dir string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "glscopes: no home directory: %v\n", err)
 		return 1
 	}
-	path := glauth.TokenPath(home, *host, *file)
+	path := glauth.TokenPath(home, host, file)
 	tok, err := glauth.Read(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "glscopes: %v\n", err)
@@ -68,12 +97,12 @@ func run(args []string, dir string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "glscopes: warning: %s is readable by others (%v); chmod 600 it\n", path, fi.Mode().Perm())
 	}
 
-	c := newClient(*host, tok)
+	c := newClient(host, tok)
 	self, err := c.Self()
 	if err != nil {
 		var r *glauth.Refusal
 		if errors.As(err, &r) && r.Status == 404 {
-			fmt.Fprintf(stderr, "glscopes: %s does not answer /personal_access_tokens/self: is it a GitLab instance, and is this a personal access token?\n", *host)
+			fmt.Fprintf(stderr, "glscopes: %s does not answer /personal_access_tokens/self: is it a GitLab instance, and is this a personal access token?\n", host)
 			return 1
 		}
 		fmt.Fprintf(stderr, "glscopes: %v\n", err)
@@ -81,7 +110,7 @@ func run(args []string, dir string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "file:     %s\n", path)
-	fmt.Fprintf(stdout, "instance: %s\n", *host)
+	fmt.Fprintf(stdout, "instance: %s\n", host)
 	if u := c.Username(); u != "" {
 		fmt.Fprintf(stdout, "account:  %s\n", u)
 	}

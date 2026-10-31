@@ -150,6 +150,69 @@ of it.** `credscan` knew three of the four and missed `-help`, so `credscan
 0; `gitpush` knew two, `-h` and `--help`; `ghpkg` and `ghscopes` knew none.
 `cliflags.IsHelpRequest` is the one list.
 
+### Moving to cobra without breaking every invocation ever written down
+
+The fleet's command-line tools use [cobra](https://github.com/spf13/cobra), and
+these did not. Migrating is mostly a pleasure — cobra answers `-h`, `--help`
+and the `help` verb with 0 **by construction**, because `command.go:1148` turns
+`flag.ErrHelp` into print-help-and-return-nil, so the defect above becomes
+unrepresentable rather than fixed — but it arrives with two silent breaks.
+
+⛔ **A single dash is not a long flag to pflag, it is a cluster of shorthands.**
+`pflag@v1.0.9 flag.go:1038` takes `-host` apart as `h`, `o`, `s`, `t`. Every
+invocation written down in this README, in CI and in the notes on this machine
+uses that spelling — `ghnew -public`, `hookcheck -settings`, `ghrelease -since`,
+`glscopes -host` — and **`go test` stays green through all of it**, because
+tests drive `RootCmd` with arguments they spell themselves.
+
+⛔⛔ **And it does not always fail. Sometimes it obeys, wrongly.** When a long
+flag's first letter happens to be a declared shorthand *of the same command*,
+pflag does not refuse the cluster — it reads the shorthand and takes **the rest
+of the cluster as its value**. Measured 2026-10-31, and it is this repository's
+own code: `--file` carries `-f`, so
+
+```
+glscopes -file /tmp/tok     →    file = "ile",  operand "/tmp/tok"
+```
+
+and `/tmp/tok` is then checked as a **demanded scope**, with a token in hand.
+No error anywhere. That is why the control in
+`TestEveryLongFlagStillTakesOneDash` is written as *did not arrive intact*
+rather than *failed*: written as *failed*, it passed. `-f` is the only
+shorthand declared here so far, which means every shorthand a later migration
+adds brings this trap with it for the flag it abbreviates —
+`TestTheSingleDashFileSpellingIsNotTheShorthand` asserts both directions.
+
+⛔ **`-help` is the sharpest case, because it undoes the section above.**
+`command.go:919` hands a parse error to `FlagErrorFunc` *before* it looks at
+the help flag at `:926`, so `-help` — read as `-h` plus an undeclared `e` —
+exits non-zero even though the help flag was set on the way past. And `help`
+is never declared at all for a command with no subcommands
+(`command.go:1264`), so it arrives as an operand: the ghscopes defect, reborn.
+
+`cliflags.LegacyArgs` adds the second dash, and it **enumerates rather than
+lists** — `VisitAll` over the very flag set that is about to parse, after
+`InitDefaultHelpFlag` so that `help` is in it. The fleet's other answer to this
+is a hand-written map of seventeen names (`gopin`, go-fleettools #142); the
+eighteenth flag somebody adds is the defect, and enumeration cannot have one.
+`cliflags.Run` holds the exit-code contract in one place: **0** for work or for
+a question in any of the four spellings, **2** for a misuse, **1** for a
+failure — a distinction cobra does not make, since `Execute` returns one error
+for both, so the two places a misuse can arrive are wrapped and everything else
+is a failure by elimination.
+
+| | |
+|---|---|
+| migrated | `glscopes` |
+| still on `flag` | `credscan` `ghmerge` `ghnew` `ghpkg` `ghrelease` `ghrunner` `ghscopes` `glci` `hookcheck` `reauthor` |
+| **deliberately not cobra** | `gitpush` `guard-bash` `git-credential-tokenfile` `git-pre-push-guard` `git-post-checkout-guard` |
+
+That last row is not laziness. `gitpush` forwards its whole argument list to
+`git push`, so `--force-with-lease` and `-u` are **operands it must not
+interpret**; the hooks are handed their arguments by git; `guard-bash` and the
+credential helper read a protocol on stdin. A parser is the wrong shape for all
+five, and `cliflags.IsHelpRequest` is how they answer a question instead.
+
 `credurl`, `credfix`, `redact`, `protect`, `ghauth`, `glauth` and `cliflags` are the libraries under
 them: one answers "is the part before the `@` a secret or a username" and holds
 the one table of issuer prefixes every guard here asks, one walks a machine and

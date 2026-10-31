@@ -160,6 +160,24 @@ func TestEveryCommandAnswersHelpWithZero(t *testing.T) {
 // non-zero status, or "" when it would not. Split out so the gate has a
 // control: TestTheHelpGateCanFail.
 func dropsTheHelpDistinction(src string) string {
+	// ⛔⛔ A COBRA COMMAND PASSES EVERY CHECK BELOW WITHOUT ANSWERING ANY OF
+	// THEM: no flag.ContinueOnError, no `.Parse(args); err != nil`, so the gate
+	// would go quiet about precisely the commands being migrated -- the same
+	// silence hookcheck's corpus kept about the volatile rule (#64).
+	//
+	// What a cobra command owes is different, and it is two things at once:
+	// help exits 0 by construction (command.go:1148), but `-help` does NOT
+	// (command.go:921 refuses the parse first), and every single-dash long
+	// spelling this repository has ever documented is read as a cluster of
+	// shorthands. [Run] is what answers both, so naming it is the requirement.
+	if strings.Contains(src, "spf13/cobra") {
+		if !strings.Contains(src, "cliflags.Run(") && !strings.Contains(src, "cliflags.LegacyArgs(") {
+			return "cobra without cliflags.Run: `-help` exits 2, and `-since`/`-public` " +
+				"are read as clusters of shorthands"
+		}
+		return ""
+	}
+
 	for _, shape := range []string{".Parse(args); err != nil", ".Parse(flags); err != nil"} {
 		if i := strings.Index(src, shape); i >= 0 {
 			// ⛔ TWELVE LINES, not four: the first window missed ghnew, whose
@@ -209,6 +227,13 @@ func TestTheHelpGateCanFail(t *testing.T) {
 		{"the same, explained first", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif err := fs.Parse(args); err != nil {\n\t// one\n\t// two\n\t// three\n\t// four\n\tif cliflags.IsHelpError(err) {\n\t\treturn nil\n\t}\n\treturn err\n}", false},
 		{"a hand-written ErrHelp switch", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nswitch err := fs.Parse(args); {\ncase errors.Is(err, flag.ErrHelp):\n\treturn 0\n}", false},
 		{"no flag set at all, asking by hand", "if cliflags.IsHelpRequest(args[0]) {\n\treturn 0\n}", false},
+		// ⛔ The cobra half, both directions. The first of these is what every
+		// migrated command would look like if the single-dash spellings were
+		// forgotten -- green tests, working `-h`, and `ghnew -public` quietly
+		// reading as the shorthands p, u, b, l, i, c.
+		{"cobra with nothing in front of it", "import \"github.com/spf13/cobra\"\nfunc main() { osExit(cliflags.Run2(RootCmd(), os.Args[1:])) }", true},
+		{"cobra driven through Run", "import \"github.com/spf13/cobra\"\nfunc main() { osExit(cliflags.Run(RootCmd(), os.Args[1:])) }", false},
+		{"cobra calling the adapter itself", "import \"github.com/spf13/cobra\"\ncmd.SetArgs(cliflags.LegacyArgs(cmd, args))", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			why := dropsTheHelpDistinction(tc.src)
