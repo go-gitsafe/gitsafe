@@ -31,7 +31,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +42,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/spf13/cobra"
 )
 
 // apiBase is a var so a test can point it at a server of its own.
@@ -65,52 +65,70 @@ func cloneRoot() string {
 	return filepath.Join(home, "Documents", "VCS", "GIT", "github.com")
 }
 
-func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "ghnew:", err)
-		os.Exit(1)
-	}
+func main() { os.Exit(execute(os.Args[1:], os.Stdout, os.Stderr)) }
+
+// execute builds the command and drives it through the adapter, so the tests
+// reach the argument handling a person gets, single-dash spellings included
+// (`-public`, `-token-file`). A body error is printed as "ghnew: <err>" and is
+// status 1, as it always was; a misuse is status 2.
+func execute(args []string, stdout, stderr io.Writer) int {
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
 }
 
-func run(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("ghnew", flag.ContinueOnError)
-	fs.SetOutput(out)
-	var (
-		public    = fs.Bool("public", false, "the repository is public")
-		private   = fs.Bool("private", false, "the repository is private")
-		license   = fs.String("license", "bsd-3-clause", "licence template, or \"\" for none")
-		gitignore = fs.String("gitignore", "", "gitignore template, e.g. Go")
-		branch    = fs.String("branch", "main", "the default branch GitHub should create")
-		clone     = fs.Bool("clone", false, "clone it into "+cloneRoot()+"/<owner>/<name>")
-		tokenFile = fs.String("token-file", "", "the file holding the token (default ~/.github-token)")
-	)
-	if err := fs.Parse(args); err != nil {
-		// ⛔ `ghnew -h` is somebody reading the flags of a command that CREATES
-		// a repository, which is exactly when to read them. The usage text has
-		// already been printed by the flag set; returning the error would make
-		// main print it a second time and exit 2.
-		if cliflags.IsHelpError(err) {
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd() *cobra.Command {
+	var o options
+	c := &cobra.Command{
+		Use:   "ghnew -public|-private <owner>/<name> [description]",
+		Short: "Create a GitHub repository that already has its default branch",
+		Long: `ghnew creates a repository already initialised, so main exists and is not
+yours. Say -public or -private: neither default is safe.`,
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) < 1 || len(args) > 2 {
+				return errors.New("usage: ghnew -public|-private <owner>/<name> [description]")
+			}
 			return nil
-		}
-		return err
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCreate(cmd.OutOrStdout(), args, &o)
+		},
 	}
-	if fs.NArg() < 1 || fs.NArg() > 2 {
-		fs.Usage()
-		return errors.New("usage: ghnew -public|-private <owner>/<name> [description]")
-	}
+	f := c.Flags()
+	f.BoolVar(&o.public, "public", false, "the repository is public")
+	f.BoolVar(&o.private, "private", false, "the repository is private")
+	f.StringVar(&o.license, "license", "bsd-3-clause", "licence template, or \"\" for none")
+	f.StringVar(&o.gitignore, "gitignore", "", "gitignore template, e.g. Go")
+	f.StringVar(&o.branch, "branch", "main", "the default branch GitHub should create")
+	f.BoolVar(&o.clone, "clone", false, "clone it into "+cloneRoot()+"/<owner>/<name>")
+	f.StringVar(&o.tokenFile, "token-file", "", "the file holding the token (default ~/.github-token)")
+	return c
+}
+
+type options struct {
+	public, private, clone     bool
+	license, gitignore, branch string
+	tokenFile                  string
+}
+
+func runCreate(out io.Writer, args []string, o *options) error {
+	public, private, license, gitignore, branch, clone, tokenFile :=
+		&o.public, &o.private, &o.license, &o.gitignore, &o.branch, &o.clone, &o.tokenFile
 	// ⛔ Neither default is safe to assume. Defaulting to public publishes
 	// something nobody asked to publish; defaulting to private quietly makes a
 	// repository the fleet's tooling cannot see. So it is asked for.
 	if *public == *private {
 		return errors.New("say which: -public or -private, not both and not neither")
 	}
-	owner, name, err := splitRepo(fs.Arg(0))
+	owner, name, err := splitRepo(args[0])
 	if err != nil {
 		return err
 	}
 	description := ""
-	if fs.NArg() == 2 {
-		description = fs.Arg(1)
+	if len(args) == 2 {
+		description = args[1]
 	}
 
 	path := *tokenFile

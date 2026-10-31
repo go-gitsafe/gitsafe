@@ -41,7 +41,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,6 +52,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/spf13/cobra"
 )
 
 // apiBase is a variable so a test can answer as GitHub would. What this tool
@@ -84,8 +84,9 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func usage(w io.Writer) {
-	fmt.Fprint(w, `usage:
+func usage(w io.Writer) { fmt.Fprint(w, usageText) }
+
+const usageText = `usage:
   ghpkg list   <org> <package>
   ghpkg delete <org> <package> <tag> [--yes]
 
@@ -94,64 +95,70 @@ func usage(w io.Writer) {
 flags:
   --token <path>   the credential to use (default: ~/.github-token)
   --yes            actually delete; without it, ghpkg prints what it would do
-`)
+`
+
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
+func run(args []string, stdout, stderr io.Writer) int {
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		usage(stderr)
-		return 2
-	}
-	verb, rest := args[0], args[1:]
-	// ⛔ `-h` IS NOT A VERB, and this dispatch had no way to know: the flag set
-	// below never saw it (it is a positional, so it became the verb), and the
-	// switch at the end answered "no such command" with 2. The one command here
-	// that DELETES things was the last one still refusing to say what it takes.
-	if cliflags.IsHelpRequest(verb) {
-		usage(stdout)
-		return 0
-	}
-
-	fset := flag.NewFlagSet("ghpkg", flag.ContinueOnError)
-	fset.SetOutput(stderr)
-	tokenPath := fset.String("token", ghauth.DefaultPath(), "credential file")
-	yes := fset.Bool("yes", false, "actually delete")
-	// Flags anywhere, not only first. Go's flag package stops at the first
-	// positional, so `ghpkg delete org pkg tag --yes` would parse no flags at
-	// all — and a --token that was silently ignored fails with a message about
-	// the wrong file. On a command that deletes things, an argument order
-	// people get wrong under pressure is a defect, not a convention.
-	var pos, flags []string
-	for i, a := range rest {
-		if strings.HasPrefix(a, "-") {
-			flags = append(flags, rest[i:]...)
-			break
-		}
-		pos = append(pos, a)
-	}
-	if code, ok := cliflags.ParseFlags(fset, flags); !ok {
-		return code
-	}
-	pos = append(pos, fset.Args()...)
-
-	switch verb {
-	case "list":
-		if len(pos) != 2 {
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+// list and delete are real subcommands, so `ghpkg delete -h` is asked of delete.
+func RootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "ghpkg list|delete ...",
+		Short: "List and delete the versions of a published package",
+		Long:  usageText,
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			stderr := cmd.ErrOrStderr()
+			if len(args) > 0 {
+				fmt.Fprintln(stderr, "ghpkg: unknown command:", args[0])
+			}
 			usage(stderr)
-			return 2
-		}
-		return runList(*tokenPath, pos[0], pos[1], stdout, stderr)
-	case "delete":
-		if len(pos) != 3 {
-			usage(stderr)
-			return 2
-		}
-		return runDelete(*tokenPath, pos[0], pos[1], pos[2], *yes, stdout, stderr)
-	default:
-		fmt.Fprintln(stderr, "ghpkg: unknown command:", verb)
-		usage(stderr)
-		return 2
+			return cliflags.Status(2)
+		},
 	}
+	root.AddCommand(verbCmd("list", "List the versions of a package", 2))
+	root.AddCommand(verbCmd("delete", "Delete one version of a package (needs --yes)", 3))
+	return root
+}
+
+func verbCmd(verb, short string, operands int) *cobra.Command {
+	var tokenPath string
+	var yes bool
+	c := &cobra.Command{
+		Use:   verb + " [flags] <org> <package>" + map[int]string{2: "", 3: " <tag>"}[operands],
+		Short: short,
+		// Flags anywhere, not only first: `ghpkg delete org pkg tag --yes` has to
+		// read --yes, because a flag silently ignored on a command that deletes
+		// things is a defect, not a convention. pflag interleaves them.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, pos []string) error {
+			stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+			if len(pos) != operands {
+				usage(stderr)
+				return cliflags.Status(2)
+			}
+			code := 0
+			if verb == "list" {
+				code = runList(tokenPath, pos[0], pos[1], stdout, stderr)
+			} else {
+				code = runDelete(tokenPath, pos[0], pos[1], pos[2], yes, stdout, stderr)
+			}
+			if code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&tokenPath, "token", ghauth.DefaultPath(), "credential file")
+	c.Flags().BoolVar(&yes, "yes", false, "actually delete")
+	return c
 }
 
 func runList(tokenPath, org, pkg string, stdout, stderr io.Writer) int {

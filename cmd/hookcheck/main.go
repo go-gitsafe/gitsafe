@@ -34,7 +34,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +43,7 @@ import (
 	"time"
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
+	"github.com/spf13/cobra"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -178,14 +178,38 @@ var (
 	wantHook = "guard-bash"
 )
 
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
 func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("hookcheck", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	install := fs.Bool("install", false, "wire "+wantHook+" into the settings, backing them up first, then report")
-	settings := fs.String("settings", "", "the settings file to read (default ~/.claude/settings.json)")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
+
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd() *cobra.Command {
+	var install bool
+	var settings string
+	c := &cobra.Command{
+		Use:   "hookcheck [flags]",
+		Short: "Check that the Bash guard hooks in the settings refuse what they must",
+		// Operands were never read and still are not: they are ignored, as before.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if code := check(install, settings, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
+	c.Flags().BoolVar(&install, "install", false, "wire "+wantHook+" into the settings, backing them up first, then report")
+	c.Flags().StringVar(&settings, "settings", "", "the settings file to read (default ~/.claude/settings.json)")
+	return c
+}
+
+func check(doInstall bool, settingsFile string, stdout, stderr io.Writer) int {
+	install, settings := &doInstall, &settingsFile
 	path := *settings
 	if path == "" {
 		home, err := os.UserHomeDir()
