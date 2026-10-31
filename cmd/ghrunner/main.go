@@ -47,7 +47,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,6 +58,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
 	"github.com/go-gitsafe/gitsafe/redact"
+	"github.com/spf13/cobra"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -73,24 +73,45 @@ type options struct {
 	repo   string
 }
 
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
 func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("ghrunner", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
+
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd() *cobra.Command {
 	var o options
-	fs.StringVar(&o.host, "host", "", "the machine to register, as ssh reaches it (user@host). REQUIRED: the terminal config.sh needs is ssh's")
-	fs.StringVar(&o.name, "name", "", "the runner's name. Defaults to the host's own hostname, as config.sh would")
-	fs.StringVar(&o.labels, "labels", "", "extra labels, comma separated. self-hosted, the OS and the architecture are added by the runner itself")
-	fs.StringVar(&o.group, "group", "Default", "runner group")
-	fs.StringVar(&o.work, "work", "_work", "the runner's work directory, relative to its install")
-	fs.BoolVar(&o.remove, "remove", false, "unregister instead: config.sh remove on the machine, and the API entry here")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
+	c := &cobra.Command{
+		Use:   "ghrunner -host user@machine [flags] owner/repo",
+		Short: "Register (or remove) a self-hosted runner without leaking its token",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if code := execute(args, o, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
-	if fs.NArg() != 1 {
+	f := c.Flags()
+	f.StringVar(&o.host, "host", "", "the machine to register, as ssh reaches it (user@host). REQUIRED: the terminal config.sh needs is ssh's")
+	f.StringVar(&o.name, "name", "", "the runner's name. Defaults to the host's own hostname, as config.sh would")
+	f.StringVar(&o.labels, "labels", "", "extra labels, comma separated. self-hosted, the OS and the architecture are added by the runner itself")
+	f.StringVar(&o.group, "group", "Default", "runner group")
+	f.StringVar(&o.work, "work", "_work", "the runner's work directory, relative to its install")
+	f.BoolVar(&o.remove, "remove", false, "unregister instead: config.sh remove on the machine, and the API entry here")
+	return c
+}
+
+func execute(args []string, o options, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
 		fmt.Fprintln(stderr, "usage: ghrunner -host user@machine [-name n] [-labels a,b] owner/repo")
 		return 2
 	}
-	o.repo = fs.Arg(0)
+	o.repo = args[0]
 	if o.host == "" {
 		fmt.Fprintln(stderr, "ghrunner: -host is required — config.sh needs a terminal, and ssh is what allocates one")
 		return 2

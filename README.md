@@ -204,8 +204,8 @@ is a failure by elimination.
 
 | | |
 |---|---|
-| migrated | `credscan` (`scan`, `clean` are real subcommands) `ghscopes` `glci` `glscopes` `reauthor` |
-| still on `flag` | `ghmerge` `ghnew` `ghpkg` `ghrelease` `ghrunner` `hookcheck` |
+| migrated | `credscan` and `ghpkg` (their verbs are real subcommands) `ghnew` `ghrunner` `ghscopes` `glci` `glscopes` `hookcheck` `reauthor` |
+| still on `flag` | `ghmerge` `ghrelease` |
 | **deliberately not cobra** | `gitpush` `guard-bash` `git-credential-tokenfile` `git-pre-push-guard` `git-post-checkout-guard` |
 
 That last row is not laziness. `gitpush` forwards its whole argument list to
