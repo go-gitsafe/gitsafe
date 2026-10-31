@@ -25,8 +25,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/go-gitsafe/gitsafe/cliflags"
-	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"net/http"
 	"os"
@@ -34,6 +32,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/go-gitsafe/gitsafe/cliflags"
+	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/spf13/cobra"
 )
 
 // defaultToken is the same file the credential helper serves from, so with no
@@ -52,23 +54,41 @@ var userHomeDir = os.UserHomeDir
 
 func main() { osExit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
+// run builds the command and drives it through the adapter, so the tests reach
+// the same argument handling a person does -- including the single-dash
+// spellings this tool has always taken, and `-h`/`-help`/`help` as questions,
+// which must never be read as scopes to demand.
 func run(args []string, stdout, stderr io.Writer) int {
-	// ⛔ ASKING IS NOT DEMANDING. The parse loop below appends anything it does
-	// not recognise to the list of scopes to demand, so until 2026-10-18
-	// `ghscopes -h` read the token, asked GitHub about it, and reported that a
-	// scope called `-h` was missing -- exit 1, for a question.
-	for _, a := range args {
-		if cliflags.IsHelpRequest(a) {
-			fmt.Fprintln(stdout, "usage: ghscopes [-f TOKEN-FILE] [scope...]")
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "Says which account a token belongs to and what it may do, without")
-			fmt.Fprintln(stdout, "printing the token. With scopes named, exits non-zero if one is missing:")
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "    ghscopes workflow")
-			fmt.Fprintln(stdout, "    ghscopes -f ~/.github-token-wide repo workflow")
-			return 0
-		}
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
+
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd() *cobra.Command {
+	var file string
+	c := &cobra.Command{
+		Use:   "ghscopes [scope...]",
+		Short: "Say which account a GitHub token belongs to and what it may do",
+		Long: `Says which account a token belongs to and what it may do, without
+printing the token. With scopes named, exits non-zero if one is missing:
+
+    ghscopes workflow
+    ghscopes -f ~/.github-token-wide repo workflow`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, want []string) error {
+			if code := report(cmd.OutOrStdout(), cmd.ErrOrStderr(), file, want); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
+	c.Flags().StringVarP(&file, "file", "f", "", "token file (default: ~/"+defaultToken+")")
+	return c
+}
+
+func report(stdout, stderr io.Writer, file string, want []string) int {
 	// Where home is decided once. It was asked for in three places, which is
 	// three ways of not having one and one behaviour.
 	home, err := userHomeDir()
@@ -76,10 +96,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ghscopes: no home directory: %v\n", err)
 		return 1
 	}
-	path, want, err := parse(home, args)
-	if err != nil {
-		fmt.Fprintf(stderr, "ghscopes: %v\n", err)
-		return 2
+	path := file
+	if path == "" {
+		path = filepath.Join(home, defaultToken)
 	}
 
 	tok, err := ghauth.Read(path)
@@ -109,25 +128,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "has:     %s\n", strings.Join(want, ", "))
 	}
 	return 0
-}
-
-// parse separates the token file from the scopes demanded. A bare argument is a
-// scope, as it always was; -f or --file names another token to look at.
-func parse(home string, args []string) (path string, want []string, err error) {
-	path = filepath.Join(home, defaultToken)
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-f", "--file":
-			if i+1 >= len(args) {
-				return "", nil, fmt.Errorf("%s needs the path of a token file", args[i])
-			}
-			i++
-			path = args[i]
-		default:
-			want = append(want, args[i])
-		}
-	}
-	return path, want, nil
 }
 
 // otherTokens names the token files beside the one being checked, so that

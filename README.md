@@ -178,10 +178,11 @@ glscopes -file /tmp/tok     →    file = "ile",  operand "/tmp/tok"
 and `/tmp/tok` is then checked as a **demanded scope**, with a token in hand.
 No error anywhere. That is why the control in
 `TestEveryLongFlagStillTakesOneDash` is written as *did not arrive intact*
-rather than *failed*: written as *failed*, it passed. `-f` is the only
-shorthand declared here so far, which means every shorthand a later migration
-adds brings this trap with it for the flag it abbreviates —
-`TestTheSingleDashFileSpellingIsNotTheShorthand` asserts both directions.
+rather than *failed*: written as *failed*, it passed. `-f` (`--file`) is the
+only shorthand declared so far, in `glscopes`, `ghscopes` and `glci`, which
+means every shorthand a later migration adds brings this trap with it for the
+flag it abbreviates — `TestTheSingleDashFileSpellingIsNotTheShorthand` asserts
+both directions, in each of those three.
 
 ⛔ **`-help` is the sharpest case, because it undoes the section above.**
 `command.go:919` hands a parse error to `FlagErrorFunc` *before* it looks at
@@ -203,8 +204,8 @@ is a failure by elimination.
 
 | | |
 |---|---|
-| migrated | `glscopes` |
-| still on `flag` | `credscan` `ghmerge` `ghnew` `ghpkg` `ghrelease` `ghrunner` `ghscopes` `glci` `hookcheck` `reauthor` |
+| migrated | `credscan` (`scan`, `clean` are real subcommands) `ghscopes` `glci` `glscopes` `reauthor` |
+| still on `flag` | `ghmerge` `ghnew` `ghpkg` `ghrelease` `ghrunner` `hookcheck` |
 | **deliberately not cobra** | `gitpush` `guard-bash` `git-credential-tokenfile` `git-pre-push-guard` `git-post-checkout-guard` |
 
 That last row is not laziness. `gitpush` forwards its whole argument list to

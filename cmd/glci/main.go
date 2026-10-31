@@ -24,7 +24,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -36,6 +35,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/glauth"
 	"github.com/go-gitsafe/gitsafe/redact"
+	"github.com/spf13/cobra"
 )
 
 var osExit = os.Exit
@@ -87,23 +87,62 @@ type job struct {
 	} `json:"downstream_pipeline"`
 }
 
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
 func run(args []string, dir string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("glci", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	host := fs.String("host", "", "GitLab instance (default: this clone's origin)")
-	project := fs.String("project", "", "project path, e.g. group/sub/project (default: this clone's origin)")
-	file := fs.String("f", "", "token file (default: ~/.gitlab-token-<host>, else ~/.gitlab-token)")
-	watch := fs.Bool("watch", false, "wait until the pipeline is finished")
-	every := fs.Duration("every", 20*time.Second, "polling interval with -watch")
-	tail := fs.Int("log", 40, "lines of each failed job's log to show (0: none)")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
+	cmd := RootCmd(dir)
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
+
+type options struct {
+	host, project, file string
+	watch               bool
+	every               time.Duration
+	tail                int
+}
+
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd(dir string) *cobra.Command {
+	var o options
+	c := &cobra.Command{
+		Use:   "glci [ref | !merge-request]",
+		Short: "Say how the latest GitLab pipeline went, job by job",
+		Long: `glci says how the latest GitLab pipeline of a branch, tag or merge request
+went, job by job, and shows the end of every failed job's log, with any
+secret in it masked.
+
+Exit status: 0 succeeded, 1 failed or canceled, 3 not finished, 4 no
+pipeline for that ref, 2 usage or the instance could not be asked.`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if code := execute(args, dir, cmd.OutOrStdout(), cmd.ErrOrStderr(), &o); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
-	if fs.NArg() > 1 {
+	f := c.Flags()
+	f.StringVar(&o.host, "host", "", "GitLab instance (default: this clone's origin)")
+	f.StringVar(&o.project, "project", "", "project path, e.g. group/sub/project (default: this clone's origin)")
+	f.StringVarP(&o.file, "file", "f", "", "token file (default: ~/.gitlab-token-<host>, else ~/.gitlab-token)")
+	f.BoolVar(&o.watch, "watch", false, "wait until the pipeline is finished")
+	f.DurationVar(&o.every, "every", 20*time.Second, "polling interval with -watch")
+	f.IntVar(&o.tail, "log", 40, "lines of each failed job's log to show (0: none)")
+	return c
+}
+
+func execute(args []string, dir string, stdout, stderr io.Writer, o *options) int {
+	host, project, file, watch, every, tail := &o.host, &o.project, &o.file, &o.watch, &o.every, &o.tail
+	if len(args) > 1 {
 		fmt.Fprintln(stderr, "glci: at most one ref or !merge-request")
 		return exitUsage
 	}
-	ref := fs.Arg(0)
+	ref := ""
+	if len(args) == 1 {
+		ref = args[0]
+	}
 
 	if *host == "" || *project == "" {
 		r, err := glauth.Origin(dir)
