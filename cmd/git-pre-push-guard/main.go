@@ -78,12 +78,52 @@ func judgeBranches(args []string, refs []byte, stderr io.Writer) int {
 	if len(args) >= 1 && args[0] != "" {
 		remote = args[0]
 	}
-	blocked := protect.Blocked(protect.Parse(bytes.NewReader(refs)), remoteDefault(remote))
+	def := remoteDefault(remote)
+	blocked := protect.Blocked(protect.Parse(bytes.NewReader(refs)), def)
 	if len(blocked) == 0 {
 		return 0
 	}
 	fmt.Fprintf(stderr, "\ngit: refusing to write %s on %q — that is where pull requests land.\n\n",
 		strings.Join(blocked, ", "), remote)
+
+	// ⛔ SAY WHEN THE NAME CAME FROM A LOCAL CACHE. A branch not called main or
+	// master is protected here only because refs/remotes/<remote>/HEAD says it
+	// is the default one -- and that ref is written at clone time and never
+	// refreshed on its own. A clone made FROM ANOTHER CLONE inherits the source
+	// clone's HEAD, so it can name the source session's working branch, and
+	// setting origin's URL to the real remote afterwards does not update it.
+	//
+	// Reported by a peer session on 2026-10-31: `gitpush --force-with-lease
+	// origin flag-to-cobra` was refused as "that is where pull requests land"
+	// while GitHub said the default branch was main, because that clone came
+	// from another clone whose HEAD was flag-to-cobra. Clone-of-a-clone is the
+	// isolation pattern this machine recommends for parallel sessions, so this
+	// will happen again.
+	//
+	// ⛔ The guard is NOT loosened by one character. They verified the dangerous
+	// direction with a local fixture rather than assuming it: with origin/HEAD
+	// pointing at another branch, a push to main is STILL refused and the bare
+	// repository's main did not move -- main and master are protected by NAME as
+	// well, so the guard fails closed. What was missing was only the reason: a
+	// reader who sees their own feature branch called the default branch has no
+	// way to guess that a stale local pointer is why.
+	if def != "" {
+		var byPointer []string
+		for _, b := range blocked {
+			if !protect.Protected(b, "") {
+				byPointer = append(byPointer, b)
+			}
+		}
+		if len(byPointer) > 0 {
+			fmt.Fprintf(stderr, "  %s is not main or master. It is protected because THIS CLONE's\n",
+				strings.Join(byPointer, ", "))
+			fmt.Fprintf(stderr, "  refs/remotes/%s/HEAD says %q is the default branch — and that is a\n", remote, def)
+			fmt.Fprintf(stderr, "  local cache written at clone time, not an answer from the server. A\n")
+			fmt.Fprintf(stderr, "  clone made from another clone inherits ITS head, and changing the\n")
+			fmt.Fprintf(stderr, "  remote URL afterwards does not update it. Check and repair it:\n")
+			fmt.Fprintf(stderr, "      git remote set-head %s --auto\n\n", remote)
+		}
+	}
 	fmt.Fprintf(stderr, "  Work goes onto a branch and lands through a pull request, so that the\n")
 	fmt.Fprintf(stderr, "  checks run against it and somebody can read it before it is the\n")
 	fmt.Fprintf(stderr, "  default branch. A change pushed straight here has neither.\n\n")
@@ -229,7 +269,16 @@ func remoteHead(remote string) string {
 // Not fatal when it fails: main and master are protected anyway, and a guard
 // that needed the network to work would be a guard that stops working on a
 // train.
-func remoteDefault(remote string) string {
+//
+// ⛔ WHAT IT READS IS A LOCAL CACHE, NOT THE SERVER. refs/remotes/<remote>/HEAD
+// is written once at clone time and never refreshed on its own, which is why
+// judgeBranches says so when a refusal rests on it: see the comment there.
+//
+// A var so a test can replace it. The alternative -- a bare repository, a
+// clone of it and `git remote set-head` per case -- makes every test of the
+// message depend on git's behaviour in a temporary directory, and the thing
+// under test here is what the guard SAYS.
+var remoteDefault = func(remote string) string {
 	ref, err := gitOutput("symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD")
 	if err != nil {
 		return ""
