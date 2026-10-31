@@ -1048,6 +1048,34 @@ in a tree that is already there, and `/var/tmp`, which survives a reboot.
 `GITSAFE_ALLOW_VOLATILE=1` in front of one command is the way past for a
 throwaway repository meant to be thrown away.
 
+### The newest rule was the one `hookcheck` never asked about
+
+On 2026-10-31, `grep -c volatile cmd/hookcheck/main.go` printed **0**. The rule
+with the freshest scar — five losses, the last a whole branch — had shipped in
+v0.20.0, and the table that prints *"right on all 32"* had never put a question
+to it. That number was a verdict about a smaller table than the guard, and
+nothing said so: a corpus going quiet about a rule reads exactly like a rule
+with nothing to say.
+
+Twelve cases now cover it, seven refused and five allowed, each
+destination-explicit so the answer does not depend on where `hookcheck` runs:
+
+```
+v0.19.0 against the new cases    wrong on 7 of 44    (it predates the rule)
+v0.20.0, as installed            right on all 44
+```
+
+The five allowed ones are the half that keeps the rule usable — a durable clone,
+a durable worktree, `/var/tmp` (which survives a reboot and is deliberately not
+in the list), the escape, and `git status` in a tree that is already there.
+
+And the gap itself is now a gate. `TestEveryRuleGuardBashRunsFiresOnThisCorpus`
+reads the **import block of `cmd/guard-bash/main.go`** — a list written in a test
+has to be remembered, an import cannot be forgotten — and fails when a rule the
+guard runs is one no case in the corpus makes answer. It carries its own planted
+positive: over an **empty** corpus every rule must read as unasked, or the
+measurement cannot see the absence it exists for.
+
 
 ## GitLab: `glscopes` and `glci`
 
