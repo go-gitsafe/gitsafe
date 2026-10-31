@@ -165,15 +165,23 @@ uses that spelling — `ghnew -public`, `hookcheck -settings`, `ghrelease -since
 `glscopes -host` — and **`go test` stays green through all of it**, because
 tests drive `RootCmd` with arguments they spell themselves.
 
-⛔⛔ **And it does not always fail. Measured 2026-10-31: `reauthor -identities
-ids.txt` would not have been refused, it would have been obeyed wrongly.**
-`i` is a declared shorthand, so pflag reads the argument as `-i` and takes the
-*rest of the cluster* as its value: `identities = "dentities"`, with `ids.txt`
-left over as an operand. Any long flag whose first letter is some flag's
-shorthand migrates by quietly changing its value — in, here, the command that
-rewrites the author of every commit it is pointed at. That is why the control
-in `TestEveryLongFlagStillTakesOneDash` is written as *did not arrive intact*
-rather than *failed*.
+⛔⛔ **And it does not always fail. Sometimes it obeys, wrongly.** When a long
+flag's first letter happens to be a declared shorthand *of the same command*,
+pflag does not refuse the cluster — it reads the shorthand and takes **the rest
+of the cluster as its value**. Measured 2026-10-31, and it is this repository's
+own code: `--file` carries `-f`, so
+
+```
+glscopes -file /tmp/tok     →    file = "ile",  operand "/tmp/tok"
+```
+
+and `/tmp/tok` is then checked as a **demanded scope**, with a token in hand.
+No error anywhere. That is why the control in
+`TestEveryLongFlagStillTakesOneDash` is written as *did not arrive intact*
+rather than *failed*: written as *failed*, it passed. `-f` is the only
+shorthand declared here so far, which means every shorthand a later migration
+adds brings this trap with it for the flag it abbreviates —
+`TestTheSingleDashFileSpellingIsNotTheShorthand` asserts both directions.
 
 ⛔ **`-help` is the sharpest case, because it undoes the section above.**
 `command.go:919` hands a parse error to `FlagErrorFunc` *before* it looks at

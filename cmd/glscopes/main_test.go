@@ -76,6 +76,42 @@ func TestEverySpellingOfTheQuestionIsAnswered(t *testing.T) {
 	}
 }
 
+// ⛔⛔ THE ONE DECLARED SHORTHAND IN THIS REPOSITORY IS ALSO THE TRAP, and it
+// is in this command. `--file` carries `-f`, so pflag reads `-file /tmp/tok`
+// as `-f` with the value "ile" -- the rest of the cluster -- and leaves
+// /tmp/tok behind as an operand, which glscopes then checks as a DEMANDED
+// SCOPE. It does not fail. It answers a different question, with a token in
+// hand.
+//
+// Both halves are asserted here: the adapter keeps the spelling intact, and
+// the control confirms that pflag really does read it the other way, so this
+// test cannot quietly become a tautology if the adapter stops being called.
+func TestTheSingleDashFileSpellingIsNotTheShorthand(t *testing.T) {
+	cmd := RootCmd(t.TempDir())
+	if err := cmd.Flags().Parse(cliflags.LegacyArgs(cmd, []string{"-file", "/tmp/tok"})); err != nil {
+		t.Fatalf("-file through the adapter: %v", err)
+	}
+	if got, _ := cmd.Flags().GetString("file"); got != "/tmp/tok" {
+		t.Errorf("file = %q, want /tmp/tok", got)
+	}
+	if n := cmd.Flags().NArg(); n != 0 {
+		t.Errorf("left %d operand(s) behind, which would be read as demanded scopes: %q",
+			n, cmd.Flags().Args())
+	}
+
+	bare := RootCmd(t.TempDir())
+	if err := bare.Flags().Parse([]string{"-file", "/tmp/tok"}); err != nil {
+		t.Fatalf("control: expected pflag to ACCEPT -file as a cluster, got %v", err)
+	}
+	if got, _ := bare.Flags().GetString("file"); got != "ile" {
+		t.Errorf("control: without the adapter, file = %q, want \"ile\": pflag changed, "+
+			"or this control is measuring nothing", got)
+	}
+	if args := bare.Flags().Args(); len(args) != 1 || args[0] != "/tmp/tok" {
+		t.Errorf("control: operands = %q, want [/tmp/tok] left over as a scope", args)
+	}
+}
+
 // ⛔ THE SPELLINGS THIS TOOL'S OWN DOCUMENTATION USES. Every example in the
 // package comment above is single-dash, and pflag reads a single dash as a
 // cluster of shorthands -- `-host` as h, o, s, t. The other tests here pass
