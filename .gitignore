@@ -16,3 +16,27 @@
 /cmd/*/credscan
 /git-post-checkout-guard
 /cmd/*/git-post-checkout-guard
+# ⛔ Added 2026-10-31 after `go build ./cmd/guardscan/` dropped a 5.1 MB binary
+# in the root and one `git add -A` committed it. Caught before the push went
+# anywhere by reading the commit's own file list, not by this file — which is
+# the point worth keeping: THIS LIST NAMES BINARIES ONE BY ONE, so it is always
+# one command behind, and it was never the barrier. The barrier is the CI gate
+# "nothing big is tracked". Build with `-o` into the scratchpad instead.
+/guardscan
+/cmd/*/guardscan
+/hookcheck
+/cmd/*/hookcheck
+/guard-bash
+/cmd/*/guard-bash
+/ghnew
+/cmd/*/ghnew
+/ghpkg
+/cmd/*/ghpkg
+/ghrunner
+/cmd/*/ghrunner
+/glscopes
+/cmd/*/glscopes
+/glci
+/cmd/*/glci
+/reauthor
+/cmd/*/reauthor
