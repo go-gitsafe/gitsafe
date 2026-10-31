@@ -128,6 +128,19 @@ var corpus = []struct {
 	{"a loop inside a backtick substitution",
 		"echo \"`while read -r l; do echo $l; done < /tmp/f`\"", "refuse"},
 
+	// ⛔ ASKING AN INTERPRETER WHAT IT IS. Refused until v0.27.0 as "ruby doing
+	// the processing", although the doctrine this enforces allows "invoking a
+	// program and looking at it" and names `go version`. guardscan found it by
+	// reading every escape in 443,030 recorded commands: 5 runs of this, and
+	// it is the only class among the 26 the rule should not have refused.
+	{"asking ruby what it is", "ruby -v", "allow"},
+	{"the same, by a full path and into a file", "/usr/bin/ruby --version > /tmp/v.txt", "allow"},
+	{"asking python, with stderr folded in", "python3 --version 2>&1", "allow"},
+	// And the half that keeps it from being a passport for the rest of the line.
+	{"a version flag does not excuse a script", "python3 --version script.py", "refuse"},
+	{"nor code on the command line", `ruby --version -e 'puts 1'`, "refuse"},
+	{"nor a pipeline", "ruby --version | head -1", "refuse"},
+
 	// ⛔ THE NEWEST RULE WAS THE ONE THIS TABLE NEVER ASKED ABOUT. `volatile`
 	// shipped in v0.20.0, after five recorded losses of work written where a
 	// reboot empties it — the last a whole branch, purged with the scratchpad
