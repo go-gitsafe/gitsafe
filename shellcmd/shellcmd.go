@@ -102,6 +102,41 @@ func Statements(cmd string) []string {
 	return out
 }
 
+// EscapeGiven reports whether s begins with an assignment of name to something
+// meant — anything but empty or `0`.
+//
+// ⛔ THIS IS THE ONLY PLACE A PRE-TOOL HOOK CAN SEE AN ESCAPE. The guard runs
+// BEFORE the command, as its own process, and reads the command as TEXT: a
+// variable the command would have run with never reaches the guard's
+// environment. [discard.Escape] states the doctrine — "a refusal that names a
+// way out that does not work is worse than one that names none" — and
+// `volatile` and `discard` were written to it.
+//
+// ⛔⛔ THREE RULES WERE NOT, AND MEASURED 2026-10-31 THE PROMISE WAS EMPTY.
+// `guard-bash` gated `shellwork`, `pipestatus` and `sigpipe` on
+// [os.Getenv] alone, while every one of their refusals ended with "`
+// GITSAFE_ALLOW_<RULE>=1` in front of one command is the escape". Run with the
+// prefix, the refusal came back word for word:
+//
+//	GITSAFE_ALLOW_SHELLWORK=1 /usr/bin/ruby --version > /tmp/v.txt
+//	→ Refused: ruby doing the processing
+//
+// Scanning stops at the first word that is not an assignment, which is the
+// command, so `git commit -m "GITSAFE_ALLOW_SHELLWORK=1"` is a message and not
+// a permission.
+func EscapeGiven(s, name string) bool {
+	for _, f := range strings.Fields(s) {
+		n, v, ok := strings.Cut(f, "=")
+		if !ok || strings.HasPrefix(f, "-") {
+			return false
+		}
+		if n == name && v != "" && v != "0" {
+			return true
+		}
+	}
+	return false
+}
+
 // InsideQuotes reports whether the byte at off is inside quoting that stops
 // the shell interpreting it — so that writing ABOUT a forbidden form is not
 // the forbidden form.
