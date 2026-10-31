@@ -204,8 +204,8 @@ is a failure by elimination.
 
 | | |
 |---|---|
-| migrated | `credscan` and `ghpkg` (their verbs are real subcommands) `ghnew` `ghrunner` `ghscopes` `glci` `glscopes` `hookcheck` `reauthor` |
-| still on `flag` | `ghmerge` `ghrelease` |
+| migrated | `credscan`, `ghpkg` and `ghrelease` (their verbs — `scan`/`clean`, `list`/`delete`, `backfill` — are real subcommands) `ghmerge` `ghnew` `ghrunner` `ghscopes` `glci` `glscopes` `hookcheck` `reauthor` |
+| still on `flag` | none: `cliflags.ParseFlags` and `cliflags.IsHelpError`, the helpers for the `flag` package, were removed with the last of them |
 | **deliberately not cobra** | `gitpush` `guard-bash` `git-credential-tokenfile` `git-pre-push-guard` `git-post-checkout-guard` |
 
 That last row is not laziness. `gitpush` forwards its whole argument list to
