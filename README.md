@@ -328,6 +328,7 @@ go install github.com/go-gitsafe/gitsafe/cmd/guard-bash@latest
 go install github.com/go-gitsafe/gitsafe/cmd/hookcheck@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glci@latest
+go install github.com/go-gitsafe/gitsafe/cmd/guardscan@latest
 
 which -a gitpush ghrelease git-credential-tokenfile   # one path each, the one you meant
 ```
@@ -1092,6 +1093,62 @@ One in each direction — the false refusal, and the backtick loop it allowed.
 by both guards.** It said only *"while go test stays green"*, with no `do` after
 it, so the pattern never matched and the row witnessed nothing. A case that
 passes for a reason other than the one it is named after is not a case.
+
+### `guardscan` — asking the whole record instead of the last annoyance
+
+Both of those false refusals were found the same way: somebody tripped over one
+mid-task. That is a bad way to find them, because the usual response is not a
+report — it is a workaround, and then the rule keeps its defect and loses its
+authority.
+
+So `guardscan` puts the commands this machine *actually runs* to every rule
+`guard-bash` enforces. It reads the Claude Code transcripts and **runs
+nothing**: every rule is a pure function of the command text, which is what
+makes a corpus this size usable at all. Commands are printed through `redact`,
+the same way the guards print.
+
+```
+guardscan                      every transcript under ~/.claude/projects
+guardscan --rule shellwork     one rule
+guardscan --escaped            only where somebody reached for the escape
+```
+
+⭐ **The `--escaped` rows are the valuable ones.** A refusal somebody worked
+around is a refusal they judged wrong *at the moment they were holding the
+problem* — so each one is a candidate defect with a witness attached. Measured
+2026-10-31 over **3 906 transcripts, 443 030 Bash commands, 416 762 distinct**:
+
+```
+GITSAFE_ALLOW_SHELLWORK    18
+GITSAFE_ALLOW_DISCARD       8
+```
+
+Twenty-six, in four hundred thousand commands. Reaching for the escape is rare,
+which is the good news; of the seventeen that are still refused with the prefix
+in place, exactly **one class was the rule's fault**:
+
+| what somebody escaped | runs | verdict |
+|---|---|---|
+| `ruby -v`, `/usr/bin/ruby --version > f` | 5 | ⛔ **the rule was wrong** — fixed |
+| `sed -n '30,70p' f`, `awk 'NR>=16670…' f` | 5 | refused on purpose: that is what reading a file with an offset is for |
+| `bash -c '…'`, pipelines | 6 | refused on purpose |
+| `perl …` | 1 | refused on purpose |
+
+**Asking a program its version is reading, not processing** — the doctrine this
+rule enforces says so in as many words, *"invoking a program and looking at it
+is not building a tool"*, and names `go version` as its example. An interpreter
+invoked with nothing but `--version`, `-v`, `-V` or `--help` is now allowed, and
+a redirection does not change that (`ruby --version > /tmp/v.txt` is still a
+question; a redirect carries the answer away, it cannot carry code in). A
+version flag is **not** a passport for the rest of the line: `ruby --version -e
+'puts 1'`, `python3 --version script.py` and `ruby --version | head -1` are all
+still refused, and `hookcheck` has a row for each direction.
+
+⛔ **A scan that could not read must not report a clean machine.** Zero
+transcripts, or transcripts whose shape it cannot parse, both exit non-zero and
+say which — because "no false refusals" is exactly what a broken reader looks
+like from outside. It reads both spellings of a tool call for the same reason:
+the transcript format is not ours to pin.
 
 Only the command word of a stage decides, or the guard would refuse every `grep`
 for the rule's own text — including the ones in this README.

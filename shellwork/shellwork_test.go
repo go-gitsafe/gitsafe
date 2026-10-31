@@ -82,6 +82,53 @@ func TestProseInDoubleQuotesIsNotShellWork(t *testing.T) {
 	}
 }
 
+// ⛔⛔ ASKING AN INTERPRETER WHAT IT IS, which this refused as "doing the
+// processing" until 2026-10-31. The doctrine it enforces says "invoking a
+// program and looking at it is not building a tool" and names `go version`;
+// guardscan found this is the ONLY class among the 26 escapes in 443,030
+// recorded commands that the rule should not have refused.
+func TestAskingAnInterpreterWhatItIsIsReading(t *testing.T) {
+	for _, cmd := range []string{
+		"ruby -v",
+		"/usr/bin/ruby --version",
+		"ruby --version > /tmp/v.txt",
+		"ruby --version >/tmp/v.txt",
+		"python3 --version 2>&1",
+		"python3 -V",
+		"perl --version",
+		"awk --version",
+		"sed --version > /tmp/v.txt 2>&1",
+		"python3 --help",
+		"command ruby --version",
+	} {
+		if f := Check(cmd); f.Found() {
+			t.Errorf("REFUSED a question: %q — %s", cmd, f.String())
+		}
+	}
+}
+
+// ⭐ And the half that keeps it from being a hole: a version flag is not a
+// passport for the rest of the command line.
+func TestAVersionFlagDoesNotExcuseTheWork(t *testing.T) {
+	for _, cmd := range []string{
+		`ruby -e 'puts 1'`,
+		`python3 -c "import json;print(1)"`,
+		`ruby --version -e 'puts 1'`,
+		`python3 --version script.py`,
+		`perl -pi -e 's/a/b/' README.md`,
+		`awk '{print $1}' /tmp/f.txt`,
+		`sed -n '1,5p' /tmp/f.txt`,
+		// A pipeline is refused before this ever runs, and must stay refused:
+		// the version is not the point, the pipe is.
+		`ruby --version | head -1`,
+		`python3 --version | grep 3`,
+	} {
+		if f := Check(cmd); !f.Found() {
+			t.Errorf("NOT refused: %q", cmd)
+		}
+	}
+}
+
 // ⭐ And the tightening that comes with the same correction: double quotes do
 // not stop a command substitution, so a loop hidden in one is a loop the shell
 // really runs. The old helper called this quoted and allowed it.

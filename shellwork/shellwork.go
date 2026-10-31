@@ -189,6 +189,23 @@ func inStage(stage string) Finding {
 			continue
 		}
 		if interpreters[base(w)] {
+			// ⛔ ASKING A PROGRAM ITS VERSION IS READING, NOT PROCESSING, and
+			// the doctrine this rule enforces says so in as many words:
+			// "invoking a program and looking at it is not building a tool",
+			// naming `go version` as the example. `ruby --version` was refused
+			// anyway, with the message "ruby doing the processing".
+			//
+			// ⛔ MEASURED by guardscan over 443,030 commands in the
+			// transcripts: of the 26 times somebody reached for
+			// GITSAFE_ALLOW_SHELLWORK or GITSAFE_ALLOW_DISCARD, 5 runs were
+			// this -- `ruby -v`, `/usr/bin/ruby --version > f` -- and they are
+			// the only class among them the rule should not have refused. The
+			// others are a shell loop, `bash -c`, a pipeline, and `sed -n`/
+			// `awk 'NR>=…'` reading a line range, which the Read tool does and
+			// which this refuses on purpose.
+			if versionQuery(words[i+1:]) {
+				return Finding{}
+			}
 			return Finding{
 				Kind:    base(w) + " doing the processing",
 				Match:   strings.Join(words[i:min(i+3, len(words))], " "),
@@ -210,6 +227,40 @@ func inStage(stage string) Finding {
 // the first occurrence the parity was computed from the wrong place.
 // [shellcmd.InsideQuotes] is now the single answer to "would the shell
 // interpret something written here", for every rule that asks.
+
+// versionQuery reports whether everything after an interpreter's name asks it
+// what it is, and nothing else.
+//
+// ⛔ EXACTLY ONE ARGUMENT THAT IS NOT A REDIRECTION, and it must be one of the
+// spellings of "say what you are". A redirection is skipped because that is how
+// the answer gets somewhere readable -- `ruby --version > /tmp/v.txt` is still
+// a question -- and skipping it is safe: a redirect cannot carry code to the
+// interpreter, only its output away. Anything else, including `-e`, `-c`, a
+// script path, or a version flag with a second argument beside it, is not a
+// question and falls through to the refusal.
+func versionQuery(args []string) bool {
+	var asked []string
+	for i := 0; i < len(args); i++ {
+		if a := args[i]; strings.ContainsAny(a, "<>") {
+			// A bare operator takes the next word as its target; one that
+			// already carries the target, or `2>&1`, does not.
+			switch a {
+			case ">", ">>", "<", "2>", "&>":
+				i++
+			}
+			continue
+		}
+		asked = append(asked, args[i])
+	}
+	if len(asked) != 1 {
+		return false
+	}
+	switch asked[0] {
+	case "--version", "-version", "-v", "-V", "--help", "-help", "-h":
+		return true
+	}
+	return false
+}
 
 // base is the last path element, so /usr/bin/awk and awk read alike.
 func base(s string) string {
