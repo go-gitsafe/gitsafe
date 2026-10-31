@@ -1047,6 +1047,51 @@ echo 'never write a | b'            writing about a form is not that form
 cat <<'EOF' … EOF                   a quoted heredoc is literal
 ```
 
+#### One of those lines was only true in single quotes
+
+⛔ **The guard refused this session's own work on 2026-10-31**: a note sent to
+a peer about the cobra migration, called *"a shell loop"* because the sentence
+contains the word *while* and, twenty words later, *do*.
+
+The exemption was there — "writing about a form is not that form" — but the
+helper behind it counted only `'`, so it held in `'…'` and not in `"…"`, while
+`Stages` two files away has always read both alike. **Two notions of "quoted"
+in one repository** is the thing `shellcmd` exists to prevent; its package
+comment says exactly that about pipelines.
+
+`shellcmd.InsideQuotes` is now the single answer for every rule that asks, and
+it knows three things the old helper did not:
+
+| | |
+|---|---|
+| both quote characters | so prose in `"…"` is prose |
+| a substitution is not quoted | `$(…)` and `` `…` `` inside double quotes are **run** by the shell, so a loop in one is a loop |
+| an unbalanced quote is not a quoted region | it answers *false* for every offset in one: a guard that is unsure must refuse, not allow |
+
+Two more defects came out of the tests written for that one. A loop opened by a
+**backtick** matched nothing at all, because the pattern starts a loop after
+`[;&|(]` or whitespace and a backtick is none of those — `$(…)` was caught only
+by the accident that `(` was already in the class. And the old helper searched a
+*trimmed remainder* while counting quotes from the start of that remainder, so
+after the first occurrence the parity came from the wrong place. Every match is
+now judged, by the absolute offset of the **keyword** rather than of the whole
+match: asking about the match meant asking about the separator in front of it,
+which for a backtick loop is one byte before the substitution opens.
+
+Measured, with `hookcheck` as the judge:
+
+```
+guard-bash v0.22.0, as installed    wrong on 2 of 48
+this build                          right on all 48
+```
+
+One in each direction — the false refusal, and the backtick loop it allowed.
+
+⛔ **And the first version of the corpus row for the false positive was allowed
+by both guards.** It said only *"while go test stays green"*, with no `do` after
+it, so the pattern never matched and the row witnessed nothing. A case that
+passes for a reason other than the one it is named after is not a case.
+
 Only the command word of a stage decides, or the guard would refuse every `grep`
 for the rule's own text — including the ones in this README.
 
