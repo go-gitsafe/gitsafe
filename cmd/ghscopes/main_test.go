@@ -10,7 +10,46 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/go-gitsafe/gitsafe/cliflags"
 )
+
+// Every spelling of the question is answered, and none is read as a scope to
+// demand (the original defect: `ghscopes -h` reported a scope called -h missing).
+func TestEverySpellingOfTheQuestionIsAnswered(t *testing.T) {
+	for _, arg := range []string{"-h", "--help", "-help", "help"} {
+		var out, errb bytes.Buffer
+		cmd := RootCmd()
+		cmd.SetOut(&out)
+		cmd.SetErr(&errb)
+		if code := cliflags.Run(cmd, []string{arg}); code != 0 {
+			t.Errorf("ghscopes %s exited %d\nstderr: %s", arg, code, errb.String())
+		}
+		if !strings.Contains(out.String(), "--file") {
+			t.Errorf("ghscopes %s does not name --file:\n%s", arg, out.String())
+		}
+	}
+}
+
+// -f is a declared shorthand, so pflag reads `-file x` as -f with value "ile"
+// and leaves x behind as a demanded scope. Both halves: the adapter, and the
+// control that proves pflag really reads it the other way.
+func TestTheSingleDashFileSpellingIsNotTheShorthand(t *testing.T) {
+	cmd := RootCmd()
+	if err := cmd.Flags().Parse(cliflags.LegacyArgs(cmd, []string{"-file", "/tmp/tok"})); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := cmd.Flags().GetString("file"); got != "/tmp/tok" || cmd.Flags().NArg() != 0 {
+		t.Errorf("file = %q, operands %q", got, cmd.Flags().Args())
+	}
+	bare := RootCmd()
+	if err := bare.Flags().Parse([]string{"-file", "/tmp/tok"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := bare.Flags().GetString("file"); got != "ile" || bare.Flags().NArg() != 1 {
+		t.Errorf("control: file = %q, operands %q; want \"ile\" and one operand", got, bare.Flags().Args())
+	}
+}
 
 func TestMissingFrom(t *testing.T) {
 	have := []string{"repo", "workflow", "gist"}
@@ -37,8 +76,8 @@ func TestMissingFrom(t *testing.T) {
 }
 
 func TestParseSeparatesTheFileFromTheScopes(t *testing.T) {
-	home := t.TempDir()
-	def := filepath.Join(home, defaultToken)
+	// An empty path means "the default token", which report resolves.
+	def := ""
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -47,6 +86,7 @@ func TestParseSeparatesTheFileFromTheScopes(t *testing.T) {
 	}{
 		{"nothing at all", nil, def, nil},
 		{"scopes only, as it always was", []string{"repo", "workflow"}, def, []string{"repo", "workflow"}},
+		{"a file, single-dash long", []string{"-file", "/tmp/t", "repo"}, "/tmp/t", []string{"repo"}},
 		{"a file, short", []string{"-f", "/tmp/t"}, "/tmp/t", nil},
 		{"a file, long", []string{"--file", "/tmp/t"}, "/tmp/t", nil},
 		{"a file and scopes, either way round",
@@ -54,9 +94,14 @@ func TestParseSeparatesTheFileFromTheScopes(t *testing.T) {
 		{"the last file named wins", []string{"-f", "/tmp/a", "-f", "/tmp/b"}, "/tmp/b", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path, want, err := parse(home, tc.args)
-			if err != nil {
+			cmd := RootCmd()
+			if err := cmd.Flags().Parse(cliflags.LegacyArgs(cmd, tc.args)); err != nil {
 				t.Fatal(err)
+			}
+			path, _ := cmd.Flags().GetString("file")
+			want := cmd.Flags().Args()
+			if len(want) == 0 {
+				want = nil
 			}
 			if path != tc.path {
 				t.Errorf("file %q, want %q", path, tc.path)
@@ -72,17 +117,14 @@ func TestAFileFlagWithNoFile(t *testing.T) {
 	// Taking the next argument as a path when there is none would read the
 	// scope the caller asked for as a filename, and say the token file is
 	// missing rather than that the command is.
-	for _, flag := range []string{"-f", "--file"} {
-		if _, _, err := parse(t.TempDir(), []string{flag}); err == nil {
-			t.Errorf("%s alone was accepted", flag)
+	for _, flag := range []string{"-f", "--file", "-file"} {
+		var out, errOut bytes.Buffer
+		if code := run([]string{flag}, &out, &errOut); code != 2 {
+			t.Errorf("%s alone: exit %d, want 2", flag, code)
 		}
-	}
-	var out, errOut bytes.Buffer
-	if code := run([]string{"-f"}, &out, &errOut); code != 2 {
-		t.Errorf("exit %d, want 2", code)
-	}
-	if !strings.Contains(errOut.String(), "needs the path") {
-		t.Errorf("it said %q", errOut.String())
+		if !strings.Contains(errOut.String(), "needs an argument") {
+			t.Errorf("%s alone: it said %q", flag, errOut.String())
+		}
 	}
 }
 

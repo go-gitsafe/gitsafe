@@ -74,37 +74,69 @@ package main
 import (
 	"bufio"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
+	"github.com/spf13/cobra"
 )
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
 func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("reauthor", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	identities := fs.String("identities", "", "file listing the identities that are YOURS (required)")
-	to := fs.String("to", "", `the identity to rewrite them to, as "Name <email>"; default: git's configured user.name and user.email`)
-	dry := fs.Bool("dry-run", false, "say what would change, write nothing")
-	doScan := fs.Bool("scan", false, "walk the given roots for checkouts and say which ones still "+
-		"carry an identity of yours; read-only, and non-zero when it finds any")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
+
+type options struct {
+	identities, to string
+	dry, scan      bool
+}
+
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd() *cobra.Command {
+	var o options
+	c := &cobra.Command{
+		Use:   "reauthor -identities FILE [flags] [repository | -scan root...]",
+		Short: "Rewrite the commits that are yours to one identity",
+		Long: `reauthor rewrites the commits that are YOURS to one identity and leaves
+everybody else's byte for byte, so that a personal name or address stops
+being published. It does not push.`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if code := execute(cmd, args, &o); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
+	f := c.Flags()
+	f.StringVar(&o.identities, "identities", "", "file listing the identities that are YOURS (required)")
+	f.StringVar(&o.to, "to", "", `the identity to rewrite them to, as "Name <email>"; default: git's configured user.name and user.email`)
+	f.BoolVar(&o.dry, "dry-run", false, "say what would change, write nothing")
+	f.BoolVar(&o.scan, "scan", false, "walk the given roots for checkouts and say which ones still "+
+		"carry an identity of yours; read-only, and non-zero when it finds any")
+	return c
+}
+
+func execute(cmd *cobra.Command, args []string, o *options) int {
+	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	identities, to, dry, doScan := &o.identities, &o.to, &o.dry, &o.scan
 	if *identities == "" {
 		fmt.Fprintln(stderr, "reauthor: -identities is required: a list of identities in the source "+
 			"would publish what this removes, and would name values instead of describing them")
-		fs.Usage()
+		fmt.Fprint(stderr, cmd.UsageString())
 		return 2
 	}
-	rest := fs.Args()
+	rest := args
 	repo := "."
 	if !*doScan {
 		if len(rest) == 1 {

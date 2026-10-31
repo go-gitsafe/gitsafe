@@ -35,7 +35,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +43,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/credfix"
+	"github.com/spf13/cobra"
 )
 
 // Exit codes. They are the interface a cron job or a hook uses, so they are
@@ -57,8 +57,9 @@ const (
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
-func usage(w io.Writer) {
-	fmt.Fprint(w, `usage:
+func usage(w io.Writer) { fmt.Fprint(w, usageText) }
+
+const usageText = `usage:
   credscan scan  [root...]              report credentials embedded in git remote URLs
   credscan clean <root...> [--write]    strip them, leaving the URL git should have had
 
@@ -74,55 +75,70 @@ exit status:
   2  usage              3  found nothing AND did not cover everything (nothing
                            walked, or a configuration it could not read) — which
                            is not the same as "clean". A finding outranks it: 1.
-`)
+`
+
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
+func run(args []string, stdout, stderr io.Writer) int {
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		usage(stderr)
-		return exitUsage
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+// scan and clean are real subcommands, so `credscan scan -h` is asked of scan.
+func RootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "credscan scan|clean [flags] [root...]",
+		Short: "Find and remove credentials embedded in git remote URLs",
+		Long:  usageText,
+		// An unknown verb is a usage mistake (status 2), not cobra's default
+		// failure. Run wraps this error as one.
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return fmt.Errorf("no such command %q", args[0])
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			usage(cmd.ErrOrStderr())
+			return cliflags.Status(exitUsage)
+		},
 	}
-	verb, rest := args[0], args[1:]
-	if cliflags.IsHelpRequest(verb) {
-		// ⛔ This knew three of the four spellings, so `credscan -help` printed
-		// the usage and exited 2 while `credscan -h` printed the same usage and
-		// exited 0. Measured 2026-10-18.
-		usage(stdout)
-		return exitClean
-	}
-	switch verb {
-	case "scan", "clean":
-	default:
-		fmt.Fprintf(stderr, "credscan: no such command %q\n", verb)
-		usage(stderr)
-		return exitUsage
-	}
+	root.AddCommand(verbCmd("scan", "Report credentials embedded in git remote URLs"))
+	root.AddCommand(verbCmd("clean", "Strip credentials, leaving the URL git should have had"))
+	return root
+}
 
-	fset := flag.NewFlagSet("credscan "+verb, flag.ContinueOnError)
-	fset.SetOutput(stderr)
-	write := fset.Bool("write", false, "actually rewrite")
-	verbose := fset.Bool("verbose", false, "list clean checkouts too")
-	// Flags may come after the roots: `credscan clean ~/src --write` is what a
-	// person types, and Go's flag package stops at the first positional. A flag
-	// silently ignored on a command that writes is a defect, not a convention.
-	var roots, flags []string
-	for i, a := range rest {
-		if len(a) > 1 && a[0] == '-' {
-			flags = append(flags, rest[i:]...)
-			break
-		}
-		roots = append(roots, a)
+func verbCmd(verb, short string) *cobra.Command {
+	var write, verbose bool
+	c := &cobra.Command{
+		Use:   verb + " [flags] [root...]",
+		Short: short,
+		// Flags may come after the roots: `credscan clean ~/src --write` is what
+		// a person types. pflag interleaves them, so a --write after the roots
+		// is read as a flag and never as a root. A flag silently ignored on a
+		// command that writes is a defect, not a convention.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, roots []string) error {
+			if code := execute(verb, roots, write, verbose, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
-	if code, ok := cliflags.ParseFlags(fset, flags); !ok {
-		return code
-	}
-	roots = append(roots, fset.Args()...)
+	c.Flags().BoolVar(&write, "write", false, "actually rewrite")
+	c.Flags().BoolVar(&verbose, "verbose", false, "list clean checkouts too")
+	return c
+}
 
-	if verb == "scan" && *write {
+func execute(verb string, roots []string, write, verbose bool, stdout, stderr io.Writer) int {
+	if verb == "scan" && write {
 		fmt.Fprintln(stderr, "credscan: scan never writes; use `credscan clean --write`")
 		return exitUsage
 	}
-	if verb == "clean" && *write && len(roots) == 0 {
+	if verb == "clean" && write && len(roots) == 0 {
 		// Defaulting to the home directory is right for a scan and wrong for a
 		// rewrite: the machine this was written for has 2155 checkouts under
 		// $HOME, and a person asking to repair one of them did not ask for the
@@ -130,7 +146,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "credscan: clean --write needs the roots spelled out; it will not rewrite $HOME by default")
 		return exitUsage
 	}
-	return sweep(verb, credfix.Roots(roots), *write, *verbose, stdout, stderr)
+	return sweep(verb, credfix.Roots(roots), write, verbose, stdout, stderr)
 }
 
 func sweep(verb string, roots []string, write, verbose bool, stdout, stderr io.Writer) int {
