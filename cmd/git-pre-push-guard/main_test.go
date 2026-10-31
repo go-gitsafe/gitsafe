@@ -71,6 +71,65 @@ func TestRefusesAWriteToTheDefaultBranch(t *testing.T) {
 	}
 }
 
+// TestARefusalRestingOnOriginHeadSaysSo is the message half of a false refusal
+// a peer session measured on 2026-10-31: `gitpush --force-with-lease origin
+// flag-to-cobra` was refused as "that is where pull requests land" while GitHub
+// said the default branch was main. The clone had been made FROM ANOTHER CLONE,
+// so refs/remotes/origin/HEAD had inherited the source clone's working branch,
+// and setting origin's URL afterwards did not update it.
+//
+// Clone-of-a-clone is the isolation pattern this machine recommends for
+// parallel sessions, so the guard will meet this again. The refusal was right
+// to fire -- it fails closed -- but it named a branch without saying where the
+// name came from, and the reader had no way to guess a stale local pointer.
+func TestARefusalRestingOnOriginHeadSaysSo(t *testing.T) {
+	was := remoteDefault
+	t.Cleanup(func() { remoteDefault = was })
+	remoteDefault = func(string) string { return "flag-to-cobra" }
+
+	var out, errb bytes.Buffer
+	refs := "refs/heads/flag-to-cobra aaaa refs/heads/flag-to-cobra bbbb\n"
+	if code := run([]string{"origin", "https://github.com/x/y.git"},
+		strings.NewReader(refs), &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	msg := errb.String()
+	for _, want := range []string{
+		"is not main or master",
+		"refs/remotes/origin/HEAD",
+		"local cache written at clone time",
+		"git remote set-head origin --auto",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, msg)
+		}
+	}
+}
+
+// TestTheDangerousDirectionIsUnchanged is the control, and it is the half that
+// matters: the explanation above must not have loosened the guard by one
+// character. With origin/HEAD naming SOME OTHER branch, a push to main is still
+// refused -- main is protected by NAME as well as by the pointer -- and the
+// origin/HEAD paragraph must NOT appear, because it would be false there.
+//
+// ⛔ Without this row, a change that made the pointer the ONLY source of
+// protection would pass the test above and quietly stop refusing main.
+func TestTheDangerousDirectionIsUnchanged(t *testing.T) {
+	was := remoteDefault
+	t.Cleanup(func() { remoteDefault = was })
+	remoteDefault = func(string) string { return "some-other-branch" }
+
+	var out, errb bytes.Buffer
+	refs := "refs/heads/main aaaa refs/heads/main bbbb\n"
+	if code := run([]string{"origin", "https://github.com/x/y.git"},
+		strings.NewReader(refs), &out, &errb); code != 1 {
+		t.Fatalf("a push to main was NOT refused while origin/HEAD named another branch: exit %d", code)
+	}
+	if msg := errb.String(); strings.Contains(msg, "refs/remotes/origin/HEAD") {
+		t.Errorf("main is protected by name, so the origin/HEAD explanation is false here:\n%s", msg)
+	}
+}
+
 // TestATagStillGoesUp: the guard must not touch releases. A guard that made
 // tagging harder would be turned off, and then it would guard nothing.
 func TestATagStillGoesUp(t *testing.T) {

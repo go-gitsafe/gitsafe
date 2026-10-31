@@ -183,6 +183,23 @@ The pre-push hook did not stop it either, and should not have: it refuses a writ
 to the branch pull requests land on, and a branch that does not exist yet is not
 that.
 
+⛔ **And how the hook knows which branch that is can be stale.** It reads
+`refs/remotes/<remote>/HEAD`, which git writes **once at clone time** and never
+refreshes on its own. A clone made from **another clone** — the isolation pattern
+recommended here for parallel sessions — inherits the *source* clone's HEAD, so it
+can name the other session's working branch, and setting `origin`'s URL to the real
+remote afterwards does not update it. Measured 2026-10-31: `gitpush
+--force-with-lease origin flag-to-cobra` was refused as "that is where pull requests
+land" while GitHub said the default branch was `main`.
+
+The guard was **right to fire** and is not loosened: `main` and `master` are
+protected by **name** as well, so with `origin/HEAD` pointing elsewhere a push to
+`main` is still refused — verified in both directions with a local fixture. What was
+missing was the reason, so the refusal now says when the name came from that cache
+and names the one-command repair:
+
+    git remote set-head origin --auto
+
 There is a second trap in the same place. Push a **feature** branch first to an
 empty repository and GitHub adopts *that* branch as the default. The repository
 then has no `main` at all, and its default branch is named after whatever happened
