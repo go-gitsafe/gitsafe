@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/glauth"
 )
 
@@ -50,6 +51,53 @@ func runIt(t *testing.T, args ...string) (int, string) {
 }
 
 const readAPI = `{"name":"claude-read-api","scopes":["read_api"],"expires_at":"2026-11-03","active":true,"revoked":false}`
+
+// ⛔ ALL FOUR SPELLINGS, THROUGH THE COMMAND A PERSON GETS. It is driven in
+// process rather than as a binary on purpose: this reaches cobra's parser and
+// the single-dash adapter without any chance of a run doing real work.
+//
+// `-help` is the one cobra alone gets wrong (command.go:921 refuses the parse
+// before the help check at :926), and `help` is the one it never declares for
+// a command with no subcommands (command.go:1264).
+func TestEverySpellingOfTheQuestionIsAnswered(t *testing.T) {
+	for _, arg := range []string{"-h", "--help", "-help", "help"} {
+		var out, errb bytes.Buffer
+		cmd := RootCmd(t.TempDir())
+		cmd.SetOut(&out)
+		cmd.SetErr(&errb)
+		if code := cliflags.Run(cmd, []string{arg}); code != 0 {
+			t.Errorf("glscopes %s exited %d\nstderr: %s", arg, code, errb.String())
+		}
+		for _, want := range []string{"--host", "--file"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("glscopes %s does not name %s:\n%s", arg, want, out.String())
+			}
+		}
+	}
+}
+
+// ⛔ THE SPELLINGS THIS TOOL'S OWN DOCUMENTATION USES. Every example in the
+// package comment above is single-dash, and pflag reads a single dash as a
+// cluster of shorthands -- `-host` as h, o, s, t. The other tests here pass
+// `-host` and `-f` too, which is why they are the real witnesses; this one
+// says so out loud, and adds the double-dash form cobra brings with it.
+func TestBothSpellingsOfEveryFlag(t *testing.T) {
+	for _, spelling := range [][]string{
+		{"-host", "gl.example"},
+		{"--host", "gl.example"},
+		{"-host=gl.example"},
+		{"--host=gl.example"},
+	} {
+		cmd := RootCmd(t.TempDir())
+		args := cliflags.LegacyArgs(cmd, spelling)
+		if err := cmd.Flags().Parse(args); err != nil {
+			t.Fatalf("%q: %v", spelling, err)
+		}
+		if got, _ := cmd.Flags().GetString("host"); got != "gl.example" {
+			t.Errorf("%q set host to %q, want gl.example", spelling, got)
+		}
+	}
+}
 
 func TestReportsWithoutTheToken(t *testing.T) {
 	code, out := runIt(t, setup(t, readAPI)...)

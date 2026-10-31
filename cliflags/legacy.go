@@ -38,6 +38,15 @@ func Run(cmd *cobra.Command, args []string) int {
 		}
 	}
 
+	// ⛔ A COMMAND WITH NO VERBS CANNOT BE ASKED ABOUT ONE. cobra adds the
+	// `help` subcommand only where there are subcommands to describe
+	// (command.go:1264), so for a flags-only command `help` arrives as an
+	// ordinary operand -- which is exactly how ghscopes used to answer it, by
+	// reading the token and reporting that a scope called `help` was missing.
+	if len(args) == 1 && args[0] == "help" && !cmd.HasSubCommands() {
+		args = []string{"--help"}
+	}
+
 	// One place prints, so a message cannot come out twice and the name of the
 	// command is always in front of it.
 	cmd.SilenceErrors = true
@@ -48,6 +57,15 @@ func Run(cmd *cobra.Command, args []string) int {
 	if err == nil {
 		return 0
 	}
+	// ⛔ A BODY THAT HAS ALREADY SPOKEN MUST NOT BE SPOKEN OVER. Every command
+	// here prints its own diagnosis -- which remote carried a credential, which
+	// scope is missing, which file is readable by others -- and those wordings
+	// are what their tests assert and what a person reads while holding a
+	// token. [Status] carries the exit code up without a second message.
+	var st Status
+	if errors.As(err, &st) {
+		return int(st)
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s: %v\n", cmd.Name(), err)
 	var u usage
 	if errors.As(err, &u) {
@@ -56,6 +74,19 @@ func Run(cmd *cobra.Command, args []string) int {
 	}
 	return 1
 }
+
+// Status is what a command's body returns when it has already said on stderr
+// what went wrong and only needs the status carried out of [Run].
+//
+//	RunE: func(cmd *cobra.Command, args []string) error {
+//		if code := run(cmd.OutOrStdout(), cmd.ErrOrStderr(), args); code != 0 {
+//			return cliflags.Status(code)
+//		}
+//		return nil
+//	}
+type Status int
+
+func (s Status) Error() string { return fmt.Sprintf("exit status %d", int(s)) }
 
 // usage marks an error as "you were misused", so [Run] can answer 2 without
 // reading the message.

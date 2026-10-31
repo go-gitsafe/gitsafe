@@ -2,6 +2,7 @@ package cliflags
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -199,6 +200,67 @@ func TestRunSeparatesAskedFromFailedFromMisused(t *testing.T) {
 					tc.args, code, tc.code, out.String(), errb.String())
 			}
 		})
+	}
+}
+
+// ⛔ `help` AT A COMMAND WITH NO VERBS. cobra declares the help subcommand
+// only when there are subcommands, so without this these eleven commands take
+// `help` as an operand -- glscopes would read the token and report a missing
+// scope called `help`, which is the defect ghscopes shipped with.
+func TestHelpIsAQuestionEvenWithoutSubcommands(t *testing.T) {
+	flagsOnly := func() *cobra.Command {
+		c := &cobra.Command{Use: "flagsonly", Args: cobra.ArbitraryArgs}
+		c.Flags().String("host", "", "")
+		c.RunE = func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("ran the work with operands %q", args)
+		}
+		return c
+	}
+
+	var out, errb strings.Builder
+	cmd := flagsOnly()
+	cmd.SetOut(&out)
+	cmd.SetErr(&errb)
+	if code := Run(cmd, []string{"help"}); code != 0 {
+		t.Errorf("Run([help]) = %d, want 0\nstderr: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "--host") {
+		t.Errorf("`help` did not print the flags:\nstdout: %s\nstderr: %s", out.String(), errb.String())
+	}
+
+	// The negative half: it is the sole argument that means a question. A
+	// repository, a scope or a file called `help` is still an operand.
+	cmd = flagsOnly()
+	var out2, errb2 strings.Builder
+	cmd.SetOut(&out2)
+	cmd.SetErr(&errb2)
+	if code := Run(cmd, []string{"help", "me"}); code != 1 {
+		t.Errorf("Run([help me]) = %d, want 1 (the work, with two operands)", code)
+	}
+}
+
+// ⛔ A body that printed its own diagnosis must not have a second message
+// printed over it: these commands say which remote carried a credential and
+// which scope is missing, and that wording is the product.
+func TestRunCarriesAStatusWithoutSpeakingOverTheBody(t *testing.T) {
+	for _, code := range []int{1, 2, 3, 128} {
+		cmd := probe()
+		var out, errb strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetErr(&errb)
+		cmd.RunE = func(c *cobra.Command, _ []string) error {
+			fmt.Fprintln(c.ErrOrStderr(), "probe: the remote carries a credential")
+			return Status(code)
+		}
+		if got := Run(cmd, nil); got != code {
+			t.Errorf("Run with Status(%d) = %d", code, got)
+		}
+		if n := strings.Count(errb.String(), "\n"); n != 1 {
+			t.Errorf("Status(%d) printed %d lines, want only the body's own:\n%s", code, n, errb.String())
+		}
+		if strings.Contains(errb.String(), "exit status") {
+			t.Errorf("Status leaked its own Error() text:\n%s", errb.String())
+		}
 	}
 }
 
