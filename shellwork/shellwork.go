@@ -112,7 +112,15 @@ var interpreters = map[string]bool{
 }
 
 // loop matches a shell loop, which is a program and belongs in Go.
-var loop = regexp.MustCompile(`(^|[;&|(]|\s)(for|while|until)\s+[^;]*;?\s*do(\s|;|$)`)
+//
+// ⛔ THE BACKTICK IS IN THE PREFIX CLASS BECAUSE IT OPENS A SUBSTITUTION. A
+// loop written as “ `while read -r l; do …; done` “ matched nothing at all
+// — not because it was thought quoted, but because the character in front of
+// `while` was not one this pattern would start a loop after. `$(…)` was caught
+// only by the accident that `(` was already in the class. Found 2026-10-31 by
+// a test written for the quoting fix next door, which is the second defect
+// that one sentence turned up.
+var loop = regexp.MustCompile(`(^|[;&|(` + "`" + `]|\s)(for|while|until)\s+[^;]*;?\s*do(\s|;|$)`)
 
 // stdinBody matches a commit message or a pull-request body taken from stdin
 // rather than from a file written with Write.
@@ -141,10 +149,20 @@ func Check(cmd string) Finding {
 			}
 		}
 	}
-	if m := loop.FindString(cmd); m != "" && !quotedOnly(cmd, strings.TrimSpace(m)) {
+	// ⛔ EVERY MATCH IS JUDGED, AND BY THE OFFSET OF THE KEYWORD. Asking about
+	// the whole match meant asking about its first character, which is the
+	// separator in front of the loop -- for `` `while … done` `` that is the
+	// backtick, one byte BEFORE the substitution opens, and so still inside the
+	// quoting. The keyword itself is the thing the shell would run. Taking all
+	// the matches rather than the first also means a loop written about in a
+	// message cannot hide a real one later in the same command line.
+	for _, loc := range loop.FindAllStringSubmatchIndex(cmd, -1) {
+		if shellcmd.InsideQuotes(cmd, loc[4]) {
+			continue // writing ABOUT a loop is not a loop
+		}
 		return Finding{
 			Kind:    "a shell loop",
-			Match:   strings.TrimSpace(m),
+			Match:   strings.TrimSpace(cmd[loc[0]:loc[1]]),
 			Instead: "a loop is a program: put it in a Go program and `go run` it",
 		}
 	}
@@ -183,36 +201,15 @@ func inStage(stage string) Finding {
 	return Finding{}
 }
 
-// quotedOnly reports whether every occurrence of sub in cmd is inside single
-// quotes, where the shell does not interpret it: writing ABOUT a loop is not a
-// loop.
-func quotedOnly(cmd, sub string) bool {
-	if sub == "" {
-		return true
-	}
-	rest := cmd
-	for {
-		i := strings.Index(rest, sub)
-		if i < 0 {
-			return true
-		}
-		if !insideSingleQuotes(rest, i) {
-			return false
-		}
-		rest = rest[i+len(sub):]
-	}
-}
-
-// insideSingleQuotes reports whether the byte at off is within single quotes.
-func insideSingleQuotes(s string, off int) bool {
-	in := false
-	for i := 0; i < off && i < len(s); i++ {
-		if s[i] == '\'' {
-			in = !in
-		}
-	}
-	return in
-}
+// ⛔ THE `quotedOnly` HELPER THAT USED TO BE HERE IS GONE, and both of its
+// faults are worth remembering. It knew only `'`, so this rule refused in
+// double quotes what the pipeline rule next door allowed there — measured on
+// this session's own work, where an `agentsync tell` message containing the
+// English word "while" was refused as a shell loop. And it searched a TRIMMED
+// REMAINDER while counting quotes from the start of that remainder, so after
+// the first occurrence the parity was computed from the wrong place.
+// [shellcmd.InsideQuotes] is now the single answer to "would the shell
+// interpret something written here", for every rule that asks.
 
 // base is the last path element, so /usr/bin/awk and awk read alike.
 func base(s string) string {

@@ -48,6 +48,56 @@ func TestItRefusesWorkTheShellShouldNotBeDoing(t *testing.T) {
 	}
 }
 
+// ⛔⛔ THE REFUSAL THAT WAS WRONG, MEASURED 2026-10-31 ON THIS SESSION'S OWN
+// WORK. Sending a peer session a note about the cobra migration was refused as
+// "a shell loop", because the note contains the English word "while" and, a
+// few words later, "do". The rule already knew that writing ABOUT a loop is
+// not a loop — its helper simply counted only `'`, so the exemption applied in
+// single quotes and not in double ones, while the pipeline rule next door read
+// both alike. Two notions of "quoted" in one repository.
+//
+// A guard that refuses legitimate work teaches people to reach for
+// GITSAFE_ALLOW_SHELLWORK=1, and a guard that is routinely switched off is not
+// a floor.
+func TestProseInDoubleQuotesIsNotShellWork(t *testing.T) {
+	for _, c := range []struct{ name, cmd string }{
+		{"the note that was refused",
+			`agentsync tell go-fleettools/fleettools "the call sites break at the migration, ` +
+				`while go test stays green because tests do spell their own arguments"`},
+		// ⛔ This case said `-F -` at first and was refused for THAT, by the
+		// stdin-body rule, correctly. A case that fails for a reason other than
+		// the one it is testing proves nothing about the rule under test.
+		{"a commit message that warns against a loop",
+			`git commit -m "do not write: for f in *; do rm $f; done"`},
+		{"the same sentence in single quotes, which always worked",
+			`agentsync tell repo 'green while tests do run'`},
+		{"a pipe talked about rather than used",
+			`agentsync tell repo "redirect rather than | head, which drops the status"`},
+		{"an interpreter named in prose",
+			`git commit -m "replace the awk one-liner with a Go program"`},
+	} {
+		if f := Check(c.cmd); f.Found() {
+			t.Errorf("%s: REFUSED prose: %s\n  %q", c.name, f.String(), c.cmd)
+		}
+	}
+}
+
+// ⭐ And the tightening that comes with the same correction: double quotes do
+// not stop a command substitution, so a loop hidden in one is a loop the shell
+// really runs. The old helper called this quoted and allowed it.
+func TestALoopInsideASubstitutionIsStillALoop(t *testing.T) {
+	for _, c := range []struct{ name, cmd string }{
+		{"a loop in a substitution inside double quotes",
+			`echo "$(for f in *.go; do echo "$f"; done)"`},
+		{"a loop in a backtick substitution",
+			"echo \"`while read -r l; do echo $l; done < /tmp/f`\""},
+	} {
+		if f := Check(c.cmd); !f.Found() {
+			t.Errorf("%s: NOT refused: %q", c.name, c.cmd)
+		}
+	}
+}
+
 // ⭐ The half that keeps the guard from being worked around. This is the
 // broadest rule in the repository, so the allow table is the longer one: a
 // guard that refuses ordinary work is a guard somebody switches off wholesale.

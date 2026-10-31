@@ -106,6 +106,28 @@ var corpus = []struct {
 	{"a shell loop", `for i in 1 2 3; do echo "$i"; done`, "refuse"},
 	{"a commit body on stdin rather than in a file", "git commit -F -", "refuse"},
 
+	// ⛔ WHERE THE LOOP RULE STOPS, both directions, added the day the guard
+	// refused this session's own note to a peer because the sentence contained
+	// the word "while". Writing ABOUT a loop was already exempt in single
+	// quotes and not in double ones, while the pipeline rule read both alike.
+	// A guard that refuses legitimate work teaches people to switch it off.
+	// ⛔ THIS ROW HAS TO CONTAIN A `do`, AND ITS FIRST VERSION DID NOT. The
+	// pattern is `while … do`, with no `;` in between, so a sentence saying
+	// only "while go test stays green" never matched and the row was allowed by
+	// the guard it was meant to catch out — a case passing for a reason other
+	// than the one it is named after. The message that was really refused had
+	// its "do" twenty words after its "while".
+	{"prose about a loop, in double quotes",
+		`agentsync tell repo "the call sites break while the tests do spell their own arguments"`, "allow"},
+	{"prose about a loop, in single quotes",
+		`git commit -m 'never write: for f in *; do rm $f; done'`, "allow"},
+	// And the tightening that came with the same correction: double quotes do
+	// not stop a substitution, so the shell really runs these.
+	{"a loop inside a substitution in double quotes",
+		`echo "$(for f in *.go; do echo "$f"; done)"`, "refuse"},
+	{"a loop inside a backtick substitution",
+		"echo \"`while read -r l; do echo $l; done < /tmp/f`\"", "refuse"},
+
 	// ⛔ THE NEWEST RULE WAS THE ONE THIS TABLE NEVER ASKED ABOUT. `volatile`
 	// shipped in v0.20.0, after five recorded losses of work written where a
 	// reboot empties it — the last a whole branch, purged with the scratchpad

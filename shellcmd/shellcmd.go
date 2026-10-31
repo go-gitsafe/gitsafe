@@ -102,6 +102,71 @@ func Statements(cmd string) []string {
 	return out
 }
 
+// InsideQuotes reports whether the byte at off is inside quoting that stops
+// the shell interpreting it — so that writing ABOUT a forbidden form is not
+// the forbidden form.
+//
+// ⛔ IT KNOWS BOTH QUOTE CHARACTERS, AND THAT IS WHY IT IS HERE. [Stages] has
+// always treated `'` and `"` alike, so a pipeline quoted in a message was
+// correctly read as an argument — while the loop rule next door asked a
+// private helper that knew only `'`, and refused the same sentence in double
+// quotes. Measured 2026-10-31, on this session's own work: an
+// `agentsync tell` whose message read "…and go test stays green **while**
+// tests drive RootCmd" was refused as a shell loop. Two notions of "quoted"
+// in one repository is the thing this package exists to prevent.
+//
+// ⛔ DOUBLE QUOTES DO NOT STOP A COMMAND SUBSTITUTION, so `$(…)` and
+// backticks inside them are reported as NOT quoted: the shell really does run
+// what is in there, and a loop hidden in one is a loop.
+//
+// ⛔ AN UNBALANCED QUOTE IS NOT A QUOTED REGION, it is a broken command, and
+// this answers false for every offset in one — a guard that is unsure must
+// refuse rather than allow.
+func InsideQuotes(s string, off int) bool {
+	if off < 0 || off >= len(s) {
+		return false
+	}
+	q, subst, at := byte(0), 0, false
+	for i := 0; i < len(s); i++ {
+		if i == off {
+			at = q != 0 && subst == 0
+		}
+		switch c := s[i]; {
+		case q == '\'':
+			if c == '\'' {
+				q = 0
+			}
+		case c == '\\' && q == '"':
+			// `\"` does not end the quoting; nor does `\\`.
+			i++
+		case q == '"' && c == '$' && i+1 < len(s) && s[i+1] == '(':
+			subst++
+			i++
+		case q == '"' && subst > 0 && c == ')':
+			subst--
+		case q == '"' && c == '`':
+			// A backtick substitution has no nesting to count.
+			if subst > 0 {
+				subst = 0
+			} else {
+				subst = 1
+			}
+		case q == '"':
+			if c == '"' && subst == 0 {
+				q = 0
+			}
+		case c == '\'' || c == '"':
+			q = c
+		case c == '\\':
+			i++
+		}
+	}
+	if q != 0 || subst != 0 {
+		return false // unbalanced: not a quoted region, a broken command
+	}
+	return at
+}
+
 // HasPipe reports whether a statement contains a pipe outside quotes.
 func HasPipe(st string) bool {
 	return len(Stages(st)) > 1
