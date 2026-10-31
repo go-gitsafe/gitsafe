@@ -106,6 +106,34 @@ var corpus = []struct {
 	{"a shell loop", `for i in 1 2 3; do echo "$i"; done`, "refuse"},
 	{"a commit body on stdin rather than in a file", "git commit -F -", "refuse"},
 
+	// ⛔ THE NEWEST RULE WAS THE ONE THIS TABLE NEVER ASKED ABOUT. `volatile`
+	// shipped in v0.20.0, after five recorded losses of work written where a
+	// reboot empties it — the last a whole branch, purged with the scratchpad
+	// before its first push — and on 2026-10-31 `grep -c volatile
+	// cmd/hookcheck/main.go` printed **0**. So "right on all 32" was a verdict
+	// about a smaller table than the guard, exactly what the comment above the
+	// pipeline rows says about this corpus, and the rule with the freshest
+	// scar was outside it.
+	//
+	// Every row here is destination-explicit, so the answer does not depend on
+	// where hookcheck itself is run: `git -C` and `cd` carry the directory, and
+	// the paths are absolute or `~`-anchored.
+	{"a clone into /tmp", "git clone https://github.com/go-gitsafe/gitsafe /tmp/gitsafe", "refuse"},
+	{"a clone into the session scratchpad", "git clone https://github.com/go-gitsafe/gitsafe /private/tmp/claude-501/scratch/gitsafe", "refuse"},
+	{"gh repo clone into the $TMPDIR tree", "gh repo clone go-gitsafe/gitsafe /var/folders/zz/t/gitsafe", "refuse"},
+	{"a worktree where a reboot empties", "git worktree add /tmp/gitsafe-wt main", "refuse"},
+	{"a repository started there", "git init /dev/shm/scratch", "refuse"},
+	{"a commit in such a tree, named by -C", "git -C /private/tmp/scratch/gitsafe commit -F /tmp/msg.txt", "refuse"},
+	{"cd first, commit second", "cd /tmp/scratch && git commit -m wip", "refuse"},
+
+	{"the same clone, somewhere durable", "git clone https://github.com/go-gitsafe/gitsafe ~/Documents/VCS/GIT/localhost/go-gitsafe-gitsafe-probe", "allow"},
+	{"a worktree beside it, durable", "git worktree add ~/Documents/VCS/GIT/localhost/gitsafe-wt main", "allow"},
+	// ⭐ /var/tmp is deliberately NOT in the list: it survives a reboot. A row
+	// for it is how that decision stays a decision rather than an oversight.
+	{"/var/tmp survives a reboot", "git clone https://github.com/go-gitsafe/gitsafe /var/tmp/gitsafe", "allow"},
+	{"the escape, which is an act", "GITSAFE_ALLOW_VOLATILE=1 git clone https://github.com/go-gitsafe/gitsafe /tmp/throwaway", "allow"},
+	{"a status in a tree already there", "git -C /tmp/gitsafe status --short", "allow"},
+
 	{"a status with no pipeline before it", "go build ./...; echo $?", "allow"},
 	{"a redirect is not a pipe, and is what the rule asks for", `go test ./... > /tmp/out.txt 2>&1`, "allow"},
 	{"a commit body in a FILE", `git commit -F /tmp/msg.txt`, "allow"},

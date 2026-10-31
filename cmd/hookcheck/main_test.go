@@ -8,6 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-gitsafe/gitsafe/bypass"
+	"github.com/go-gitsafe/gitsafe/discard"
+	"github.com/go-gitsafe/gitsafe/pipestatus"
+	"github.com/go-gitsafe/gitsafe/secretarg"
+	"github.com/go-gitsafe/gitsafe/shellwork"
+	"github.com/go-gitsafe/gitsafe/sigpipe"
+	"github.com/go-gitsafe/gitsafe/volatile"
 )
 
 // fakeHook writes a stub script that answers every payload the same way, so a
@@ -299,6 +307,125 @@ func TestTheCorpusHasBothHalves(t *testing.T) {
 	if refuse == 0 || allow == 0 {
 		t.Fatalf("%d refuse, %d allow — a corpus of one kind proves nothing", refuse, allow)
 	}
+}
+
+// TestEveryRuleGuardBashRunsFiresOnThisCorpus is the gate that was missing.
+//
+// ⛔ MEASURED 2026-10-31: `grep -c volatile cmd/hookcheck/main.go` printed 0.
+// The `volatile` rule had shipped in v0.20.0 — written after FIVE recorded
+// losses of work, the last a whole branch purged with the scratchpad before its
+// first push — and the table that prints "right on all 32" had never asked it
+// anything. The number was a verdict about a smaller table than the guard, and
+// nothing said so: a corpus going quiet about a rule looks exactly like a rule
+// with nothing to say.
+//
+// ⛔ IT ENUMERATES THE RULES FROM guard-bash's OWN SOURCE rather than from a
+// list written here. A list has to be remembered; an import block cannot be
+// forgotten, because adding a rule to the guard without a row here then fails
+// this test. The adapters below are the one hand-written part, and a rule with
+// no adapter is an explicit failure rather than a silent pass.
+func TestEveryRuleGuardBashRunsFiresOnThisCorpus(t *testing.T) {
+	// The directory and $TMPDIR the cwd-dependent rule is asked about. Fixed,
+	// so the answer does not depend on where the test runs.
+	const (
+		cwd    = "/Users/someone/Documents/VCS/GIT/localhost/go-gitsafe-gitsafe"
+		home   = "/Users/someone"
+		tmpdir = "/var/folders/zz/t"
+	)
+	fires := map[string]func(string) bool{
+		"bypass":     func(c string) bool { return bypass.Check(c).Found() },
+		"secretarg":  func(c string) bool { return secretarg.Check(c).Found() },
+		"discard":    func(c string) bool { return discard.Check(c).Found() },
+		"pipestatus": func(c string) bool { return pipestatus.Check(c).Found() },
+		"sigpipe":    func(c string) bool { return sigpipe.Check(c).Found() },
+		"shellwork":  func(c string) bool { return shellwork.Check(c).Found() },
+		"volatile":   func(c string) bool { return volatile.Check(c, cwd, home, tmpdir).Found() },
+	}
+
+	src, err := os.ReadFile(filepath.Join("..", "guard-bash", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = `"github.com/go-gitsafe/gitsafe/`
+	var rules []string
+	for rest := string(src); ; {
+		i := strings.Index(rest, prefix)
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len(prefix):]
+		j := strings.IndexByte(rest, '"')
+		if j < 0 {
+			break
+		}
+		if name := rest[:j]; !imported(rules, name) {
+			rules = append(rules, name)
+		}
+	}
+	if len(rules) == 0 {
+		t.Fatal("read no gitsafe imports out of cmd/guard-bash/main.go: the parse is wrong, not the guard")
+	}
+
+	// ⛔ THE PLANTED POSITIVE FIRST: over an EMPTY corpus every rule must come
+	// back unasked. Without this half, a predicate that could never report
+	// absence — a mistyped package name, a Found() read the wrong way round —
+	// would pass this test for the same reason a complete corpus does, and the
+	// gap it exists to catch would stay invisible.
+	if silent := unasked(nil, rules, fires); len(silent) != len(fires) {
+		t.Fatalf("over an empty corpus only %v read as unasked, of %d rules: "+
+			"this measurement cannot see the absence it is for", silent, len(fires))
+	}
+
+	var cmds []string
+	for _, c := range corpus {
+		cmds = append(cmds, c.cmd)
+	}
+	if u := unasked(cmds, rules, fires); len(u) > 0 {
+		t.Errorf("guard-bash runs %v, and no case in this corpus makes %v answer: "+
+			"a rule the table never asks about is one 'right on all %d' says nothing about",
+			rules, u, len(corpus))
+	}
+	// And the other direction: an adapter for a rule guard-bash does NOT run
+	// would quietly demand rows for a rule nobody is protected by.
+	for name := range fires {
+		if !imported(rules, name) {
+			t.Errorf("this test asks %q, which cmd/guard-bash/main.go does not import", name)
+		}
+	}
+}
+
+// unasked names the rules that no command in cmds makes answer. A rule
+// guard-bash imports but this test has no adapter for is skipped here and
+// reported by the caller, which is the difference between "we do not ask it"
+// and "nothing asks it".
+func unasked(cmds []string, rules []string, fires map[string]func(string) bool) []string {
+	var out []string
+	for _, r := range rules {
+		ask, ok := fires[r]
+		if !ok {
+			continue // cliflags and the other libraries are not rules
+		}
+		answered := false
+		for _, c := range cmds {
+			if ask(c) {
+				answered = true
+				break
+			}
+		}
+		if !answered {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func imported(rules []string, name string) bool {
+	for _, r := range rules {
+		if r == name {
+			return true
+		}
+	}
+	return false
 }
 
 // With no -settings, it reads ~/.claude/settings.json — the path anyone
