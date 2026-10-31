@@ -1,79 +1,11 @@
 package cliflags
 
 import (
-	"errors"
-	"flag"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// TestParseFlagsSeparatesAQuestionFromAMistake drives all three outcomes. The
-// help one is why this package exists, and it is the one no other test in this
-// repository ever reached: all ten commands had it wrong.
-func TestParseFlagsSeparatesAQuestionFromAMistake(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		args []string
-		code int
-		ok   bool
-	}{
-		{"a help request is answered, not refused", []string{"-h"}, 0, false},
-		{"--help likewise", []string{"--help"}, 0, false},
-		{"an unknown flag IS a usage error", []string{"-nope"}, 2, false},
-		{"a bad value for a known flag too", []string{"-n", "lots"}, 2, false},
-		{"nothing to complain about", []string{"-n", "3", "owner/repo"}, 0, true},
-		{"no arguments at all", nil, 0, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fs := flag.NewFlagSet("x", flag.ContinueOnError)
-			fs.SetOutput(io.Discard)
-			fs.Int("n", 1, "how many")
-			code, ok := ParseFlags(fs, tc.args)
-			if code != tc.code || ok != tc.ok {
-				t.Errorf("ParseFlags(%q) = (%d, %v), want (%d, %v)", tc.args, code, ok, tc.code, tc.ok)
-			}
-		})
-	}
-}
-
-// ⭐ The usage TEXT still has to come out. A command answering -h with silence
-// and a zero status would be worse than the 2 this replaces: a tool that looks
-// like it worked and said nothing.
-func TestAHelpRequestStillPrintsTheFlags(t *testing.T) {
-	var out strings.Builder
-	fs := flag.NewFlagSet("x", flag.ContinueOnError)
-	fs.SetOutput(&out)
-	fs.Int("n", 1, "how many")
-	if code, ok := ParseFlags(fs, []string{"-h"}); code != 0 || ok {
-		t.Fatalf("ParseFlags = (%d, %v), want (0, false)", code, ok)
-	}
-	if !strings.Contains(out.String(), "-n") {
-		t.Errorf("the usage text does not name the flag:\n%s", out.String())
-	}
-}
-
-// IsHelpError is for ghnew, whose run() returns an error: help means nil.
-func TestIsHelpErrorKnowsOnlyTheHelpError(t *testing.T) {
-	if !IsHelpError(flag.ErrHelp) {
-		t.Error("IsHelpError(flag.ErrHelp) = false")
-	}
-	if !IsHelpError(wrapped{flag.ErrHelp}) {
-		t.Error("a WRAPPED ErrHelp is still a help request: errors.Is, not ==")
-	}
-	for _, err := range []error{nil, errors.New("flag provided but not defined: -nope"), os.ErrNotExist} {
-		if IsHelpError(err) {
-			t.Errorf("IsHelpError(%v) = true", err)
-		}
-	}
-}
-
-type wrapped struct{ err error }
-
-func (w wrapped) Error() string { return "while parsing: " + w.err.Error() }
-func (w wrapped) Unwrap() error { return w.err }
 
 // ⛔ The two commands that asked this by hand knew TWO of the four spellings
 // (gitpush) and none (ghscopes, where an unrecognised argument became a
@@ -185,7 +117,7 @@ func dropsTheHelpDistinction(src string) string {
 			// there. A window tuned to code with no comments in it refuses
 			// precisely the sites somebody explained.
 			under := firstLines(src[i+len(shape):], 12)
-			if !strings.Contains(under, "ErrHelp") && !strings.Contains(under, "IsHelpError") {
+			if !strings.Contains(under, "ErrHelp") {
 				return "`" + shape + "` returns the same status for -h as for a typo"
 			}
 		}
@@ -219,12 +151,11 @@ func TestTheHelpGateCanFail(t *testing.T) {
 		{"the shape all ten were written with", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif err := fs.Parse(args); err != nil {\n\treturn 2\n}", true},
 		{"the same with the other variable name", "fset := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif err := fset.Parse(flags); err != nil {\n\treturn exitUsage\n}", true},
 		{"ContinueOnError and no sign of the distinction", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nfs.Parse(args)", true},
-		{"the helper", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif code, ok := cliflags.ParseFlags(fs, args); !ok {\n\treturn code\n}", false},
-		{"ghnew's error-returning form", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif err := fs.Parse(args); err != nil {\n\tif cliflags.IsHelpError(err) {\n\t\treturn nil\n\t}\n\treturn err\n}", false},
+		{"an error-returning form that answers ErrHelp", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif err := fs.Parse(args); err != nil {\n\tif errors.Is(err, flag.ErrHelp) {\n\t\treturn nil\n\t}\n\treturn err\n}", false},
 		// ⛔ The shape as ghnew actually carries it: the help branch is four
 		// comment lines below the refused line, which is what a window of four
 		// could not see.
-		{"the same, explained first", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif err := fs.Parse(args); err != nil {\n\t// one\n\t// two\n\t// three\n\t// four\n\tif cliflags.IsHelpError(err) {\n\t\treturn nil\n\t}\n\treturn err\n}", false},
+		{"the same, explained first", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nif err := fs.Parse(args); err != nil {\n\t// one\n\t// two\n\t// three\n\t// four\n\tif errors.Is(err, flag.ErrHelp) {\n\t\treturn nil\n\t}\n\treturn err\n}", false},
 		{"a hand-written ErrHelp switch", "fs := flag.NewFlagSet(\"x\", flag.ContinueOnError)\nswitch err := fs.Parse(args); {\ncase errors.Is(err, flag.ErrHelp):\n\treturn 0\n}", false},
 		{"no flag set at all, asking by hand", "if cliflags.IsHelpRequest(args[0]) {\n\treturn 0\n}", false},
 		// ⛔ The cobra half, both directions. The first of these is what every

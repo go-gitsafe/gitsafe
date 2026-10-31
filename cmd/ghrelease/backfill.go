@@ -29,7 +29,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,6 +40,7 @@ import (
 	"time"
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -336,20 +336,42 @@ func defaultInventory() string {
 	return filepath.Join(dir, "fleetfind", "inventory.json")
 }
 
-// runBackfill is `ghrelease backfill`.
-func runBackfill(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("ghrelease backfill", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	sinceS := fs.String("since", "14d", "the window: tags created within it (Nd or a Go duration)")
-	tokenFile := fs.String("token-file", "", "the file holding the token (default ~/"+defaultToken+")")
-	inv := fs.String("inventory", defaultInventory(), "fleetfind's inventory (refresh it with `fleetfind -refresh` first)")
-	orgs := fs.String("orgs", "", "comma-separated organisations to limit the run to (default: every one in the inventory)")
-	dry := fs.Bool("dry-run", false, "count and name what would be released, create nothing")
-	perRepo := fs.Int("max-per-repo", defaultBackfillMax, "at most this many releases per repository")
-	margin := fs.Int("margin", defaultMargin, "stop when the REST or GraphQL budget falls below this")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
+type backfillOptions struct {
+	since, tokenFile, inventory, orgs string
+	dry                               bool
+	perRepo, margin                   int
+}
+
+// backfillCmd is `ghrelease backfill`, a real subcommand so that
+// `ghrelease backfill -h` is asked of backfill and not of the release verb.
+func backfillCmd() *cobra.Command {
+	var o backfillOptions
+	c := &cobra.Command{
+		Use:   "backfill [flags]",
+		Short: "Create the missing releases of recent tags across the fleet",
+		// Operands were never read and still are not.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if code := runBackfill(o, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
+	f := c.Flags()
+	f.StringVar(&o.since, "since", "14d", "the window: tags created within it (Nd or a Go duration)")
+	f.StringVar(&o.tokenFile, "token-file", "", "the file holding the token (default ~/"+defaultToken+")")
+	f.StringVar(&o.inventory, "inventory", defaultInventory(), "fleetfind's inventory (refresh it with `fleetfind -refresh` first)")
+	f.StringVar(&o.orgs, "orgs", "", "comma-separated organisations to limit the run to (default: every one in the inventory)")
+	f.BoolVar(&o.dry, "dry-run", false, "count and name what would be released, create nothing")
+	f.IntVar(&o.perRepo, "max-per-repo", defaultBackfillMax, "at most this many releases per repository")
+	f.IntVar(&o.margin, "margin", defaultMargin, "stop when the REST or GraphQL budget falls below this")
+	return c
+}
+
+func runBackfill(o backfillOptions, stdout, stderr io.Writer) int {
+	sinceS, tokenFile, inv, orgs, dry, perRepo, margin :=
+		&o.since, &o.tokenFile, &o.inventory, &o.orgs, &o.dry, &o.perRepo, &o.margin
 	since, err := parseSince(*sinceS)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghrelease backfill: %v\n", err)

@@ -28,10 +28,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
-	"github.com/go-gitsafe/gitsafe/cliflags"
-	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"maps"
 	"net/http"
@@ -42,6 +39,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-gitsafe/gitsafe/cliflags"
+	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/spf13/cobra"
 )
 
 // defaultToken is the file the token is read from, under the home directory.
@@ -70,16 +71,44 @@ var (
 
 func main() { osExit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
 func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("ghmerge", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	squash := fs.Bool("squash", true, "squash the commits into one")
-	del := fs.Bool("delete-branch", true, "delete the head branch after merging")
-	tokenFile := fs.String("token-file", "", "the file holding the token (default ~/"+defaultToken+")")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
+
+type options struct {
+	squash, del bool
+	tokenFile   string
+}
+
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+func RootCmd() *cobra.Command {
+	o := options{}
+	c := &cobra.Command{
+		Use:   "ghmerge [flags] [owner/repo] <number>",
+		Short: "Merge a pull request once it is mergeable, with the token kept out of argv",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if code := execute(args, o, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
-	repo, number, err := target(fs.Args())
+	f := c.Flags()
+	f.BoolVar(&o.squash, "squash", true, "squash the commits into one")
+	f.BoolVar(&o.del, "delete-branch", true, "delete the head branch after merging")
+	f.StringVar(&o.tokenFile, "token-file", "", "the file holding the token (default ~/"+defaultToken+")")
+	return c
+}
+
+func execute(args []string, o options, stdout, stderr io.Writer) int {
+	squash, del, tokenFile := &o.squash, &o.del, &o.tokenFile
+	repo, number, err := target(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 		fmt.Fprintf(stderr, "usage: ghmerge [flags] [owner/repo] <number>\n")

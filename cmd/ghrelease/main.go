@@ -58,10 +58,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
-	"github.com/go-gitsafe/gitsafe/cliflags"
-	"github.com/go-gitsafe/gitsafe/ghauth"
 	"io"
 	"net/http"
 	"os"
@@ -70,6 +67,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-gitsafe/gitsafe/cliflags"
+	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -90,22 +91,54 @@ var (
 
 func main() { osExit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
+// run builds the command and drives it through the adapter, so the tests reach
+// the argument handling a person gets, single-dash spellings included.
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 && args[0] == "backfill" {
-		return runBackfill(args[1:], stdout, stderr)
+	cmd := RootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	return cliflags.Run(cmd, args)
+}
+
+type options struct {
+	tokenFile, notesFile string
+	dry, releaseOnly     bool
+	noBackfill           bool
+	backfillMax          int
+}
+
+// RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
+// backfill is a real subcommand, so `ghrelease backfill -h` is asked of it.
+func RootCmd() *cobra.Command {
+	var o options
+	c := &cobra.Command{
+		Use:   "ghrelease [flags] [owner/repo] <pr-number> <tag>",
+		Short: "Merge a pull request, tag its merge commit and publish the release",
+		// A positional that is not a verb is the repository, the number or the
+		// tag; it must reach RunE rather than be refused as an unknown command.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if code := execute(args, o, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
+				return cliflags.Status(code)
+			}
+			return nil
+		},
 	}
-	fs := flag.NewFlagSet("ghrelease", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	tokenFile := fs.String("token-file", "", "the file holding the token (default ~/"+defaultToken+")")
-	dry := fs.Bool("dry-run", false, "say what would happen, merge nothing and tag nothing")
-	notesFile := fs.String("notes-file", "", "the release notes (default: GitHub's, generated from the pull requests merged since the previous tag)")
-	releaseOnly := fs.Bool("release-only", false, "create the GitHub release of an EXISTING tag, and nothing else: "+
+	f := c.Flags()
+	f.StringVar(&o.tokenFile, "token-file", "", "the file holding the token (default ~/"+defaultToken+")")
+	f.BoolVar(&o.dry, "dry-run", false, "say what would happen, merge nothing and tag nothing")
+	f.StringVar(&o.notesFile, "notes-file", "", "the release notes (default: GitHub's, generated from the pull requests merged since the previous tag)")
+	f.BoolVar(&o.releaseOnly, "release-only", false, "create the GitHub release of an EXISTING tag, and nothing else: "+
 		"[owner/repo] <tag> (the resume after \"tag created, release missing\")")
-	noBackfill := fs.Bool("no-backfill", false, "do not create the missing releases of the repository's older tags")
-	backfillMax := fs.Int("backfill-max", defaultBackfillMax, "at most this many older tags released per run (oldest first)")
-	if code, ok := cliflags.ParseFlags(fs, args); !ok {
-		return code
-	}
+	f.BoolVar(&o.noBackfill, "no-backfill", false, "do not create the missing releases of the repository's older tags")
+	f.IntVar(&o.backfillMax, "backfill-max", defaultBackfillMax, "at most this many older tags released per run (oldest first)")
+	c.AddCommand(backfillCmd())
+	return c
+}
+
+func execute(args []string, o options, stdout, stderr io.Writer) int {
+	tokenFile, dry, notesFile, releaseOnly, noBackfill, backfillMax :=
+		&o.tokenFile, &o.dry, &o.notesFile, &o.releaseOnly, &o.noBackfill, &o.backfillMax
 	var notes *string
 	if *notesFile != "" {
 		b, err := os.ReadFile(*notesFile)
@@ -117,9 +150,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		notes = &s
 	}
 	if *releaseOnly {
-		return resumeRelease(fs.Args(), *tokenFile, notes, stdout, stderr)
+		return resumeRelease(args, *tokenFile, notes, stdout, stderr)
 	}
-	repo, number, tag, err := target(fs.Args())
+	repo, number, tag, err := target(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
 		fmt.Fprintf(stderr, "usage: ghrelease [flags] [owner/repo] <pr-number> <tag>\n")

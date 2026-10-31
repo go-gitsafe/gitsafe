@@ -112,8 +112,8 @@ func (u usage) Unwrap() error { return u.err }
 // user's own notes, the ones in CI -- and `go test` stays green throughout,
 // because tests drive RootCmd with arguments they spell themselves.
 //
-// ⛔ AND `-help` IS THE SHARPEST CASE, because it undoes what [ParseFlags]
-// was written for. cobra command.go:919 hands a parse error to FlagErrorFunc
+// ⛔ AND `-help` IS THE SHARPEST CASE, because it undoes what the
+// flag-package helper this package used to carry was written for. cobra command.go:919 hands a parse error to FlagErrorFunc
 // BEFORE it looks at the help flag at :926, so `-help` -- which pflag reads as
 // `-h` followed by an undeclared `e` -- exits non-zero even though the help
 // flag was set on the way past. `-h`, `--help` and the `help` verb all exit 0
