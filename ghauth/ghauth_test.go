@@ -142,12 +142,32 @@ func TestWhyRefusedNamesWhichRefusalItWas(t *testing.T) {
 			want:   "burst limit", notWant: "expired",
 		},
 		{
-			name:   "the hourly budget, spent",
+			// ⛔⛔ THIS USED TO ASSERT "hourly budget", AND THAT WAS WRONG TWICE
+			// IN ONE MORNING. Exactly this shape -- 403, `API rate limit
+			// exceeded`, no secondary wording, no Retry-After, remaining 0 --
+			// reached two sessions on 2026-11-01 while `rate_limit` reported the
+			// core budget 96% unspent and `pr create` worked. remaining==0
+			// cannot tell the hourly budget from a burst limit, because GitHub's
+			// own rules for SECONDARY errors branch on that very header. So the
+			// message may report what it saw and must not name the cause.
+			name:   "no budget left, and which limit is unknowable from it",
 			status: http.StatusForbidden,
 			header: http.Header{"X-Ratelimit-Remaining": []string{"0"},
 				"X-Ratelimit-Reset": []string{"1760000000"}},
 			body: `{"message":"API rate limit exceeded"}`,
-			want: "hourly budget", notWant: "expired",
+			want: "may be the hourly budget or a burst limit", notWant: "expired",
+		},
+		{
+			// The budget is per RESOURCE family, so a drained one says nothing
+			// about the rest -- and a reader who knows which one was drained can
+			// tell "my sweep spent core" from "something else is throttled".
+			name:   "it names the resource GitHub blamed",
+			status: http.StatusForbidden,
+			header: http.Header{"X-Ratelimit-Remaining": []string{"0"},
+				"X-Ratelimit-Resource": []string{"core"},
+				"X-Ratelimit-Reset":    []string{"1760000000"}},
+			body: `{"message":"API rate limit exceeded"}`,
+			want: "the core budget", notWant: "expired",
 		},
 		{
 			// ⛔⛔ THE PRECEDENCE, WHICH COST TWO SESSIONS AN HOUR EACH. These two
