@@ -127,6 +127,8 @@ account. So:
 |---|---|
 | no `--wait` | refuses at once, exactly as before |
 | the wait | GitHub's own number: `Retry-After`, else `X-RateLimit-Reset` when `remaining: 0`, else the documented minute |
+| on **GitHub's** clock | its `Date` header, not this host's. The reset is an absolute epoch second, so the *instant* is always right; only a **duration** taken from the wrong clock can be wrong, and a 403 here was once read as an hour's wait for exactly that reason |
+| and bounded | a `Retry-After` or a reset beyond a day is **discarded**, not clamped. `time.Duration(n) * time.Second` overflows past ~292 years and an overflowed duration *wraps*: unbounded, `Retry-After: 10^18` resolved to a deadline in **1807** |
 | never shorter | than the instant the refusal named — and when that instant has already **gone by**, GitHub's documented minute, because a stale clock must not become a hammering loop. Measured on the two merges above: the second 403 carried the *same* reset after it had passed |
 | never longer | than `--wait`; a budget that cannot reach the deadline sleeps **not at all** and says so, rather than spending the wait and failing anyway |
 | never at all | for a refusal waiting cannot fix: a dead credential, a 404 |

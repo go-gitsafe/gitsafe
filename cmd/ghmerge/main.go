@@ -657,7 +657,13 @@ func retrying(ask func() error) error {
 		if err == nil || patience == 0 || !errors.As(err, &refusal) || !refusal.Again {
 			return err
 		}
-		pause := refusal.At.Sub(now())
+		// ⛔ THE WAIT COMES FROM THE REFUSAL, NOT FROM SUBTRACTING At HERE.
+		// Refusal.Wait is measured against the clock GitHub itself wrote the
+		// answer with (its `Date` header); `At.Sub(now())` is only right when
+		// this host's clock agrees, and a 403 on this machine was once read as
+		// a wait of over an hour because it did not. The library offered the
+		// skew-free number and this command was recomputing the skewed one.
+		pause := refusal.Wait
 		if pause <= 0 {
 			// ⛔ AN INSTANT ALREADY GONE BY IS NOT "RETRY NOW". A refusal whose
 			// reset is in the past means the clock this read is stale, and
@@ -704,7 +710,7 @@ func getOnce(token, url string, into any) error {
 		// that MEETS the burst limit, since merging is the write a person does
 		// several times in a row, and it was the one saying nothing about it.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		return ghauth.Refused(resp.StatusCode, resp.Header, body, now())
+		return ghauth.Refused(resp.StatusCode, resp.Header, body, ghauth.Now(resp.Header, now()))
 	}
 	return json.NewDecoder(resp.Body).Decode(into)
 }
@@ -737,7 +743,7 @@ func mergeOnce(token, repo string, number int, squash bool) error {
 		// sentence, and errors.As still reaches the Refusal underneath it — so
 		// retrying sees the deadline a reader sees.
 		return fmt.Errorf("GitHub refused the merge: %w",
-			ghauth.Refused(resp.StatusCode, resp.Header, body, now()))
+			ghauth.Refused(resp.StatusCode, resp.Header, body, ghauth.Now(resp.Header, now())))
 	}
 	return nil
 }

@@ -951,6 +951,13 @@ func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
 				case strings.HasSuffix(r.URL.Path, "/merge"):
 					if refusals == 0 {
 						refusals++
+						// ⛔ GitHub's OWN clock, because that is the one the
+						// wait is measured against. Go's http server sets Date
+						// by itself, so leaving it out does not mean "no Date":
+						// it means the real wall clock, and the frozen `now`
+						// below would then govern nothing. That is how this
+						// test first failed — it measured against two clocks.
+						w.Header().Set("Date", frozen.UTC().Format(http.TimeFormat))
 						if c.reset {
 							w.Header().Set("X-RateLimit-Remaining", "0")
 							w.Header().Set("X-RateLimit-Resource", "core")
@@ -1021,6 +1028,7 @@ func TestAResetAlreadyPassedStillWaitsAMinute(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			if refusals == 0 {
 				refusals++
+				w.Header().Set("Date", frozen.UTC().Format(http.TimeFormat))
 				w.Header().Set("X-RateLimit-Remaining", "0")
 				// Five minutes BEFORE the frozen clock.
 				w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(frozen.Add(-5*time.Minute).Unix(), 10))
@@ -1055,6 +1063,66 @@ func TestAResetAlreadyPassedStillWaitsAMinute(t *testing.T) {
 	}
 	if len(slept) != 1 || slept[0] != time.Minute {
 		t.Errorf("slept %v, want exactly one minute", slept)
+	}
+}
+
+// ⛔⛔ A HOST CLOCK AN HOUR OFF MUST NOT CHANGE THE WAIT, and the first version
+// of --wait let it: it computed the pause as `refusal.At.Sub(now())`, mixing
+// GitHub's deadline with this machine's idea of the time. `x-ratelimit-reset` is
+// an absolute UTC epoch second, so the INSTANT is always right; only a duration
+// measured against the wrong clock can be wrong — and a 403 on this machine was
+// once read as a wait of over an hour for exactly that reason.
+//
+// Here GitHub's `Date` says 10:53:30 and the reset is 10m15s later, while this
+// host believes it is 11:53:30. The wait must be ten minutes and fifteen
+// seconds, not "already past" — which is what subtracting from the local clock
+// would have concluded, straight into the one-minute floor.
+func TestAHostClockAnHourOffDoesNotChangeTheWait(t *testing.T) {
+	githubsClock := time.Date(2026, 11, 1, 10, 53, 30, 0, time.UTC)
+	thisHost := githubsClock.Add(time.Hour)
+	reset := githubsClock.Add(10*time.Minute + 15*time.Second)
+
+	refusals := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			if refusals == 0 {
+				refusals++
+				w.Header().Set("Date", githubsClock.Format(http.TimeFormat))
+				w.Header().Set("X-RateLimit-Remaining", "0")
+				w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+				return
+			}
+			fmt.Fprint(w, `{"merged":true}`)
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{
+				{"name": "test", "status": "completed", "conclusion": "success"},
+			}})
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": []map[string]any{}})
+		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			_ = json.NewEncoder(w).Encode(green())
+		}
+	}))
+	t.Cleanup(s.Close)
+	wasBase, wasSleep, wasNow := apiBase, sleep, now
+	apiBase = s.URL
+	var slept []time.Duration
+	sleep = func(d time.Duration) { slept = append(slept, d) }
+	now = func() time.Time { return thisHost }
+	t.Cleanup(func() { apiBase, sleep, now = wasBase, wasSleep, wasNow })
+
+	code, _, errb := try(t, "--wait", "30m", "go-gitsafe/gitsafe", "1")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; stderr:\n%s", code, errb)
+	}
+	want := 10*time.Minute + 15*time.Second
+	if len(slept) != 1 || slept[0] != want {
+		t.Errorf("slept %v, want exactly %v — the host's clock decided", slept, want)
 	}
 }
 

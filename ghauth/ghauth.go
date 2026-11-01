@@ -244,6 +244,13 @@ func WhyRefused(status int, header http.Header, body []byte) error {
 	return fmt.Errorf("GitHub answered %d", status)
 }
 
+// maxWait is the longest deadline RetryAt will believe. GitHub's own limits
+// reset within the hour and its secondary waits are minutes; a day is already
+// far outside anything it sends, so anything beyond it is a broken or hostile
+// answer rather than an instruction. It is deliberately not a clamp: a bogus
+// number is DISCARDED, not rounded down to something plausible.
+const maxWait = 24 * time.Hour
+
 // RetryAt says WHEN a refused request may be sent again, and whether sending it
 // again can help at all.
 //
@@ -281,15 +288,34 @@ func RetryAt(status int, header http.Header, body []byte, now time.Time) (time.T
 	if status == http.StatusUnauthorized || strings.Contains(lower, "bad credentials") {
 		return time.Time{}, false
 	}
+	// ⛔ THESE TWO NUMBERS COME OFF THE NETWORK AND BECOME A SLEEP. They are
+	// read as untrusted input, not as GitHub's word:
+	//
+	//   - `time.Duration(n) * time.Second` overflows int64 a little past 292
+	//     years, and an overflowed Duration WRAPS -- so `Retry-After: 10^18`
+	//     does not make a long wait, it makes an arbitrary one, possibly in the
+	//     past. Testing the seconds BEFORE multiplying is what keeps the
+	//     arithmetic inside int64.
+	//   - a reset is an absolute epoch second, so a far-future one is a
+	//     deadline years out rather than an overflow -- harmless to compute and
+	//     still not a retry instruction.
+	//
+	// Either one beyond maxWait is discarded, and the remaining rules answer
+	// instead: a caller's own patience then bounds the wait, and a refusal that
+	// cannot say when is better than one that says "in four hundred years".
+	// ⚠ Only ghmerge's --wait makes any of this a sleep today; a bound here is
+	// cheaper than trusting every future caller to add one.
 	if s := header.Get("Retry-After"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil && n >= 0 && n <= int64(maxWait/time.Second) {
 			return now.Add(time.Duration(n) * time.Second), true
 		}
 	}
 	if header.Get("X-RateLimit-Remaining") == "0" {
 		if s := header.Get("X-RateLimit-Reset"); s != "" {
 			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-				return time.Unix(n, 0), true
+				if at := time.Unix(n, 0); !at.After(now.Add(maxWait)) {
+					return at, true
+				}
 			}
 		}
 	}

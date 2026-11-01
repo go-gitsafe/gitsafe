@@ -368,6 +368,38 @@ func TestWhenARefusalMayBeRetried(t *testing.T) {
 			body:   `{"message":"Not Found"}`,
 		},
 		{
+			// ⛔ A NUMBER OFF THE NETWORK THAT BECOMES A SLEEP. 10^18 seconds
+			// overflows `time.Duration(n) * time.Second`, and an overflowed
+			// Duration wraps — so without the bound this is not a long wait but
+			// an arbitrary one. Discarded, and the rules below answer: the body
+			// here carries the burst wording, so the documented minute.
+			name:   "a Retry-After that would overflow a Duration is discarded",
+			status: http.StatusForbidden,
+			header: header("Retry-After", "1000000000000000000"),
+			body:   `{"message":"You have exceeded a secondary rate limit"}`,
+			at:     now.Add(time.Minute),
+			again:  true,
+		},
+		{
+			// Same rule, the other header: a reset years out is not an
+			// overflow but it is not an instruction either.
+			name:   "a reset years away is not a deadline",
+			status: http.StatusForbidden,
+			header: header("X-RateLimit-Remaining", "0",
+				"X-RateLimit-Reset", strconv.FormatInt(now.AddDate(40, 0, 0).Unix(), 10)),
+			body: `{"message":"API rate limit exceeded"}`,
+		},
+		{
+			// And the bound must not refuse an ordinary answer: GitHub's own
+			// waits are minutes, its budgets reset within the hour.
+			name:   "an hour out is perfectly ordinary",
+			status: http.StatusForbidden,
+			header: header("Retry-After", "3600"),
+			body:   `{"message":"You have exceeded a secondary rate limit"}`,
+			at:     now.Add(time.Hour),
+			again:  true,
+		},
+		{
 			// remaining==0 rides on answers that have a reset but no number
 			// this can parse; guessing a clock would be worse than saying so.
 			name:   "an unreadable reset is not a deadline",
