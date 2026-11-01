@@ -113,6 +113,28 @@ func Missing(have, want []string) []string {
 	return missing
 }
 
+// resetAt renders the moment GitHub's hourly window reopens, and only when the
+// headers say the budget is actually gone.
+//
+// ⚠ `X-RateLimit-Reset` RIDES ON ALMOST EVERY ANSWER, spent or not, so a reset
+// on its own is not a deadline -- it is `remaining: 0` beside it that makes one.
+// Reading the reset alone would attach a confident clock time to a refusal that
+// has nothing to do with the budget.
+func resetAt(header http.Header) string {
+	if header.Get("X-RateLimit-Remaining") != "0" {
+		return ""
+	}
+	s := header.Get("X-RateLimit-Reset")
+	if s == "" {
+		return ""
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return ""
+	}
+	return time.Unix(n, 0).Format(time.TimeOnly)
+}
+
 // WhyRefused explains a GitHub answer that is not a success, in the terms a
 // person can act on.
 //
@@ -161,16 +183,23 @@ func WhyRefused(status int, header http.Header, body []byte) error {
 			return fmt.Errorf("GitHub's burst limit (%d): too many writes too "+
 				"quickly. It asks for %s seconds; the credential is fine", status, s)
 		}
+		// ⛔ A BURST REFUSAL CAN ALSO CARRY remaining=0, and then a minute is
+		// NOT the documented wait. GitHub's rules are ordered -- Retry-After,
+		// then remaining==0, then "at least one minute" -- and under-waiting is
+		// not free: "Continuing to make requests while you are rate limited may
+		// result in the banning of your integration."
+		if at := resetAt(header); at != "" {
+			return fmt.Errorf("GitHub's burst limit (%d): too many writes too "+
+				"quickly. Nothing is safe before %s; the credential is fine",
+				status, at)
+		}
 		return fmt.Errorf("GitHub's burst limit (%d): too many writes too "+
 			"quickly. Wait a minute and retry; the credential is fine", status)
 
 	case header.Get("X-RateLimit-Remaining") == "0":
-		if s := header.Get("X-RateLimit-Reset"); s != "" {
-			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-				return fmt.Errorf("GitHub's hourly budget is spent (%d): it "+
-					"resets at %s; the credential is fine",
-					status, time.Unix(n, 0).Format(time.TimeOnly))
-			}
+		if at := resetAt(header); at != "" {
+			return fmt.Errorf("GitHub's hourly budget is spent (%d): it "+
+				"resets at %s; the credential is fine", status, at)
 		}
 		return fmt.Errorf("GitHub's hourly budget is spent (%d); the "+
 			"credential is fine", status)

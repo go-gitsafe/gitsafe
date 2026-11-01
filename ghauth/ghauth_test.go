@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnEmptyTokenFile(t *testing.T) {
@@ -95,6 +96,12 @@ func TestScopeExpansionIsTransitive(t *testing.T) {
 func TestWhyRefusedNamesWhichRefusalItWas(t *testing.T) {
 	t.Parallel()
 
+	// The reset is rendered in local time, so the expectation is computed the
+	// same way instead of written as a literal clock: a hard-coded "14:13:20"
+	// passes only in the zone it was written in, and CI does not run in that
+	// zone.
+	resetClock := time.Unix(1760000000, 0).Format(time.TimeOnly)
+
 	for _, c := range []struct {
 		name   string
 		status int
@@ -141,6 +148,64 @@ func TestWhyRefusedNamesWhichRefusalItWas(t *testing.T) {
 				"X-Ratelimit-Reset": []string{"1760000000"}},
 			body: `{"message":"API rate limit exceeded"}`,
 			want: "hourly budget", notWant: "expired",
+		},
+		{
+			// ⛔⛔ THE PRECEDENCE, WHICH COST TWO SESSIONS AN HOUR EACH. These two
+			// branches are one `case` apart and a refusal can satisfy BOTH, so
+			// which one wins is a decision -- and GitHub decided it: the
+			// documented rules read Retry-After, then remaining==0, so the burst
+			// signal is tested first. Reorder them and every burst refusal starts
+			// claiming the hourly budget is spent, which sends the next person to
+			// wait fifty minutes for a limit that lifts in one. Nothing pinned
+			// this before; a reordering would have passed the whole suite.
+			name:   "a burst refusal that also shows an empty budget",
+			status: http.StatusForbidden,
+			header: http.Header{"X-Ratelimit-Remaining": []string{"0"},
+				"X-Ratelimit-Reset": []string{"1760000000"}},
+			body: `{"message":"You have exceeded a secondary rate limit."}`,
+			want: "burst limit", notWant: "hourly budget",
+		},
+		{
+			// ⭐ AND THEN THE WAIT IS THE RESET, NOT A MINUTE. GitHub's second
+			// rule for a burst refusal is "if remaining is 0, wait until reset",
+			// and the minute below is only the third. Under-waiting is not free:
+			// continuing to call while limited risks the integration being
+			// banned, so the sentence has to carry the deadline it knows.
+			name:   "a burst refusal whose only stated wait is the reset",
+			status: http.StatusForbidden,
+			header: http.Header{"X-Ratelimit-Remaining": []string{"0"},
+				"X-Ratelimit-Reset": []string{"1760000000"}},
+			body: `{"message":"You have exceeded a secondary rate limit."}`,
+			want: resetClock, notWant: "Wait a minute",
+		},
+		{
+			// Retry-After is GitHub's first rule and outranks the reset.
+			name:   "a wait GitHub states outranks a budget it shows as empty",
+			status: http.StatusForbidden,
+			header: http.Header{"Retry-After": []string{"47"},
+				"X-Ratelimit-Remaining": []string{"0"},
+				"X-Ratelimit-Reset":     []string{"1760000000"}},
+			body: `{"message":"You have exceeded a secondary rate limit."}`,
+			want: "47", notWant: "hourly budget",
+		},
+		{
+			// ⚠ A RESET WITHOUT AN EMPTY BUDGET IS NOT A DEADLINE, and this is
+			// the only shape that proves it: a burst refusal whose hourly budget
+			// is barely touched. `X-RateLimit-Reset` rides on nearly every
+			// answer, so reading it without checking `remaining` pins a
+			// confident clock time -- a fifty-minute wait -- onto a limit that
+			// lifts in one minute.
+			//
+			// ⛔ MY FIRST VERSION OF THIS CASE PROVED NOTHING. It used a
+			// scope refusal, where neither branch ever calls resetAt, so
+			// deleting the guard it was written for left the suite green. A test
+			// has to reach the code it is about.
+			name:   "a burst refusal whose hourly budget is NOT spent",
+			status: http.StatusForbidden,
+			header: http.Header{"X-Ratelimit-Remaining": []string{"4312"},
+				"X-Ratelimit-Reset": []string{"1760000000"}},
+			body: `{"message":"You have exceeded a secondary rate limit."}`,
+			want: "Wait a minute", notWant: resetClock,
 		},
 		{
 			// ⛔ THE ONE CASE THE OLD SENTENCE WAS RIGHT ABOUT, which has to keep
