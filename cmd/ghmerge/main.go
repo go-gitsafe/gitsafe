@@ -59,6 +59,19 @@ var (
 	// pull request can be merged. A variable so a test can shorten it; nothing
 	// else changes it.
 	mergeableWait = 3 * time.Second
+
+	// patience is how long --wait allows this command to spend waiting out a
+	// refusal GitHub itself said to wait out. Zero refuses at once, which is
+	// what this command has always done.
+	patience time.Duration
+	// waitLog is where the waiting says what it is doing, so a person watching
+	// a terminal is never left wondering whether it hung. io.Discard until
+	// execute hands it the command's stderr.
+	waitLog io.Writer = io.Discard
+	// sleep and now are seams: every interesting case here is about a clock,
+	// and a test that had to spend ten real minutes would not be written.
+	sleep = time.Sleep
+	now   = time.Now
 	// gitOutput asks git something, as a seam.
 	gitOutput = func(args ...string) (string, error) {
 		out, err := exec.Command("git", args...).Output()
@@ -83,6 +96,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 type options struct {
 	squash, del bool
 	tokenFile   string
+	wait        time.Duration
 }
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
@@ -103,11 +117,14 @@ func RootCmd() *cobra.Command {
 	f.BoolVar(&o.squash, "squash", true, "squash the commits into one")
 	f.BoolVar(&o.del, "delete-branch", true, "delete the head branch after merging")
 	f.StringVar(&o.tokenFile, "token-file", "", "the file holding the token (default ~/"+defaultToken+")")
+	f.DurationVar(&o.wait, "wait", 0,
+		"spend up to this long waiting out a refusal GitHub said to wait out (0: refuse at once)")
 	return c
 }
 
 func execute(args []string, o options, stdout, stderr io.Writer) int {
 	squash, del, tokenFile := &o.squash, &o.del, &o.tokenFile
+	patience, waitLog = o.wait, stderr
 	repo, number, err := target(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
@@ -615,7 +632,60 @@ func newer(a, b checkRun) bool {
 	return a.ID > b.ID
 }
 
+// retrying runs ask, and when GitHub refuses with an answer that says WHEN to
+// try again, waits that long and asks once more — for as long as --wait allows.
+//
+// ⛔ WHY THIS EXISTS. On 2026-11-01 two pull requests, 23 checks and 2 checks,
+// all green, could not be merged: GitHub answered 403 and this command said so
+// and stopped. The refusal CARRIED its own remedy — the instant the window
+// reopens — and the person then had to hold that clock in their head and come
+// back to it. Three sessions did that in one night. A tool that can read the
+// deadline can also wait for it.
+//
+// ⚠ IT IS OPT-IN, AND IT HAS TO BE. Retrying a write that GitHub refused is
+// exactly the behaviour its documentation warns about ("continuing to make
+// requests while you are rate limited may result in the banning of your
+// integration"), and the hourly budget here is shared with the fleet's Renovate
+// runners. So nothing retries unless a person asked for it, nothing retries
+// sooner than GitHub's own instant, and a refusal that waiting cannot fix — a
+// dead credential, a 404 — is returned at once however large --wait is.
+func retrying(ask func() error) error {
+	deadline := now().Add(patience)
+	for {
+		err := ask()
+		var refusal *ghauth.Refusal
+		if err == nil || patience == 0 || !errors.As(err, &refusal) || !refusal.Again {
+			return err
+		}
+		pause := refusal.At.Sub(now())
+		if pause <= 0 {
+			// ⛔ AN INSTANT ALREADY GONE BY IS NOT "RETRY NOW". A refusal whose
+			// reset is in the past means the clock this read is stale, and
+			// retrying on it is a loop that spends the shared budget hammering
+			// a window that is still shut. GitHub's floor for a refusal with no
+			// usable deadline is "at least one minute", so that is the floor
+			// here too.
+			//
+			// ⚠ And only HERE: flooring every short pause at a minute would
+			// make a window that reopens in ten seconds cost sixty, which is
+			// waiting longer than the refusal asked for.
+			pause = time.Minute
+		}
+		if now().Add(pause).After(deadline) {
+			return fmt.Errorf("%w — and --wait %s does not reach it", err, patience)
+		}
+		fmt.Fprintf(waitLog, "ghmerge: %v\n", err)
+		fmt.Fprintf(waitLog, "ghmerge: waiting %s, until %s, because that is what GitHub's own answer says\n",
+			pause.Round(time.Second), now().Add(pause).Format(time.TimeOnly))
+		sleep(pause)
+	}
+}
+
 func get(token, url string, into any) error {
+	return retrying(func() error { return getOnce(token, url, into) })
+}
+
+func getOnce(token, url string, into any) error {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -634,12 +704,16 @@ func get(token, url string, into any) error {
 		// that MEETS the burst limit, since merging is the write a person does
 		// several times in a row, and it was the one saying nothing about it.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		return ghauth.WhyRefused(resp.StatusCode, resp.Header, body)
+		return ghauth.Refused(resp.StatusCode, resp.Header, body, now())
 	}
 	return json.NewDecoder(resp.Body).Decode(into)
 }
 
 func merge(token, repo string, number int, squash bool) error {
+	return retrying(func() error { return mergeOnce(token, repo, number, squash) })
+}
+
+func mergeOnce(token, repo string, number int, squash bool) error {
 	method := "merge"
 	if squash {
 		method = "squash"
@@ -659,8 +733,11 @@ func merge(token, repo string, number int, squash bool) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		// ⚠ The wrapping keeps "GitHub refused the merge:" in front of the
+		// sentence, and errors.As still reaches the Refusal underneath it — so
+		// retrying sees the deadline a reader sees.
 		return fmt.Errorf("GitHub refused the merge: %w",
-			ghauth.WhyRefused(resp.StatusCode, resp.Header, body))
+			ghauth.Refused(resp.StatusCode, resp.Header, body, now()))
 	}
 	return nil
 }

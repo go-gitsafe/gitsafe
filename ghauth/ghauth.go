@@ -243,3 +243,115 @@ func WhyRefused(status int, header http.Header, body []byte) error {
 	}
 	return fmt.Errorf("GitHub answered %d", status)
 }
+
+// RetryAt says WHEN a refused request may be sent again, and whether sending it
+// again can help at all.
+//
+// WhyRefused answers "what happened"; this answers "what now". They are
+// separate because the second one has an order of its own, taken from GitHub's
+// "Rate limits for the REST API" and not from the first one's switch:
+//
+//	Retry-After present              that many seconds; GitHub's own number
+//	remaining == 0, with a reset      that reset; the window is shut until then
+//	"secondary rate limit", "abuse"  at least one minute, says the documentation
+//	a dead credential                never: waiting cannot revive a token
+//	anything else                    unknown, so this does not guess
+//
+// ⛔ THE ORDER DIFFERS FROM WhyRefused ON PURPOSE. A burst refusal can carry
+// `remaining: 0` as well, and when it does, a minute is the WRONG wait — the
+// documentation says "if x-ratelimit-remaining is 0, wait until
+// x-ratelimit-reset, otherwise wait at least one minute". WhyRefused puts the
+// burst wording first because it is the better NAME; this puts the longer wait
+// first because under-waiting is the one that costs: "Continuing to make
+// requests while you are rate limited may result in the banning of your
+// integration."
+//
+// ⚠ now is a parameter, not a call to time.Now, because the only interesting
+// cases are about a clock and a test must be able to set it.
+func RetryAt(status int, header http.Header, body []byte, now time.Time) (time.Time, bool) {
+	var msg struct {
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(body, &msg)
+	lower := strings.ToLower(msg.Message)
+
+	// A credential GitHub will not accept is not a wait. Answering "in sixty
+	// seconds" here would send a caller into a loop that cannot end in a
+	// success, which is worse than refusing at once.
+	if status == http.StatusUnauthorized || strings.Contains(lower, "bad credentials") {
+		return time.Time{}, false
+	}
+	if s := header.Get("Retry-After"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+			return now.Add(time.Duration(n) * time.Second), true
+		}
+	}
+	if header.Get("X-RateLimit-Remaining") == "0" {
+		if s := header.Get("X-RateLimit-Reset"); s != "" {
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return time.Unix(n, 0), true
+			}
+		}
+	}
+	if strings.Contains(lower, "secondary rate limit") || strings.Contains(lower, "abuse detection") {
+		return now.Add(time.Minute), true
+	}
+	return time.Time{}, false
+}
+
+// Refusal is a refused answer with both halves kept together: the sentence a
+// person reads, and the instant a program may try again.
+//
+// It exists so a caller can wait without parsing a message. The sentence is the
+// one WhyRefused writes, unchanged, because it is what every existing test and
+// every reader already knows.
+type Refusal struct {
+	// At is when a retry may help, and Again says whether there is any point.
+	At    time.Time
+	Again bool
+	// Wait is how long to wait, measured from the instant handed to Refused
+	// rather than read off this machine's clock. Never negative.
+	//
+	// ⛔ SLEEP FOR THIS, DO NOT SUBTRACT At FROM time.Now(). x-ratelimit-reset
+	// is an absolute UTC epoch second, so At is right whatever this host
+	// believes the time is -- but `time.Until(At)` is only right if the host's
+	// clock agrees with GitHub's, and a 403 here was once read as a wait of
+	// over an hour because it did not. Pass Refused the `Date` header's instant
+	// (see Now) and this field is the true remaining time, skew and all.
+	Wait time.Duration
+	// Err is WhyRefused's sentence. Error and Unwrap delegate to it, so a
+	// Refusal reads and compares exactly as that error did.
+	Err error
+}
+
+// Error returns WhyRefused's sentence, so wrapping loses nothing.
+func (r *Refusal) Error() string { return r.Err.Error() }
+
+// Unwrap exposes the sentence to errors.Is and errors.As.
+func (r *Refusal) Unwrap() error { return r.Err }
+
+// Refused builds the Refusal for an answer that is not a success: WhyRefused's
+// sentence and RetryAt's instant, from one reading of the same headers.
+func Refused(status int, header http.Header, body []byte, now time.Time) *Refusal {
+	at, again := RetryAt(status, header, body, now)
+	r := &Refusal{At: at, Again: again, Err: WhyRefused(status, header, body)}
+	if again {
+		if d := at.Sub(now); d > 0 {
+			r.Wait = d
+		}
+	}
+	return r
+}
+
+// Now is the instant GitHub itself was at when it wrote this answer, taken from
+// the `Date` header, falling back to local when there is no usable one.
+//
+// It exists so a wait can be measured against the clock that set the deadline.
+// RFC 9110 §6.6.1 requires an origin server to send Date, and GitHub does; a
+// proxy that strips it leaves local, which is the behaviour this had before.
+func Now(header http.Header, local time.Time) time.Time {
+	if t, err := http.ParseTime(header.Get("Date")); err == nil {
+		return t
+	}
+	return local
+}
