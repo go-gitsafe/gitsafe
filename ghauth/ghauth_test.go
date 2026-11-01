@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -281,5 +282,212 @@ func TestWhyRefusedNamesWhichRefusalItWas(t *testing.T) {
 				t.Errorf("WhyRefused said %q, which carries an authorization header", got)
 			}
 		})
+	}
+}
+
+// ⛔ THE CASE THIS WAS WRITTEN FOR: a refusal that carries BOTH the burst
+// wording and remaining==0. GitHub's documentation says so in as many words --
+// "if x-ratelimit-remaining is 0, wait until x-ratelimit-reset, otherwise wait
+// at least one minute" -- and a minute is then far too short. On 2026-11-01 two
+// green pull requests waited on exactly this answer.
+//
+// ⚠ WhyRefused and RetryAt deliberately order the two signals differently, so
+// this suite has to pin the SECOND order as well: naming prefers the burst
+// wording, waiting prefers the longer clock.
+func TestWhenARefusalMayBeRetried(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 1, 10, 53, 30, 0, time.UTC)
+	reset := now.Add(10*time.Minute + 15*time.Second)
+
+	header := func(kv ...string) http.Header {
+		h := http.Header{}
+		for i := 0; i+1 < len(kv); i += 2 {
+			h.Set(kv[i], kv[i+1])
+		}
+		return h
+	}
+
+	for _, c := range []struct {
+		name   string
+		status int
+		header http.Header
+		body   string
+		at     time.Time // zero means "no retry"
+		again  bool
+	}{
+		{
+			name:   "Retry-After is GitHub's own number and wins",
+			status: http.StatusForbidden,
+			header: header("Retry-After", "42",
+				"X-RateLimit-Remaining", "0",
+				"X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10)),
+			body:  `{"message":"You have exceeded a secondary rate limit"}`,
+			at:    now.Add(42 * time.Second),
+			again: true,
+		},
+		{
+			name:   "burst wording WITH remaining 0 waits for the reset, not a minute",
+			status: http.StatusForbidden,
+			header: header("X-RateLimit-Remaining", "0",
+				"X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10)),
+			body:  `{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`,
+			at:    reset,
+			again: true,
+		},
+		{
+			name:   "burst wording alone is the documented minute",
+			status: http.StatusForbidden,
+			header: header("X-RateLimit-Remaining", "4827"),
+			body:   `{"message":"You have exceeded a secondary rate limit"}`,
+			at:     now.Add(time.Minute),
+			again:  true,
+		},
+		{
+			name:   "a spent budget waits for its reset",
+			status: http.StatusForbidden,
+			header: header("X-RateLimit-Remaining", "0",
+				"X-RateLimit-Resource", "core",
+				"X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10)),
+			body:  `{"message":"API rate limit exceeded for user ID 11405852."}`,
+			at:    reset,
+			again: true,
+		},
+		{
+			// Waiting cannot revive a token, and answering "in a minute"
+			// would build a loop with no success in it.
+			name:   "a dead credential is never a wait",
+			status: http.StatusUnauthorized,
+			header: header("Retry-After", "60"),
+			body:   `{"message":"Bad credentials"}`,
+		},
+		{
+			name:   "a 404 says nothing about when",
+			status: http.StatusNotFound,
+			header: header(),
+			body:   `{"message":"Not Found"}`,
+		},
+		{
+			// remaining==0 rides on answers that have a reset but no number
+			// this can parse; guessing a clock would be worse than saying so.
+			name:   "an unreadable reset is not a deadline",
+			status: http.StatusForbidden,
+			header: header("X-RateLimit-Remaining", "0", "X-RateLimit-Reset", "soon"),
+			body:   `{"message":"API rate limit exceeded"}`,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			at, again := RetryAt(c.status, c.header, []byte(c.body), now)
+			if again != c.again {
+				t.Fatalf("RetryAt said again=%v, want %v (at %v)", again, c.again, at)
+			}
+			if !again {
+				return
+			}
+			if !at.Equal(c.at) {
+				t.Errorf("RetryAt said %v, want %v — %v too %s",
+					at, c.at, c.at.Sub(at).Abs(), map[bool]string{true: "early", false: "late"}[at.Before(c.at)])
+			}
+
+			// Refused must carry BOTH halves from one reading of the same
+			// headers: the sentence a person reads and the instant a program
+			// waits for. A Refusal whose message differed from WhyRefused's
+			// would quietly fork the vocabulary.
+			r := Refused(c.status, c.header, []byte(c.body), now)
+			if !r.At.Equal(at) || r.Again != again {
+				t.Errorf("Refused said (%v, %v), RetryAt said (%v, %v)", r.At, r.Again, at, again)
+			}
+			if want := WhyRefused(c.status, c.header, []byte(c.body)).Error(); r.Error() != want {
+				t.Errorf("Refusal reads %q, WhyRefused reads %q", r.Error(), want)
+			}
+			// Wait is what a caller sleeps for, so it has to be the distance
+			// from the instant handed in -- not from this host's clock.
+			if want := c.at.Sub(now); r.Wait != want {
+				t.Errorf("Refusal says wait %v, want %v", r.Wait, want)
+			}
+		})
+	}
+}
+
+// TestAWaitIsMeasuredAgainstGitHubsClockNotThisHost is the test for the defect
+// that sent this work off course once: a 403 whose reset read as an hour away
+// because the two clocks disagreed, so the wait was quoted from the wrong one.
+//
+// x-ratelimit-reset is an absolute UTC epoch second. The INSTANT is therefore
+// always right; only the DURATION can be wrong, and only if it is measured
+// locally. So the fixture gives the host a clock five minutes behind GitHub's
+// and asserts the duration is GitHub's.
+func TestAWaitIsMeasuredAgainstGitHubsClockNotThisHost(t *testing.T) {
+	t.Parallel()
+
+	github := time.Date(2026, 11, 1, 10, 53, 30, 0, time.UTC)
+	reset := github.Add(7 * time.Minute)
+	local := github.Add(-5 * time.Minute) // this host is slow
+
+	h := http.Header{}
+	h.Set("Date", github.Format(http.TimeFormat))
+	h.Set("X-RateLimit-Remaining", "0")
+	h.Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+	body := []byte(`{"message":"You have exceeded a secondary rate limit"}`)
+
+	if got := Now(h, local); !got.Equal(github) {
+		t.Fatalf("Now said %v, want GitHub's %v", got, github)
+	}
+	if got := Refused(403, h, body, Now(h, local)).Wait; got != 7*time.Minute {
+		t.Errorf("waiting %v; GitHub said seven minutes", got)
+	}
+	// ⛔ The control: measured locally it is twelve, which is the wrong answer
+	// this field exists to stop anyone reaching. Without this line the test
+	// above would also pass if Wait ignored its argument entirely.
+	if got := Refused(403, h, body, local).Wait; got != 12*time.Minute {
+		t.Fatalf("the fixture does not reproduce the skew: %v, want 12m", got)
+	}
+}
+
+func TestAnAnswerWithNoUsableDateLeavesTheLocalClockAlone(t *testing.T) {
+	t.Parallel()
+
+	local := time.Date(2026, 11, 1, 10, 53, 30, 0, time.UTC)
+	for _, date := range []string{"", "the first of November"} {
+		h := http.Header{}
+		if date != "" {
+			h.Set("Date", date)
+		}
+		if got := Now(h, local); !got.Equal(local) {
+			t.Errorf("Date %q gave %v, want the local %v", date, got, local)
+		}
+	}
+}
+
+func TestAResetAlreadyPastIsNotANegativeWait(t *testing.T) {
+	t.Parallel()
+
+	// A reset in the past is ordinary: the answer sat in a queue, or the two
+	// clocks differ the other way. A negative duration passed to time.Sleep
+	// returns at once, which is the right behaviour -- but a negative number
+	// printed in a message reads as a defect, and `Wait > budget` comparisons
+	// in callers would silently invert.
+	now := time.Date(2026, 11, 1, 10, 53, 30, 0, time.UTC)
+	h := http.Header{}
+	h.Set("X-RateLimit-Remaining", "0")
+	h.Set("X-RateLimit-Reset", strconv.FormatInt(now.Add(-time.Hour).Unix(), 10))
+
+	r := Refused(403, h, []byte(`{"message":"API rate limit exceeded"}`), now)
+	if !r.Again {
+		t.Fatal("a past reset still names a retry")
+	}
+	if r.Wait != 0 {
+		t.Errorf("wait %v, want zero", r.Wait)
+	}
+}
+
+func TestARefusalThatIsNotAWaitHasNoWait(t *testing.T) {
+	t.Parallel()
+
+	r := Refused(404, http.Header{}, []byte(`{"message":"Not Found"}`), time.Now())
+	if r.Again || r.Wait != 0 {
+		t.Errorf("a 404 says (again=%v, wait=%v), want (false, 0)", r.Again, r.Wait)
 	}
 }

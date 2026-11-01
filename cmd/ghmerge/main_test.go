@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -859,6 +860,183 @@ func TestGhmergeNamesTheBurstLimit(t *testing.T) {
 				t.Errorf("error = %q, which still blames the credential", errb)
 			}
 		})
+	}
+}
+
+// ⛔⛔ A GREEN PULL REQUEST THAT CANNOT BE MERGED FOR TEN MINUTES used to cost a
+// person a clock in their head. On 2026-11-01 two of them — 23 checks and 2
+// checks, all green — were refused with a 403 that NAMED the instant the window
+// reopens, and this command printed that instant and stopped. Three sessions in
+// one night did the waiting by hand.
+//
+// ⚠ AND IT STAYS OPT-IN. Retrying a refused write is what GitHub's own
+// documentation warns about, and the hourly budget here is shared with the
+// fleet's Renovate runners — so the default must still refuse at once, and the
+// cases below pin both halves: what --wait does, and what it does NOT do.
+func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
+	const spent = `{"message":"API rate limit exceeded for user ID 11405852."}`
+	const dead = `{"message":"Bad credentials"}`
+
+	frozen := time.Date(2026, 11, 1, 10, 53, 30, 0, time.UTC)
+	reset := frozen.Add(10*time.Minute + 15*time.Second)
+
+	for _, c := range []struct {
+		name    string
+		args    []string
+		status  int
+		body    string
+		reset   bool          // does the refusal carry remaining:0 and a reset?
+		slept   time.Duration // what the command must wait, 0 for "not at all"
+		merged  bool
+		code    int
+		says    string
+		saysNot string
+	}{
+		{
+			name:   "the reset GitHub named is waited out, and then it merges",
+			args:   []string{"--wait", "30m"},
+			status: http.StatusForbidden, body: spent, reset: true,
+			slept: 10*time.Minute + 15*time.Second, merged: true, code: 0,
+			says: "waiting 10m15s",
+		},
+		{
+			// ⛔ THE DEFAULT MUST NOT HAVE CHANGED. Every other session on this
+			// machine calls `ghmerge <n>` with no flags, and a tool that
+			// silently started sleeping for ten minutes would be worse than
+			// one that refuses.
+			name:   "with no --wait it still refuses at once",
+			status: http.StatusForbidden, body: spent, reset: true,
+			slept: 0, merged: false, code: 1,
+			says: "exhausted until", saysNot: "waiting",
+		},
+		{
+			// A --wait that cannot reach the deadline must not sleep for as
+			// much of it as it can and then fail: that spends the wait and
+			// still refuses.
+			name:   "a --wait that does not reach the deadline sleeps not at all",
+			args:   []string{"--wait", "1m"},
+			status: http.StatusForbidden, body: spent, reset: true,
+			slept: 0, merged: false, code: 1,
+			says: "--wait 1m0s does not reach it",
+		},
+		{
+			// ⛔ Waiting cannot revive a token. Answering "in ten minutes"
+			// here would build a loop with no success in it.
+			name:   "a dead credential is refused however large --wait is",
+			args:   []string{"--wait", "30m"},
+			status: http.StatusUnauthorized, body: dead,
+			slept: 0, merged: false, code: 1,
+			says: "refused the credential", saysNot: "waiting",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			refusals, merged := 0, false
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/merge"):
+					if refusals == 0 {
+						refusals++
+						if c.reset {
+							w.Header().Set("X-RateLimit-Remaining", "0")
+							w.Header().Set("X-RateLimit-Resource", "core")
+							w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+						}
+						w.WriteHeader(c.status)
+						_, _ = w.Write([]byte(c.body))
+						return
+					}
+					merged = true
+					fmt.Fprint(w, `{"merged":true}`)
+				case strings.Contains(r.URL.Path, "/check-runs"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{
+						{"name": "test", "status": "completed", "conclusion": "success"},
+					}})
+				case strings.HasSuffix(r.URL.Path, "/status"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"statuses": []map[string]any{}})
+				case strings.Contains(r.URL.Path, "/git/refs/heads/"):
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					_ = json.NewEncoder(w).Encode(green())
+				}
+			}))
+			t.Cleanup(s.Close)
+			wasBase, wasSleep, wasNow := apiBase, sleep, now
+			apiBase = s.URL
+			var slept []time.Duration
+			sleep = func(d time.Duration) { slept = append(slept, d) }
+			now = func() time.Time { return frozen }
+			t.Cleanup(func() { apiBase, sleep, now = wasBase, wasSleep, wasNow })
+
+			code, _, errb := try(t, append(c.args, "go-gitsafe/gitsafe", "1")...)
+			if code != c.code {
+				t.Errorf("exit %d, want %d; stderr:\n%s", code, c.code, errb)
+			}
+			if merged != c.merged {
+				t.Errorf("merged = %v, want %v", merged, c.merged)
+			}
+			var total time.Duration
+			for _, d := range slept {
+				total += d
+			}
+			if total != c.slept {
+				t.Errorf("slept %v in %d call(s), want %v", total, len(slept), c.slept)
+			}
+			if !strings.Contains(errb, c.says) {
+				t.Errorf("stderr does not say %q:\n%s", c.says, errb)
+			}
+			if c.saysNot != "" && strings.Contains(errb, c.saysNot) {
+				t.Errorf("stderr says %q, which it must not:\n%s", c.saysNot, errb)
+			}
+		})
+	}
+}
+
+// ⛔ AND THE WAIT IS NEVER SHORTER THAN A MINUTE, even when the instant has
+// already gone by. A stale reset plus an eager floor is a loop that spends the
+// shared budget hammering a window that is still shut; GitHub's own floor for a
+// burst refusal is "at least one minute".
+func TestAResetAlreadyPassedStillWaitsAMinute(t *testing.T) {
+	frozen := time.Date(2026, 11, 1, 11, 0, 0, 0, time.UTC)
+	refusals := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/merge"):
+			if refusals == 0 {
+				refusals++
+				w.Header().Set("X-RateLimit-Remaining", "0")
+				// Five minutes BEFORE the frozen clock.
+				w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(frozen.Add(-5*time.Minute).Unix(), 10))
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+				return
+			}
+			fmt.Fprint(w, `{"merged":true}`)
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{
+				{"name": "test", "status": "completed", "conclusion": "success"},
+			}})
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"statuses": []map[string]any{}})
+		case strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			_ = json.NewEncoder(w).Encode(green())
+		}
+	}))
+	t.Cleanup(s.Close)
+	wasBase, wasSleep, wasNow := apiBase, sleep, now
+	apiBase = s.URL
+	var slept []time.Duration
+	sleep = func(d time.Duration) { slept = append(slept, d) }
+	now = func() time.Time { return frozen }
+	t.Cleanup(func() { apiBase, sleep, now = wasBase, wasSleep, wasNow })
+
+	code, _, errb := try(t, "--wait", "5m", "go-gitsafe/gitsafe", "1")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; stderr:\n%s", code, errb)
+	}
+	if len(slept) != 1 || slept[0] != time.Minute {
+		t.Errorf("slept %v, want exactly one minute", slept)
 	}
 }
 

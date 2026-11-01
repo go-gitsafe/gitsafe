@@ -89,6 +89,47 @@ checks they watched. When it cannot read the pull request it says so on stderr a
 still exits 0 — refusing there would make `-dry-run` useless exactly when someone
 is being careful.
 
+### `--wait`: a refusal that carries its own remedy
+
+GitHub refuses a merge with a 403 that **names the instant the window reopens**.
+`ghmerge` printed that instant and stopped, which left a person holding a clock:
+
+    ghmerge: GitHub refused the merge: GitHub refused this (403) reporting the
+    core budget exhausted until 11:03:45 […] The credential is fine
+
+On 2026-11-01 that happened to two pull requests — 23 checks and 2 checks, every
+one green — and three sessions on this machine did the waiting by hand that
+night. So `--wait` spends a budget of patience on it instead:
+
+    $ ghmerge --wait 30m go-xrkit/android 51
+    go-xrkit/android#51: 23 check(s), 0 status(es), all green
+    ghmerge: GitHub refused the merge: GitHub refused this (403) reporting the core
+    budget exhausted until 11:03:45. […] The credential is fine
+    ghmerge: waiting 2m15s, until 11:03:45, because that is what GitHub's own answer says
+    merged
+
+That transcript is the first use of the flag, on the pull request that prompted
+it — not an illustration.
+
+⛔ **It is opt-in, and it has to be.** Retrying a write GitHub refused is exactly
+what its documentation warns about — *"continuing to make requests while you are
+rate limited may result in the banning of your integration"* — and the hourly
+budget is shared with every other session and every Renovate runner on the
+account. So:
+
+| | |
+|---|---|
+| no `--wait` | refuses at once, exactly as before |
+| the wait | GitHub's own number: `Retry-After`, else `X-RateLimit-Reset` when `remaining: 0`, else the documented minute |
+| never shorter | than one minute, even when the reset has already gone by — a stale clock must not become a hammering loop |
+| never longer | than `--wait`; a budget that cannot reach the deadline sleeps **not at all** and says so, rather than spending the wait and failing anyway |
+| never at all | for a refusal waiting cannot fix: a dead credential, a 404 |
+
+⚠ **`gh api rate_limit` cannot judge a refused request** — "there is not a way to
+check the status of your secondary rate limit", and calling it can itself count
+against that limit. The headers of the answer that was refused are the evidence,
+which is why `ghauth.RetryAt` reads those and nothing else.
+
 ## What is here
 
 | | |
@@ -96,7 +137,7 @@ is being careful.
 | `git-pre-push-guard` | The **global** pre-push hook. Refuses a URL that carries a credential, a write to the branch pull requests land on, and a push that publishes an undeclared nested repository — whoever runs git, and whatever they run it with. |
 | `gitpush` | Pushes without a token ever reaching a command line: it **names** a credential helper rather than reading the secret, refuses a remote URL that carries one, and redacts what it prints by shape. Takes the same arguments as the command it replaces. |
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
-| `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. |
+| `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. With `--wait 30m` it also waits out a 403 that names the instant the window reopens, instead of handing that clock to a person. |
 | `ghnew` | Creates a repository that **already has a default branch**, so no commit of yours ever has to land on it unreviewed. An empty repository has no branches, `gh pr create` has no base, and the way out that presents itself is pushing straight to the default branch — four repositories were bootstrapped that way here in one afternoon. It asks GitHub to write the first commit, then **looks** to confirm the branch is there before saying it worked. There is no flag to skip that. |
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
 | `ghpkg` | Lists and deletes the versions of a published package. Refuses to delete without `--yes`, printing what it would remove; refuses a tag that names no version or two; and **names the other tags on the manifest it is about to delete**, because several can point at one. |
