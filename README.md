@@ -106,10 +106,16 @@ night. So `--wait` spends a budget of patience on it instead:
     ghmerge: GitHub refused the merge: GitHub refused this (403) reporting the core
     budget exhausted until 11:03:45. […] The credential is fine
     ghmerge: waiting 2m15s, until 11:03:45, because that is what GitHub's own answer says
+    ghmerge: GitHub refused the merge: … exhausted until 11:03:45. […]
+    ghmerge: waiting 1m0s, until 11:04:45, because that is what GitHub's own answer says
     merged
+    branch three-implementations-agree deleted
 
-That transcript is the first use of the flag, on the pull request that prompted
-it — not an illustration.
+That transcript is the flag's first use, on the pull request that prompted it —
+not an illustration. ⚠ And note the **second** refusal: GitHub refused again at
+the very instant its own header named, with that same instant still in the
+header. A reset in the past is how this actually behaves, which is why there is
+a floor at all.
 
 ⛔ **It is opt-in, and it has to be.** Retrying a write GitHub refused is exactly
 what its documentation warns about — *"continuing to make requests while you are
