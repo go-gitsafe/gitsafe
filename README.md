@@ -16,7 +16,7 @@ Documentation asks. A hook refuses. These are the tools that refuse.
     ghrelease [-wait-main 30m] [-no-main-ci] [-notes-file F] [owner/repo] <pr-number> <tag>
     ghrelease -release-only [-notes-file F] [owner/repo] <tag>
 
-**It waits for CI on the default branch before tagging, since v0.30.0.** A tag marks a merged, *CI-green* commit, and the pull request's green checks do not prove that: on 2026-11-01 a random fuzz job turned go-llmflow/gateway's main red on a merge commit whose PR had been green, and the tag went onto that commit while its main run was still queued. Now, after the merge (and also when the pull request "is already merged") and before the tag:
+**It waits for CI on the default branch before tagging, since v0.31.0.** A tag marks a merged, *CI-green* commit, and the pull request's green checks do not prove that: on 2026-11-01 a random fuzz job turned go-llmflow/gateway's main red on a merge commit whose PR had been green, and the tag went onto that commit while its main run was still queued. Now, after the merge (and also when the pull request "is already merged") and before the tag:
 
 - it lists the workflow runs whose `head_sha` is the merge commit on the base branch (REST "List workflow runs for a repository") and polls, with backoff, until every one is completed, for at most `-wait-main` (default `30m`);
 - it tags only if every run concluded `success`; `skipped` and `neutral` are not failures, and it says so. Any other conclusion (failure, cancelled, timed out...) means **no tag**: it prints the failing run URLs and exits 1 (the pull request is merged; main is not green);

@@ -2,7 +2,7 @@ package main
 
 // Waiting for CI on the default branch before tagging.
 //
-// A release tag marks a merged, CI-GREEN default-branch commit. Until v0.30.0
+// A release tag marks a merged, CI-GREEN default-branch commit. Until v0.31.0
 // ghrelease tagged the merge commit as soon as the merge succeeded, which only
 // proves the PULL REQUEST's checks were green. On 2026-11-01 go-llmflow/gateway
 // main turned red on a merge commit whose PR checks had been green (a random
