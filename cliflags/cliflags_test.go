@@ -7,22 +7,9 @@ import (
 	"testing"
 )
 
-// ⛔ The two commands that asked this by hand knew TWO of the four spellings
-// (gitpush) and none (ghscopes, where an unrecognised argument became a
-// demanded scope). The negative half matters as much: `-help-me` is not a
-// request for help, and neither is a repository called `help`.
-func TestIsHelpRequestKnowsAllFourSpellings(t *testing.T) {
-	for _, arg := range []string{"-h", "-help", "--help", "help"} {
-		if !IsHelpRequest(arg) {
-			t.Errorf("IsHelpRequest(%q) = false, want true", arg)
-		}
-	}
-	for _, arg := range []string{"", "h", "-H", "--Help", "helpme", "-help-me", "workflow", "go-helpers/help"} {
-		if IsHelpRequest(arg) {
-			t.Errorf("IsHelpRequest(%q) = true, want false", arg)
-		}
-	}
-}
+// The four-spelling check moved to helparg, with its tests: see the package
+// comment there for the 365 KB of cobra that reached gitpush while it lived
+// in this package.
 
 // TestEveryCommandAnswersHelpWithZero holds the whole repository to it.
 //
