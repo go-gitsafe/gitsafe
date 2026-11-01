@@ -155,8 +155,14 @@ func resetAt(header http.Header) string {
 //	401, or "bad credentials"        the credential itself
 //	"secondary rate limit", "abuse"  the burst limit; wait and retry
 //	Retry-After present              the same, and it says how long
-//	403 with no budget left          the hourly budget; it says when it resets
+//	403 with no budget left          a limit it CANNOT name: hourly or burst,
+//	                                 with the resource and the reset it saw
 //	anything else                    the status, and GitHub's own sentence
+//
+// ⛔ The fourth line used to say "the hourly budget". It cannot know that: a
+// burst refusal carries remaining==0 too, and on 2026-11-01 two sessions were
+// sent to wait on that clock while the core budget was 96% unspent. A tool that
+// names a cause is believed, so it may only name one it can establish.
 //
 // ⚠ NOTHING HERE CAN CARRY THE TOKEN. The status, the headers this reads and
 // GitHub's `message` field are all answers ABOUT a request, never the request's
@@ -197,12 +203,40 @@ func WhyRefused(status int, header http.Header, body []byte) error {
 			"quickly. Wait a minute and retry; the credential is fine", status)
 
 	case header.Get("X-RateLimit-Remaining") == "0":
-		if at := resetAt(header); at != "" {
-			return fmt.Errorf("GitHub's hourly budget is spent (%d): it "+
-				"resets at %s; the credential is fine", status, at)
+		// ⛔⛔ remaining==0 DOES NOT SAY WHICH LIMIT REFUSED, so this no longer
+		// claims it does. Measured by two sessions on 2026-11-01, independently,
+		// on the same minute: a merge answered 403 with `API rate limit
+		// exceeded` -- no "secondary" wording, no Retry-After, so it lands here
+		// -- while `gh api rate_limit` reported the core budget 96% UNSPENT
+		// (4827 of 5000) and `gh pr create` went through twice. The hourly
+		// budget was plainly not spent, and this said it was.
+		//
+		// GitHub's own documentation settles it: for SECONDARY limit errors it
+		// says "if x-ratelimit-remaining is 0, wait until x-ratelimit-reset,
+		// otherwise wait at least one minute". That advice would be pointless if
+		// a secondary refusal could not carry remaining==0 -- so it can, and
+		// this header cannot tell the two apart.
+		//
+		// ⭐ WHAT IT CAN SAY is what it observed, plus the one-call measurement
+		// that settles it. "The hourly budget resets at 10:03" is actionable and
+		// was wrong twice in one morning: both sessions waited on a clock that
+		// was not the one running out. Naming the resource matters too -- the
+		// budget is per resource family, so a drained one says nothing about the
+		// rest.
+		what := "its rate limit"
+		if r := header.Get("X-RateLimit-Resource"); r != "" {
+			what = "the " + r + " budget"
 		}
-		return fmt.Errorf("GitHub's hourly budget is spent (%d); the "+
-			"credential is fine", status)
+		if at := resetAt(header); at != "" {
+			return fmt.Errorf("GitHub refused this (%d) reporting %s exhausted "+
+				"until %s. That may be the hourly budget or a burst limit, which "+
+				"answers the same way: if another call succeeds now, it is the "+
+				"burst one. The credential is fine", status, what, at)
+		}
+		return fmt.Errorf("GitHub refused this (%d) reporting %s exhausted. That "+
+			"may be the hourly budget or a burst limit, which answers the same "+
+			"way: if another call succeeds now, it is the burst one. The "+
+			"credential is fine", status, what)
 	}
 	if msg.Message != "" {
 		return fmt.Errorf("GitHub answered %d: %s", status, msg.Message)
