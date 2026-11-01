@@ -212,7 +212,38 @@ That last row is not laziness. `gitpush` forwards its whole argument list to
 `git push`, so `--force-with-lease` and `-u` are **operands it must not
 interpret**; the hooks are handed their arguments by git; `guard-bash` and the
 credential helper read a protocol on stdin. A parser is the wrong shape for all
-five, and `cliflags.IsHelpRequest` is how they answer a question instead.
+five, and `helparg.Is` — six lines, no imports — is how `gitpush` answers a
+question instead.
+
+#### What the dependency cost, measured
+
+⛔ **That check used to live in `cliflags`, beside the cobra adapter, and
+`gitpush` imported it for those six lines alone** — linking cobra and pflag,
+which it never calls, into the one command that exists so a token never reaches
+a command line:
+
+```
+gitpush  v0.21.1, before cobra    3 462 018 bytes
+         v0.27.0                  3 835 570      +373 552   +10.8%
+         with helparg             3 425 154      −410 416   −10.7%
+```
+
+Smaller than before the migration, because `helparg` imports nothing at all —
+not even `flag`, which the old `cliflags` needed. `spf13` now appears **zero**
+times in `gitpush`'s build info. `gitpush`'s own source already argued this
+case: `errorsAs` is written out there by hand rather than imported, *"kept
+local so the import list of a security tool stays as short as it can be"*.
+
+⭐ **And the hottest path was measured at the same time, because it is the one
+that matters most**: `guard-bash` runs on *every* Bash call on a machine that
+has it wired in. 4 547 538 → 4 547 682 bytes, 144 bytes of noise. It imports
+none of this.
+
+⛔ **A note that was wrong, now corrected:** the comment left behind by the
+migration said the four-spelling check "stays for the five commands that are
+deliberately not cobra". Only **one** of those five ever called it. The hooks,
+the credential helper and `guard-bash` are invoked by git or by the harness and
+answer no question at all — measured by reading every import of the package.
 
 `credurl`, `credfix`, `redact`, `protect`, `ghauth`, `glauth` and `cliflags` are the libraries under
 them: one answers "is the part before the `@` a secret or a username" and holds

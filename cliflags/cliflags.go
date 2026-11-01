@@ -27,9 +27,23 @@
 // helpers this package used to carry for the flag package, ParseFlags and
 // IsHelpError, were removed when the last command that called them moved.
 //
-// [IsHelpRequest] stays for the five commands that are deliberately not cobra
-// (gitpush, guard-bash, git-credential-tokenfile, git-pre-push-guard,
-// git-post-checkout-guard): a parser is the wrong shape for all of them.
+// ⛔ THE FOUR-SPELLING CHECK LIVES IN [helparg], NOT HERE, AND THE REASON IS
+// THE DEPENDENCY. It was here, and `gitpush` imported this package for those
+// six lines alone -- linking cobra and pflag, which it never calls, into the
+// one command that exists so a token never reaches a command line:
+//
+//	gitpush v0.21.1 (before cobra)    3 462 018 bytes
+//	gitpush v0.27.0                   3 835 570 bytes   +373 552, +10.8%
+//
+// A package's import list is part of its interface. This one imports a flag
+// parser on purpose; a command that forwards its arguments to `git push`
+// cannot afford to.
+//
+// ⛔ AND THE NOTE THAT SAID "IsHelpRequest stays for the five commands that
+// are deliberately not cobra" WAS WRONG. Only ONE of those five ever called
+// it -- `gitpush`. The hooks, the credential helper and `guard-bash` are
+// invoked by git or by the harness and answer no question at all. Measured by
+// reading every import of this package, 2026-11-01.
 //
 // ⛔ THE TWIN IN go-fleettools/fleettools IS A COPY, DELIBERATELY. The same
 // defect was measured there the same day (13 of 25 commands) and fixed as
@@ -37,22 +51,3 @@
 // a shared module between two repositories; a THIRD copy would, and whoever
 // writes it should make one instead of this comment.
 package cliflags
-
-// IsHelpRequest reports whether this argument is somebody asking what the
-// command does, in all four spellings people type.
-//
-// ⛔ IT IS FOR THE COMMANDS THAT HAVE NO FLAG SET AT ALL, where `-h` is not a
-// verb and no parser will see it. No two of them knew the same spellings:
-// credscan knew three and missed `-help` (so `credscan -help` printed the usage
-// and exited 2 while `credscan -h` printed the same usage and exited 0), gitpush
-// knew two, ghpkg and ghscopes knew none. ghscopes is the sharpest: its parse
-// loop appended an unrecognised argument to the list of DEMANDED SCOPES, so
-// `ghscopes -h` read the token, asked GitHub about it, and reported that a
-// scope called `-h` was missing.
-func IsHelpRequest(arg string) bool {
-	switch arg {
-	case "-h", "-help", "--help", "help":
-		return true
-	}
-	return false
-}
