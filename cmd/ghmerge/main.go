@@ -658,12 +658,17 @@ func retrying(ask func() error) error {
 			return err
 		}
 		pause := refusal.At.Sub(now())
-		if pause < time.Minute {
-			// ⛔ NEVER FASTER THAN A MINUTE, even when the instant has already
-			// passed. A stale clock plus a one-second floor is a loop that
-			// spends the shared budget hammering a closed window; GitHub's own
-			// floor for a burst refusal is "at least one minute", so that is
-			// the floor here too.
+		if pause <= 0 {
+			// ⛔ AN INSTANT ALREADY GONE BY IS NOT "RETRY NOW". A refusal whose
+			// reset is in the past means the clock this read is stale, and
+			// retrying on it is a loop that spends the shared budget hammering
+			// a window that is still shut. GitHub's floor for a refusal with no
+			// usable deadline is "at least one minute", so that is the floor
+			// here too.
+			//
+			// ⚠ And only HERE: flooring every short pause at a minute would
+			// make a window that reopens in ten seconds cost sixty, which is
+			// waiting longer than the refusal asked for.
 			pause = time.Minute
 		}
 		if now().Add(pause).After(deadline) {

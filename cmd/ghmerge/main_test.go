@@ -886,6 +886,7 @@ func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
 		status  int
 		body    string
 		reset   bool          // does the refusal carry remaining:0 and a reset?
+		soon    time.Duration // how far out that reset is; 0 means the default
 		slept   time.Duration // what the command must wait, 0 for "not at all"
 		merged  bool
 		code    int
@@ -898,6 +899,16 @@ func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
 			status: http.StatusForbidden, body: spent, reset: true,
 			slept: 10*time.Minute + 15*time.Second, merged: true, code: 0,
 			says: "waiting 10m15s",
+		},
+		{
+			// ⚠ A SHORT WAIT STAYS SHORT. The floor below is for an instant
+			// already gone by; applying it here would make a window that
+			// reopens in ten seconds cost sixty.
+			name:   "a reset ten seconds out costs ten seconds",
+			args:   []string{"--wait", "30m"},
+			status: http.StatusForbidden, body: spent, reset: true, soon: 10 * time.Second,
+			slept: 10 * time.Second, merged: true, code: 0,
+			says: "waiting 10s",
 		},
 		{
 			// ⛔ THE DEFAULT MUST NOT HAVE CHANGED. Every other session on this
@@ -930,6 +941,10 @@ func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			at := reset
+			if c.soon != 0 {
+				at = frozen.Add(c.soon)
+			}
 			refusals, merged := 0, false
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -939,7 +954,7 @@ func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
 						if c.reset {
 							w.Header().Set("X-RateLimit-Remaining", "0")
 							w.Header().Set("X-RateLimit-Resource", "core")
-							w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+							w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(at.Unix(), 10))
 						}
 						w.WriteHeader(c.status)
 						_, _ = w.Write([]byte(c.body))
@@ -991,10 +1006,13 @@ func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
 	}
 }
 
-// ⛔ AND THE WAIT IS NEVER SHORTER THAN A MINUTE, even when the instant has
-// already gone by. A stale reset plus an eager floor is a loop that spends the
-// shared budget hammering a window that is still shut; GitHub's own floor for a
-// burst refusal is "at least one minute".
+// ⛔ AN INSTANT ALREADY GONE BY IS NOT "RETRY NOW": a stale reset plus an eager
+// retry is a loop that spends the shared budget hammering a window that is
+// still shut, so it becomes GitHub's documented minute.
+//
+// ⚠ AND THE FLOOR APPLIES ONLY THERE. Flooring every short pause at a minute
+// would make a window reopening in ten seconds cost sixty — waiting longer than
+// the refusal asked for — so the case below pins the short wait too.
 func TestAResetAlreadyPassedStillWaitsAMinute(t *testing.T) {
 	frozen := time.Date(2026, 11, 1, 11, 0, 0, 0, time.UTC)
 	refusals := 0

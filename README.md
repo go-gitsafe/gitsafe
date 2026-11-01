@@ -121,7 +121,7 @@ account. So:
 |---|---|
 | no `--wait` | refuses at once, exactly as before |
 | the wait | GitHub's own number: `Retry-After`, else `X-RateLimit-Reset` when `remaining: 0`, else the documented minute |
-| never shorter | than one minute, even when the reset has already gone by — a stale clock must not become a hammering loop |
+| never shorter | than the instant the refusal named — and when that instant has already **gone by**, GitHub's documented minute, because a stale clock must not become a hammering loop. Measured on the two merges above: the second 403 carried the *same* reset after it had passed |
 | never longer | than `--wait`; a budget that cannot reach the deadline sleeps **not at all** and says so, rather than spending the wait and failing anyway |
 | never at all | for a refusal waiting cannot fix: a dead credential, a 404 |
 
