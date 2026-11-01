@@ -49,6 +49,12 @@ func install(t *testing.T, s *stub) {
 		if r, ok := s.byPath[req.Method+" "+req.URL.Path]; ok {
 			return r, nil
 		}
+		// Main CI is green unless a test says otherwise: these tests are about
+		// the merge and the tag, and maincheck_test.go is about the wait.
+		if req.Method == http.MethodGet && req.URL.Path == "/repos/o/r/actions/runs" {
+			return reply(http.StatusOK, `{"total_count":1,"workflow_runs":[{"id":1,"name":"ci","status":"completed","conclusion":"success","head_sha":"`+
+				req.URL.Query().Get("head_sha")+`","html_url":"https://example.test/run/1"}]}`), nil
+		}
 		return reply(http.StatusNotFound, "{}"), nil
 	}
 	runMerge = func(string, int, io.Writer, io.Writer) error { s.ran++; return s.merged }

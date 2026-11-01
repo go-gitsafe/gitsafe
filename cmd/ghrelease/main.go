@@ -105,6 +105,8 @@ type options struct {
 	dry, releaseOnly     bool
 	noBackfill           bool
 	backfillMax          int
+	waitMain             time.Duration
+	noMainCI             bool
 }
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
@@ -132,6 +134,9 @@ func RootCmd() *cobra.Command {
 		"[owner/repo] <tag> (the resume after \"tag created, release missing\")")
 	f.BoolVar(&o.noBackfill, "no-backfill", false, "do not create the missing releases of the repository's older tags")
 	f.IntVar(&o.backfillMax, "backfill-max", defaultBackfillMax, "at most this many older tags released per run (oldest first)")
+	f.DurationVar(&o.waitMain, "wait-main", defaultWaitMain, "after the merge, wait up to this long for every workflow run on the default branch at the merge commit "+
+		"to complete, and tag only if all succeeded (skipped and neutral are not failures); 0 disables the wait, loudly")
+	f.BoolVar(&o.noMainCI, "no-main-ci", false, "tag even when NO workflow run appears on the default branch within 2 minutes (a repository without CI on push to main)")
 	c.AddCommand(backfillCmd())
 	return c
 }
@@ -151,6 +156,10 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	}
 	if *releaseOnly {
 		return resumeRelease(args, *tokenFile, notes, stdout, stderr)
+	}
+	if o.waitMain < 0 {
+		fmt.Fprintf(stderr, "ghrelease: -wait-main %s: want a duration of 0 or more\n", o.waitMain)
+		return 2
 	}
 	repo, number, tag, err := target(args)
 	if err != nil {
@@ -190,7 +199,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		//
 		// So the dry run now NAMES THE COMMIT it would tag, which is both the
 		// disambiguation and the thing a person can verify before acting.
-		merged, sha, err := mergeState(token, repo, number)
+		merged, sha, _, err := mergeState(token, repo, number)
 		switch {
 		case err != nil:
 			// A dry run that cannot read the pull request must not pretend to
@@ -212,6 +221,11 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "would merge %s#%d, then tag %s at the merge commit that "+
 				"produces — it does not exist yet\n", repo, number, tag)
 		}
+		if o.waitMain > 0 {
+			fmt.Fprintf(stdout, "it would then wait up to %s for every workflow run on the default branch at that commit, and tag only if all succeeded (-wait-main)\n", o.waitMain)
+		} else {
+			fmt.Fprintf(stdout, "-wait-main 0: it would NOT wait for CI on the default branch\n")
+		}
 		return 0
 	}
 
@@ -222,11 +236,18 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	sha, err := mergeCommit(token, repo, number)
+	sha, base, err := mergeCommit(token, repo, number)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghrelease: merged, but %v\n", err)
 		fmt.Fprintf(stderr, "ghrelease: nothing was tagged; tag the merge commit by hand\n")
 		return 1
+	}
+	// A tag marks a merged, CI-GREEN default-branch commit: the pull request's
+	// checks passing says nothing about the push-to-main run (maincheck.go).
+	// Both paths get here -- a fresh merge and "is already merged".
+	if code := waitMain(token, repo, sha, base, o.waitMain, o.noMainCI, newBudget(defaultMargin), stdout, stderr); code != 0 {
+		fmt.Fprintf(stderr, "ghrelease: nothing was tagged\n")
+		return code
 	}
 	if err := createTag(token, repo, tag, sha); err != nil {
 		fmt.Fprintf(stderr, "ghrelease: merged, but %v\n", err)
@@ -480,42 +501,45 @@ func tagExists(token, repo, tag string) (bool, error) {
 // It is one reader for two callers — the dry run, which must not treat "not
 // merged" as an error, and mergeCommit, which must. Two readers of the same
 // endpoint is how one of them ends up decoding a field the other does not.
-func mergeState(token, repo string, number int) (merged bool, sha string, err error) {
+func mergeState(token, repo string, number int) (merged bool, sha, base string, err error) {
 	resp, err := api(token, http.MethodGet,
 		fmt.Sprintf("%s/repos/%s/pulls/%d", apiBase, repo, number), nil)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false, "", refused("asking for the pull request", resp)
+		return false, "", "", refused("asking for the pull request", resp)
 	}
 	var pr struct {
 		Merged   bool   `json:"merged"`
 		MergeSHA string `json:"merge_commit_sha"`
+		Base     struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
-	return pr.Merged, pr.MergeSHA, nil
+	return pr.Merged, pr.MergeSHA, pr.Base.Ref, nil
 }
 
 // mergeCommit is the commit the merge produced.
 //
 // A squash merge makes a NEW commit, so the pull request's head sha is not it
 // and tagging that would tag a commit no branch contains.
-func mergeCommit(token, repo string, number int) (string, error) {
-	merged, sha, err := mergeState(token, repo, number)
+func mergeCommit(token, repo string, number int) (sha, base string, err error) {
+	merged, sha, base, err := mergeState(token, repo, number)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if !merged {
-		return "", errors.New("GitHub says the pull request is not merged")
+		return "", "", errors.New("GitHub says the pull request is not merged")
 	}
 	if sha == "" {
-		return "", errors.New("GitHub gave no merge commit")
+		return "", "", errors.New("GitHub gave no merge commit")
 	}
-	return sha, nil
+	return sha, base, nil
 }
 
 // createTag publishes a lightweight tag at sha.

@@ -13,8 +13,16 @@ Documentation asks. A hook refuses. These are the tools that refuse.
 
 ## `ghrelease` — merge, tag and release as one thing
 
-    ghrelease [-notes-file F] [owner/repo] <pr-number> <tag>
+    ghrelease [-wait-main 30m] [-no-main-ci] [-notes-file F] [owner/repo] <pr-number> <tag>
     ghrelease -release-only [-notes-file F] [owner/repo] <tag>
+
+**It waits for CI on the default branch before tagging, since v0.30.0.** A tag marks a merged, *CI-green* commit, and the pull request's green checks do not prove that: on 2026-11-01 a random fuzz job turned go-llmflow/gateway's main red on a merge commit whose PR had been green, and the tag went onto that commit while its main run was still queued. Now, after the merge (and also when the pull request "is already merged") and before the tag:
+
+- it lists the workflow runs whose `head_sha` is the merge commit on the base branch (REST "List workflow runs for a repository") and polls, with backoff, until every one is completed, for at most `-wait-main` (default `30m`);
+- it tags only if every run concluded `success`; `skipped` and `neutral` are not failures, and it says so. Any other conclusion (failure, cancelled, timed out...) means **no tag**: it prints the failing run URLs and exits 1 (the pull request is merged; main is not green);
+- if no run appears within 2 minutes (no CI on push to main) it refuses, unless `-no-main-ci` says that repository has none on purpose;
+- `-wait-main 0` disables the wait and prints a warning that the tag may mark a red commit;
+- it stops under the API budget margin like the rest of the tool, and a refused answer (403 secondary limit included) ends the wait with its reason; `-release-only` is unchanged.
 
 Since v0.18.0 it also creates the **GitHub release** of the tag (REST "Create
 a release"): with `-notes-file` as its body, otherwise with GitHub's notes
