@@ -72,6 +72,8 @@ func (f *fakeGitHub) do(req *http.Request) (*http.Response, error) {
 		f.released[repo][body["tag_name"].(string)] = true
 		f.restLeft--
 		return resp(201, map[string]any{})
+	case req.Method == "GET" && strings.HasPrefix(p, "/repos/o/r/git/matching-refs/"):
+		return resp(200, []any{})
 	case req.Method == "GET" && p == "/repos/o/r/actions/runs": // main CI: green
 		return resp(200, map[string]any{"total_count": 1, "workflow_runs": []map[string]any{{"id": 1, "name": "ci",
 			"status": "completed", "conclusion": "success", "head_sha": "cafebabe0000", "html_url": "https://example.test/run/1"}}})

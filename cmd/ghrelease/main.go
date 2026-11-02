@@ -107,6 +107,7 @@ type options struct {
 	backfillMax          int
 	waitMain             time.Duration
 	noMainCI             bool
+	allowLower           bool
 }
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
@@ -137,6 +138,8 @@ func RootCmd() *cobra.Command {
 	f.DurationVar(&o.waitMain, "wait-main", defaultWaitMain, "after the merge, wait up to this long for every workflow run on the default branch at the merge commit "+
 		"to complete, and tag only if all succeeded (skipped and neutral are not failures); 0 disables the wait, loudly")
 	f.BoolVar(&o.noMainCI, "no-main-ci", false, "tag even when NO workflow run appears on the default branch within 2 minutes (a repository without CI on push to main)")
+	f.BoolVar(&o.allowLower, "allow-lower", false, "tag even when the tag is not above the repository's highest release (a deliberate backport on a release branch); "+
+		"the release is then NOT marked Latest (make_latest false), so a backport never becomes @latest")
 	c.AddCommand(backfillCmd())
 	return c
 }
@@ -184,6 +187,20 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	case exists:
 		fmt.Fprintf(stderr, "ghrelease: %s already has the tag %s, and a published tag is not moved\n", repo, tag)
 		return 1
+	}
+
+	// Asked BEFORE the merge, like the tag: a tag below the repository's highest
+	// release becomes Latest and hides the new code from @latest (order.go).
+	lower, refusal, err := orderCheck(token, repo, tag, o.allowLower, newBudget(defaultMargin))
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "ghrelease: cannot order %s among the existing tags: %v\n", tag, err)
+		return 1
+	case refusal != "":
+		fmt.Fprintf(stderr, "ghrelease: %s\n", refusal)
+		return 1
+	case lower:
+		fmt.Fprintf(stderr, "ghrelease: -allow-lower: %s is below the highest release; its release will NOT be marked Latest\n", tag)
 	}
 
 	if *dry {
@@ -257,7 +274,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	// The release is part of the job: a tag without one leaves the
 	// repository's Releases page, and its Latest badge, on the previous
 	// version (go-gitsafe/gitsafe#59: three times on 2026-10-26).
-	if err := createRelease(token, repo, tag, notes); err != nil {
+	if err := createRelease(token, repo, tag, notes, !lower); err != nil {
 		return releaseMissing(stderr, repo, tag, err)
 	}
 	fmt.Fprintf(stdout, "released %s\n", tag)
@@ -324,7 +341,8 @@ func resumeRelease(args []string, tokenFile string, notes *string, stdout, stder
 		fmt.Fprintf(stdout, "%s already has a release for %s; nothing to do\n", repo, tag)
 		return 0
 	}
-	if err := createRelease(token, repo, tag, notes); err != nil {
+	// An existing tag: Latest only if it is the newest (GitHub's "legacy").
+	if err := createRelease(token, repo, tag, notes, true); err != nil {
 		return releaseMissing(stderr, repo, tag, err)
 	}
 	fmt.Fprintf(stdout, "released %s (existing tag, not moved)\n", tag)
@@ -337,8 +355,11 @@ func resumeRelease(args []string, tokenFile string, notes *string, stdout, stder
 // tag (generate_release_notes). make_latest "legacy" lets GitHub mark it
 // Latest only when it is the newest by date and semantic version, so a
 // patch release of an older line does not take the badge.
-func createRelease(token, repo, tag string, notes *string) error {
+func createRelease(token, repo, tag string, notes *string, mayBeLatest bool) error {
 	body := map[string]any{"tag_name": tag, "name": tag, "make_latest": "legacy"}
+	if !mayBeLatest {
+		body["make_latest"] = "false" // a deliberate backport (-allow-lower)
+	}
 	if notes != nil {
 		body["body"] = *notes
 	} else {

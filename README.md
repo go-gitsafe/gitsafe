@@ -24,6 +24,8 @@ Documentation asks. A hook refuses. These are the tools that refuse.
 - `-wait-main 0` disables the wait and prints a warning that the tag may mark a red commit;
 - it stops under the API budget margin like the rest of the tool, and a refused answer (403 secondary limit included) ends the wait with its reason; `-release-only` is unchanged.
 
+**It refuses a tag that is not above the repository's highest release, since v0.32.0.** On 2026-11-02 `ghrelease go-llmflow/bench 17 v0.7.1` ran while v0.9.0 existed: GitHub made v0.7.1 Latest, `go install ...@latest` kept resolving to v0.9.0 and the new code was unreachable. Before merging it lists the repository's `v*` tags (REST "List matching references") and orders them numerically per semver.org (pre-releases and non-semver tags are ignored; GitHub's Latest never points at a pre-release). A lower or equal tag exits 1 and prints the highest release with the next PATCH, MINOR and MAJOR. A tag that is not exactly `vMAJOR.MINOR.PATCH` is refused. `-allow-lower` is for a deliberate backport on a release branch: it tags, and the release is created with `make_latest: false`, so a backport never becomes Latest.
+
 Since v0.18.0 it also creates the **GitHub release** of the tag (REST "Create
 a release"): with `-notes-file` as its body, otherwise with GitHub's notes
 generated from the pull requests merged since the previous tag, marked Latest

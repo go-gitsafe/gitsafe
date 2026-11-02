@@ -43,6 +43,8 @@ func (g *fakeMain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer g.mu.Unlock()
 	w.Header().Set("X-RateLimit-Remaining", "4000")
 	switch r.Method + " " + r.URL.Path {
+	case "GET /repos/o/r/git/matching-refs/tags/v":
+		fmt.Fprint(w, `[]`)
 	case "GET /repos/o/r/git/ref/tags/v1.0.0":
 		http.NotFound(w, r)
 	case "GET /repos/o/r/pulls/3":
