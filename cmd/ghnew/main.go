@@ -93,7 +93,7 @@ yours. Say -public or -private: neither default is safe.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(cmd.OutOrStdout(), args, &o)
+			return runCreate(cmd.OutOrStdout(), cmd.ErrOrStderr(), args, &o)
 		},
 	}
 	f := c.Flags()
@@ -113,7 +113,7 @@ type options struct {
 	tokenFile                  string
 }
 
-func runCreate(out io.Writer, args []string, o *options) error {
+func runCreate(out, errw io.Writer, args []string, o *options) error {
 	public, private, license, gitignore, branch, clone, tokenFile :=
 		&o.public, &o.private, &o.license, &o.gitignore, &o.branch, &o.clone, &o.tokenFile
 	// ⛔ Neither default is safe to assume. Defaulting to public publishes
@@ -141,12 +141,18 @@ func runCreate(out io.Writer, args []string, o *options) error {
 	}
 
 	repo := owner + "/" + name
-	if exists, err := repoExists(token, repo); err != nil {
+	exists, redirect, err := repoExists(token, repo)
+	if err != nil {
 		return err
-	} else if exists {
+	}
+	if exists {
 		// Not "already done": a repository that exists may have a history, and
 		// this would say nothing about whether it has a default branch either.
 		return fmt.Errorf("%s already exists; this creates repositories and does not adopt them", repo)
+	}
+	if redirect != "" {
+		fmt.Fprintf(errw, "ghnew: %s is only a redirect to the renamed repository %s; "+
+			"creating %s, which drops the redirect\n", repo, redirect, repo)
 	}
 
 	if err := create(token, owner, name, description, *public, *license, *gitignore, *branch); err != nil {
@@ -338,19 +344,38 @@ func gitClone(repo, dest string) error {
 	return nil
 }
 
-func repoExists(token, repo string) (bool, error) {
+// repoExists reports whether repo itself exists. GitHub keeps a redirect from a
+// repository's old name after a rename, so GET /repos/<old> answers with the
+// renamed repository (a followed 301, or a 200); the name asked for is then only
+// a redirect, not a repository, and GitHub allows creating one under it (which
+// drops the redirect). So the answer counts only when its full_name is the name
+// asked for, case-insensitively. A redirect is returned as its target's name.
+func repoExists(token, repo string) (exists bool, redirectedTo string, err error) {
 	resp, err := api(token, http.MethodGet, apiBase+"/repos/"+repo, nil)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return true, nil
+		var got struct {
+			FullName string `json:"full_name"`
+		}
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&got); err != nil {
+			return false, "", fmt.Errorf("reading GitHub's answer about %s: %w", repo, err)
+		}
+		if got.FullName == "" {
+			return false, "", fmt.Errorf("GitHub answered 200 for %s without a full_name; "+
+				"cannot tell a repository from a redirect, so not creating", repo)
+		}
+		if !strings.EqualFold(got.FullName, repo) {
+			return false, got.FullName, nil
+		}
+		return true, "", nil
 	case http.StatusNotFound:
-		return false, nil
+		return false, "", nil
 	}
-	return false, fmt.Errorf("GitHub answered %d looking for %s: %s",
+	return false, "", fmt.Errorf("GitHub answered %d looking for %s: %s",
 		resp.StatusCode, repo, readMessage(resp))
 }
 
