@@ -370,6 +370,13 @@ The repository arrives with `main`, a LICENSE and a README, all of them GitHub's
 work rather than yours — so from your first line of code onward, everything is a
 pull request.
 
+`ghnew` refuses a repository that exists, but not a name that is only a rename
+redirect: after `PATCH repos/<o>/<old> name=<new>` GitHub keeps answering
+`GET repos/<o>/<old>` with the renamed repository, and creating a repository under
+the old name is allowed (it drops the redirect). The name counts as taken only if
+the answer's `full_name` equals the one asked for, ignoring case; otherwise
+`ghnew` says on stderr that the name was a redirect to `<o>/<new>` and creates it.
+
 Three things it refuses, and each is the interesting part:
 
 - **It will not tell you it worked without looking.** `auto_init` is a request,

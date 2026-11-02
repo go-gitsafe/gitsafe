@@ -18,6 +18,8 @@ import (
 type fakeGitHub struct {
 	t             *testing.T
 	exists        bool   // GET /repos/o/n before creating
+	redirectTo    string // GET /repos/o/n answers as this renamed repo (with exists)
+	redirect301   bool   // ... by an HTTP 301 rather than a 200 naming it
 	createStatus  int    // POST .../repos
 	orgStatus     int    // when set, the org endpoint answers this instead
 	branchName    string // what GitHub called the initial branch
@@ -71,7 +73,16 @@ func (f *fakeGitHub) server() *httptest.Server {
 			if name == "" {
 				name = "main"
 			}
-			io.WriteString(w, `{"default_branch":"`+name+`"}`)
+			full := strings.TrimPrefix(path, "/repos/")
+			if len(f.createdBodies) == 0 && f.redirectTo != "" {
+				// A renamed repository: the old name still answers.
+				if f.redirect301 && full != f.redirectTo {
+					http.Redirect(w, r, "/repos/"+f.redirectTo, http.StatusMovedPermanently)
+					return
+				}
+				full = f.redirectTo
+			}
+			io.WriteString(w, `{"default_branch":"`+name+`","full_name":"`+full+`"}`)
 
 		default:
 			f.t.Fatalf("unexpected %s %s", r.Method, path)
@@ -221,6 +232,57 @@ func TestItRefusesARepositoryThatAlreadyExists(t *testing.T) {
 	}
 	if len(f.createdBodies) != 0 {
 		t.Errorf("%d create calls after finding it exists, want 0", len(f.createdBodies))
+	}
+}
+
+// TestItCreatesUnderANameThatIsOnlyARenameRedirect is the defect this fixes:
+// after a rename GitHub keeps GET /repos/<old> answering with the renamed
+// repository, and that is not the repository asked for.
+func TestItCreatesUnderANameThatIsOnlyARenameRedirect(t *testing.T) {
+	for _, via301 := range []bool{false, true} {
+		f := &fakeGitHub{
+			t: t, exists: true, createStatus: http.StatusCreated, branchAfter: 0,
+			redirectTo: "org/thing-stuck", redirect301: via301,
+		}
+		token := withFake(t, f)
+		var out, errb bytes.Buffer
+		code := execute([]string{"-public", "-token-file", token, "org/thing"}, &out, &errb)
+		if code != 0 {
+			t.Fatalf("301=%v: exit %d: %s", via301, code, errb.String())
+		}
+		if len(f.createdBodies) != 1 {
+			t.Errorf("301=%v: %d create calls, want 1", via301, len(f.createdBodies))
+		}
+		if !strings.Contains(errb.String(), "redirect") || !strings.Contains(errb.String(), "org/thing-stuck") {
+			t.Errorf("301=%v: stderr does not say the name was a redirect:\n%s", via301, errb.String())
+		}
+	}
+}
+
+func TestItComparesTheExistingNameWithoutCase(t *testing.T) {
+	f := &fakeGitHub{
+		t: t, exists: true, createStatus: http.StatusCreated, branchAfter: 0,
+		redirectTo: "Org/Thing",
+	}
+	token := withFake(t, f)
+	var out bytes.Buffer
+	if err := run([]string{"-public", "-token-file", token, "org/thing"}, &out); err == nil {
+		t.Fatal("the same repository under another capitalisation was created over")
+	}
+	if len(f.createdBodies) != 0 {
+		t.Errorf("%d create calls, want 0", len(f.createdBodies))
+	}
+}
+
+func TestPlainNotFoundCreatesWithoutAWarning(t *testing.T) {
+	f := &fakeGitHub{t: t, createStatus: http.StatusCreated, branchAfter: 0}
+	token := withFake(t, f)
+	var out, errb bytes.Buffer
+	if code := execute([]string{"-public", "-token-file", token, "org/thing"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if len(f.createdBodies) != 1 || errb.Len() != 0 {
+		t.Errorf("%d create calls, stderr %q: want 1 and silence", len(f.createdBodies), errb.String())
 	}
 }
 
