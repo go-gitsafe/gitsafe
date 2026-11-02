@@ -49,6 +49,9 @@ func install(t *testing.T, s *stub) {
 		if r, ok := s.byPath[req.Method+" "+req.URL.Path]; ok {
 			return r, nil
 		}
+		if req.Method == http.MethodGet && strings.HasPrefix(req.URL.Path, "/repos/o/r/git/matching-refs/") {
+			return reply(http.StatusOK, `[]`), nil // no existing release: any tag is above
+		}
 		// Main CI is green unless a test says otherwise: these tests are about
 		// the merge and the tag, and maincheck_test.go is about the wait.
 		if req.Method == http.MethodGet && req.URL.Path == "/repos/o/r/actions/runs" {
