@@ -15,8 +15,20 @@ package main
 //     patch, then pre-release; build metadata is ignored).
 //   - GitHub REST, "List matching references",
 //     GET /repos/{owner}/{repo}/git/matching-refs/{ref}, https://docs.github.com/en/rest/git/refs#list-matching-references
-//     (the page does not document pagination; page/per_page are sent and the
-//     loop is bounded, so a server that ignores them cannot spin it).
+//     The page does not document pagination because there is none: the endpoint
+//     returns EVERY matching ref in one response and ignores page and per_page.
+//     Measured 2026-11-03 on go-ansible/modules, which has 109 v* tags:
+//     `?per_page=100&page=1` and `?per_page=100&page=2` both return the same
+//     109 refs.
+//
+//     This was first written to send page/per_page anyway, on the reasoning that
+//     a bounded loop could not be spun by a server that ignored them. It could
+//     not be spun, but it could not FINISH either: a page of 109 is never the
+//     short page that ends the walk, so every repository with 100 or more v*
+//     tags ran the bound out and was refused with "more than 3000 tags" -- a
+//     number computed from the bound rather than counted from anything. It
+//     blocked go-ansible/modules (109), go-ansible/cli (176) and
+//     go-ansible/playbook (177) within a day of shipping.
 //
 // The NEW tag must be exactly vMAJOR.MINOR.PATCH. Existing tags that carry a
 // pre-release are ignored: GitHub's Latest never points at one, so they cannot
@@ -32,7 +44,10 @@ import (
 	"strings"
 )
 
-const maxTagPages = 30
+// maxTagBytes bounds the one response listTags reads. 8 MiB is roughly 90 000
+// refs at the shape GitHub sends, which is far above any repository this tool
+// is pointed at and far below anything that could exhaust memory.
+const maxTagBytes = 8 << 20
 
 // orderCheck is a seam, so a test can put the old behaviour back (a planted control).
 var orderCheck = checkOrder
@@ -107,39 +122,45 @@ func highestRelease(names []string) (best version, found bool) {
 }
 
 // listTags returns the names of the repository's v* tags.
+//
+// ONE request, with no page or per_page: matching-refs is not paginated and
+// this response is the whole list (see the measurement at the top of the file).
+// Asking for a second page would return the same refs again, which is what the
+// first version of this did thirty times before refusing.
+//
+// The body is still bounded. maxTagBytes is what stops a hostile or broken
+// server streaming without end; a body cut at that limit ends mid-array and
+// fails to decode, so a truncated list is an error rather than a short one
+// silently treated as complete.
 func listTags(token, repo string, b *budget) ([]string, error) {
-	var names []string
-	for page := 1; page <= maxTagPages; page++ {
-		if why := b.low(); why != "" {
-			return nil, fmt.Errorf("%s", why)
-		}
-		resp, err := api(token, http.MethodGet,
-			fmt.Sprintf("%s/repos/%s/git/matching-refs/tags/v?per_page=100&page=%d", apiBase, repo, page), nil)
-		if err != nil {
-			return nil, err
-		}
-		var refs []struct {
-			Ref string `json:"ref"`
-		}
-		b.noteREST(resp.Header)
-		if resp.StatusCode != http.StatusOK {
-			err := refused("listing the repository's tags", resp)
-			resp.Body.Close()
-			return nil, err
-		}
-		err = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&refs)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("reading the tags: %w", err)
-		}
-		for _, r := range refs {
-			names = append(names, strings.TrimPrefix(r.Ref, "refs/tags/"))
-		}
-		if len(refs) < 100 {
-			return names, nil
-		}
+	if why := b.low(); why != "" {
+		return nil, fmt.Errorf("%s", why)
 	}
-	return nil, fmt.Errorf("more than %d tags: too many to order here", maxTagPages*100)
+	resp, err := api(token, http.MethodGet,
+		fmt.Sprintf("%s/repos/%s/git/matching-refs/tags/v", apiBase, repo), nil)
+	if err != nil {
+		return nil, err
+	}
+	b.noteREST(resp.Header)
+	if resp.StatusCode != http.StatusOK {
+		err := refused("listing the repository's tags", resp)
+		resp.Body.Close()
+		return nil, err
+	}
+	var refs []struct {
+		Ref string `json:"ref"`
+	}
+	err = json.NewDecoder(io.LimitReader(resp.Body, maxTagBytes)).Decode(&refs)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("reading the tags (over %d bytes is refused, not truncated): %w", maxTagBytes, err)
+	}
+
+	names := make([]string, 0, len(refs))
+	for _, r := range refs {
+		names = append(names, strings.TrimPrefix(r.Ref, "refs/tags/"))
+	}
+	return names, nil
 }
 
 // checkOrder says whether tag may be created. lower reports an accepted
