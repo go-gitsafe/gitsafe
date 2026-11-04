@@ -60,7 +60,7 @@ func install(t *testing.T, s *stub) {
 		}
 		return reply(http.StatusNotFound, "{}"), nil
 	}
-	runMerge = func(string, int, io.Writer, io.Writer) error { s.ran++; return s.merged }
+	runMerge = func(string, int, []string, io.Writer, io.Writer) error { s.ran++; return s.merged }
 }
 
 // withToken points the token file at a temporary one.

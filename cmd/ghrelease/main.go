@@ -70,6 +70,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/go-gitsafe/gitsafe/waiver"
 	"github.com/spf13/cobra"
 )
 
@@ -108,6 +109,12 @@ type options struct {
 	waitMain             time.Duration
 	noMainCI             bool
 	allowLower           bool
+	// waive, evidence, mainEvidence: see package waiver and waive.go. A check
+	// that never started may be waived on a local run recorded as a comment on
+	// the pull request; the default-branch wait needs its own evidence, naming
+	// the merge commit.
+	waive                  []string
+	evidence, mainEvidence string
 }
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
@@ -140,6 +147,12 @@ func RootCmd() *cobra.Command {
 	f.BoolVar(&o.noMainCI, "no-main-ci", false, "tag even when NO workflow run appears on the default branch within 2 minutes (a repository without CI on push to main)")
 	f.BoolVar(&o.allowLower, "allow-lower", false, "tag even when the tag is not above the repository's highest release (a deliberate backport on a release branch); "+
 		"the release is then NOT marked Latest (make_latest false), so a backport never becomes @latest")
+	f.StringArrayVar(&o.waive, "waive", nil, "waive this check, which must have NEVER STARTED (no runner acquired, no step run); repeatable; "+
+		"passed to ghmerge and applied again to the merge commit; needs --evidence")
+	f.StringVar(&o.evidence, "evidence", "", "URL of the pull request comment, written by you, holding the full SHA of the pull request's head: "+
+		"the record of the local run standing in for the waived check (required with --waive)")
+	f.StringVar(&o.mainEvidence, "main-evidence", "", "the same for the MERGE COMMIT: a comment on the pull request holding the merge commit's full SHA. "+
+		"Without it a waived check that also failed to start on the default branch merges but is not tagged")
 	c.AddCommand(backfillCmd())
 	return c
 }
@@ -169,6 +182,21 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
 		fmt.Fprintf(stderr, "usage: ghrelease [flags] [owner/repo] <pr-number> <tag>\n")
 		return 2
+	}
+	var mw *mainWaiver
+	switch {
+	case len(o.waive) > 0 && o.evidence == "":
+		fmt.Fprintf(stderr, "ghrelease: --waive needs --evidence <PR comment URL>; there is no default\n")
+		return 2
+	case len(o.waive) == 0 && (o.evidence != "" || o.mainEvidence != ""):
+		fmt.Fprintf(stderr, "ghrelease: --evidence and --main-evidence without --waive: nothing to waive\n")
+		return 2
+	case len(o.waive) > 0:
+		if err := waiver.Names(o.waive); err != nil {
+			fmt.Fprintf(stderr, "ghrelease: %v\n", err)
+			return 2
+		}
+		mw = &mainWaiver{names: o.waive, evidence: o.mainEvidence, number: number, tag: tag}
 	}
 	token, err := token(*tokenFile)
 	if err != nil {
@@ -246,7 +274,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	if err := runMerge(repo, number, stdout, stderr); err != nil {
+	if err := runMerge(repo, number, mergeFlags(o), stdout, stderr); err != nil {
 		// ghmerge has already said why on stderr. Saying it twice would bury
 		// its reason under this one.
 		fmt.Fprintf(stderr, "ghrelease: not tagging, because the merge did not happen\n")
@@ -262,7 +290,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	// A tag marks a merged, CI-GREEN default-branch commit: the pull request's
 	// checks passing says nothing about the push-to-main run (maincheck.go).
 	// Both paths get here -- a fresh merge and "is already merged".
-	if code := waitMain(token, repo, sha, base, o.waitMain, o.noMainCI, newBudget(defaultMargin), stdout, stderr); code != 0 {
+	if code := waitMain(token, repo, sha, base, o.waitMain, o.noMainCI, newBudget(defaultMargin), mw, stdout, stderr); code != 0 {
 		fmt.Fprintf(stderr, "ghrelease: nothing was tagged\n")
 		return code
 	}
@@ -450,10 +478,23 @@ func originRepo() (string, error) {
 // two copies of "when may this be merged" is exactly the kind of drift that
 // ends with one of them being wrong. The exit status is taken from the process,
 // where nothing can eat it.
-func execMerge(repo string, number int, stdout, stderr io.Writer) error {
-	cmd := exec.Command("ghmerge", repo, strconv.Itoa(number))
+func execMerge(repo string, number int, flags []string, stdout, stderr io.Writer) error {
+	cmd := exec.Command("ghmerge", append(flags, repo, strconv.Itoa(number))...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	return cmd.Run()
+}
+
+// mergeFlags is what ghrelease passes on to ghmerge: the waiver and its
+// evidence, which ghmerge judges against the pull request's own head.
+func mergeFlags(o options) []string {
+	var f []string
+	for _, w := range o.waive {
+		f = append(f, "--waive", w)
+	}
+	if o.evidence != "" {
+		f = append(f, "--evidence", o.evidence)
+	}
+	return f
 }
 
 func token(path string) (string, error) {

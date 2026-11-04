@@ -135,7 +135,7 @@ func runList(rs []workflowRun, withConclusion bool) string {
 //
 // wait 0 disables the wait, loudly. noMainCI makes "no run appeared" an
 // explicit, accepted choice; without it, that is a refusal.
-func waitMainCI(token, repo, sha, branch string, wait time.Duration, noMainCI bool, b *budget, stdout, stderr io.Writer) int {
+func waitMainCI(token, repo, sha, branch string, wait time.Duration, noMainCI bool, b *budget, mw *mainWaiver, stdout, stderr io.Writer) int {
 	if wait == 0 {
 		fmt.Fprintf(stderr, "ghrelease: WARNING: -wait-main 0: NOT waiting for CI on %s at %s. "+
 			"The tag may mark a commit whose main run is unfinished or RED.\n", repo, short(sha))
@@ -162,6 +162,27 @@ func waitMainCI(token, repo, sha, branch string, wait time.Duration, noMainCI bo
 			return 1
 		}
 		pending, failed, soft := mainVerdict(runs)
+		if len(failed) > 0 && mw != nil {
+			used, why := mw.accept(token, repo, sha, failed)
+			if why != "" {
+				fmt.Fprintf(stderr, "ghrelease: NOT tagging: CI on main failed at %s and the waiver does not cover it: %s\n"+
+					"ghrelease: (the pull request IS merged)\n%s", short(sha), why, runList(failed, true))
+				return 1
+			}
+			// Every failure is a job that never started, named, with evidence
+			// for THIS commit. The stamp is written before the tag it permits.
+			// Once per distinct set: a later poll must not repeat it.
+			if key := strings.Join(used, "\x00"); key != mw.stamped {
+				if err := mw.stamp(token, repo, sha, used); err != nil {
+					fmt.Fprintf(stderr, "ghrelease: NOT tagging: the waiver stamp could not be posted: %v\n", err)
+					return 1
+				}
+				mw.stamped = key
+				fmt.Fprintf(stdout, "WAIVED on main at %s: %s (never started); stamp posted on %s#%d\n", short(sha), strings.Join(used, ", "), repo, mw.number)
+			}
+			soft = append(soft, failed...)
+			failed = nil
+		}
 		switch {
 		case len(failed) > 0:
 			fmt.Fprintf(stderr, "ghrelease: NOT tagging: CI on main failed at %s (the pull request IS merged, and main is not green):\n%s",

@@ -24,6 +24,8 @@ Documentation asks. A hook refuses. These are the tools that refuse.
 - `-wait-main 0` disables the wait and prints a warning that the tag may mark a red commit;
 - it stops under the API budget margin like the rest of the tool, and a refused answer (403 secondary limit included) ends the wait with its reason; `-release-only` is unchanged.
 
+**`--waive` / `--evidence` / `--main-evidence`: a check that never started.** When GitHub's hosted runners have no capacity a job ends cancelled with no runner and no step (see `ghmerge`'s section for the rule and its four conditions). `ghrelease --waive "<check>" --evidence <PR comment URL> [--main-evidence <PR comment URL>] ...` passes `--waive`/`--evidence` to `ghmerge` (which must be a version that has them) and applies **the same rule again to the merge commit** for the wait on the default branch: each non-green job of each failed run must be named by `--waive`, must never have started, and the evidence must contain the **merge commit's** full SHA, so a second local run on that commit is needed and `--main-evidence` carries its comment URL (a comment on the same pull request, written by you). Without it, `ghrelease` merges, **refuses to tag**, and prints exactly what is missing (the commit, the PR to comment on, the flag to rerun with); the rerun skips the merge ("already merged") and tags. On acceptance it posts a stamp on the pull request before the tag. A failure that is not a never-started job still refuses as before.
+
 **It refuses a tag that is not above the repository's highest release, since v0.33.0.** On 2026-11-02 `ghrelease go-llmflow/bench 17 v0.7.1` ran while v0.9.0 existed: GitHub made v0.7.1 Latest, `go install ...@latest` kept resolving to v0.9.0 and the new code was unreachable. Before merging it lists the repository's `v*` tags (REST "List matching references") and orders them numerically per semver.org (pre-releases and non-semver tags are ignored; GitHub's Latest never points at a pre-release). A lower or equal tag exits 1 and prints the highest release with the next PATCH, MINOR and MAJOR. A tag that is not exactly `vMAJOR.MINOR.PATCH` is refused. `-allow-lower` is for a deliberate backport on a release branch: it tags, and the release is created with `make_latest: false`, so a backport never becomes Latest.
 
 Since v0.18.0 it also creates the **GitHub release** of the tag (REST "Create
@@ -98,6 +100,41 @@ That is the step that was missing: a hash a person can compare with the one whos
 checks they watched. When it cannot read the pull request it says so on stderr and
 still exits 0 — refusing there would make `-dry-run` useless exactly when someone
 is being careful.
+
+### `--waive` / `--evidence`: a check that never started
+
+GitHub's hosted macOS arm64 runners can have no capacity: the job ends
+"cancelled" or "failure" after about 15 minutes with zero steps run and the
+annotation "The job was not acquired by Runner of type hosted even after
+multiple attempts". Nothing about the code was judged, yet every red check
+blocks the merge. A person who ran the tests locally on that platform may say
+so, narrowly and on the record:
+
+    ghmerge --waive "test (macos-latest)" \
+            --evidence https://github.com/o/r/pull/7#issuecomment-123 o/r 7
+
+`--waive` is repeatable and `--evidence` is required with it (no default). The
+waiver is accepted only if all four hold; otherwise it refuses, before any write,
+naming the condition:
+
+- **(a)** a check of that name exists on the commit being judged;
+- **(b)** its job never started. Read from REST "Get a job for a workflow run"
+  (the check run's id is the job id): `runner_id` and `runner_name` are null
+  (no runner was ever assigned) **and** no step has a start time or a
+  success/failure conclusion. A check that ran and failed is never waivable;
+  a job still running or already green is refused too;
+- **(c)** every *other* check and status is green, by the ordinary gate;
+- **(d)** the evidence URL is a comment on **this** pull request, written by the
+  authenticated user, containing the full 40-hex SHA of the commit judged. A
+  local run at another commit proves nothing about this one.
+
+On acceptance it posts a stamp comment on the pull request, then merges:
+`Merged with 'test (macos-latest)' waived: no runner acquired; evidence <url>
+(local run at <sha>)`. If the merge then fails, a second comment says so. The
+waiver is never silent. The "never started" test reads structure (runner and
+steps), not the annotation text, which is for people and can be reworded; it was
+checked against GitHub's published schema, and not yet against a live
+unacquired job.
 
 ### `--wait`: a refusal that carries its own remedy
 

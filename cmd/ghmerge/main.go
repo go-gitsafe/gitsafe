@@ -42,6 +42,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/go-gitsafe/gitsafe/waiver"
 	"github.com/spf13/cobra"
 )
 
@@ -97,6 +98,10 @@ type options struct {
 	squash, del bool
 	tokenFile   string
 	wait        time.Duration
+	// waive and evidence: see package waiver. A check that never started may
+	// be waived on a local run recorded as a comment on the pull request.
+	waive    []string
+	evidence string
 }
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
@@ -119,12 +124,28 @@ func RootCmd() *cobra.Command {
 	f.StringVar(&o.tokenFile, "token-file", "", "the file holding the token (default ~/"+defaultToken+")")
 	f.DurationVar(&o.wait, "wait", 0,
 		"spend up to this long waiting out a refusal GitHub said to wait out (0: refuse at once)")
+	f.StringArrayVar(&o.waive, "waive", nil, "waive this check, which must have NEVER STARTED (no runner acquired, no step run); repeatable; "+
+		"needs --evidence. A check that ran and failed is never waived")
+	f.StringVar(&o.evidence, "evidence", "", "URL of the pull request comment, written by you, that holds the full SHA of the commit "+
+		"judged: the record of the local run that stands in for the waived check (required with --waive)")
 	return c
 }
 
 func execute(args []string, o options, stdout, stderr io.Writer) int {
 	squash, del, tokenFile := &o.squash, &o.del, &o.tokenFile
 	patience, waitLog = o.wait, stderr
+	switch {
+	case len(o.waive) > 0 && o.evidence == "":
+		fmt.Fprintf(stderr, "ghmerge: --waive needs --evidence <PR comment URL>; there is no default\n")
+		return 2
+	case len(o.waive) == 0 && o.evidence != "":
+		fmt.Fprintf(stderr, "ghmerge: --evidence without --waive: nothing to waive\n")
+		return 2
+	}
+	if err := waiver.Names(o.waive); err != nil {
+		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
+		return 2
+	}
 	repo, number, err := target(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
@@ -203,6 +224,17 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	// Asked for ONLY when something is red, which keeps the ordinary green
 	// merge at the calls it has always made: the hourly budget is shared with
 	// Renovate and every other session on this machine.
+	// A waiver narrows what is judged: (a) the named checks must exist on this
+	// commit and (b) must never have started. (c), every OTHER check green, is
+	// the ordinary gate below, run over what is left; (d), the evidence, is
+	// checked after it and before anything is written.
+	waived := o.waive
+	if len(waived) > 0 {
+		if runs, err = waivable(token, repo, runs, waived); err != nil {
+			fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — %v\n", repo, number, err)
+			return 1
+		}
+	}
 	var excused map[int64]bool
 	if anyRed(runs) {
 		excused, err = dispensations(token, repo, pr.Head.SHA)
@@ -226,7 +258,30 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintf(stdout, "%s#%d: %d check(s), %d status(es), all green\n", repo, number, len(runs), len(sts))
 	}
+	if len(waived) > 0 {
+		// (d), then the stamp: the last thing that can refuse and the first thing
+		// written. The waiver is never silent.
+		id, err := waiver.ParseEvidence(o.evidence, repo, number)
+		if err == nil {
+			err = waiver.CheckEvidence(func(u string, into any) error { return get(token, u, into) },
+				apiBase, repo, number, id, pr.Head.SHA)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — waiver of %s: %v\n", repo, number, quoted(waived), err)
+			return 1
+		}
+		stamp := waiver.Stamp("Merged", waived, o.evidence, pr.Head.SHA)
+		if err := comment(token, repo, number, stamp); err != nil {
+			fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — the waiver stamp could not be posted: %v\n", repo, number, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s#%d: WAIVED %s (never started); stamp posted\n", repo, number, quoted(waived))
+	}
 	if err := merge(token, repo, number, *squash); err != nil {
+		if len(waived) > 0 {
+			// The stamp above says "Merged"; correct the record if it did not.
+			_ = comment(token, repo, number, "The merge stamped above did NOT happen: "+err.Error())
+		}
 		fmt.Fprintf(stderr, "ghmerge: %v\n", err)
 		return 1
 	}
@@ -746,6 +801,71 @@ func mergeOnce(token, repo string, number int, squash bool) error {
 			ghauth.Refused(resp.StatusCode, resp.Header, body, ghauth.Now(resp.Header, now())))
 	}
 	return nil
+}
+
+func quoted(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = "'" + n + "'"
+	}
+	return strings.Join(q, ", ")
+}
+
+// waivable checks conditions (a) and (b) of the waiver rule and returns the
+// check runs WITHOUT the waived ones, for the ordinary gate to judge (c). It
+// refuses by naming the condition that failed. Nothing here writes.
+func waivable(token, repo string, runs []checkRun, waived []string) ([]checkRun, error) {
+	byName := map[string]checkRun{}
+	for _, r := range runs {
+		byName[r.Name] = r
+	}
+	getter := func(u string, into any) error { return get(token, u, into) }
+	drop := map[string]bool{}
+	for _, name := range waived {
+		r, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("--waive %q: no check of that name exists on this commit (condition a)", name)
+		}
+		job, err := waiver.FetchJob(getter, apiBase, repo, r.ID)
+		if err != nil {
+			return nil, fmt.Errorf("--waive %q: reading its job: %w", name, err)
+		}
+		if ok, why := waiver.NeverStarted(job); !ok {
+			return nil, fmt.Errorf("--waive %q: %s (condition b)", name, why)
+		}
+		drop[name] = true
+	}
+	var rest []checkRun
+	for _, r := range runs {
+		if !drop[r.Name] {
+			rest = append(rest, r)
+		}
+	}
+	return rest, nil
+}
+
+// comment posts a comment on the pull request (REST "Create an issue comment").
+func comment(token, repo string, number int, text string) error {
+	body, _ := json.Marshal(map[string]string{"body": text})
+	return retrying(func() error {
+		req, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("%s/repos/%s/issues/%d/comments", apiBase, repo, number), bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return fmt.Errorf("commenting: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+			return ghauth.Refused(resp.StatusCode, resp.Header, b, ghauth.Now(resp.Header, now()))
+		}
+		return nil
+	})
 }
 
 // deleteBranch removes ref from repo. It reports whether the branch was

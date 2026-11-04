@@ -90,7 +90,7 @@ func installFake(t *testing.T, f *fakeGitHub) {
 	oh, om, on := httpDo, runMerge, now
 	t.Cleanup(func() { httpDo, runMerge, now = oh, om, on })
 	httpDo = f.do
-	runMerge = func(string, int, io.Writer, io.Writer) error { return nil }
+	runMerge = func(string, int, []string, io.Writer, io.Writer) error { return nil }
 	now = func() time.Time { return time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC) }
 }
 
