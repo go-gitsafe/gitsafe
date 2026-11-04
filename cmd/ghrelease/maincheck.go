@@ -162,6 +162,8 @@ func waitMainCI(token, repo, sha, branch string, wait time.Duration, noMainCI bo
 			return 1
 		}
 		pending, failed, soft := mainVerdict(runs)
+		var waivedRuns []workflowRun
+		var waivedNames string
 		if len(failed) > 0 && mw != nil {
 			used, why := mw.accept(token, repo, sha, failed)
 			if why != "" {
@@ -180,7 +182,10 @@ func waitMainCI(token, repo, sha, branch string, wait time.Duration, noMainCI bo
 				mw.stamped = key
 				fmt.Fprintf(stdout, "WAIVED on main at %s: %s (never started); stamp posted on %s#%d\n", short(sha), strings.Join(used, ", "), repo, mw.number)
 			}
-			soft = append(soft, failed...)
+			// ⛔ These runs FAILED, and only through the waived jobs. They are not
+			// "skipped or neutral": saying so printed a failure under that
+			// heading on textinput's first real waiver.
+			waivedRuns, waivedNames = failed, "'"+strings.Join(used, "', '")+"'"
 			failed = nil
 		}
 		switch {
@@ -200,6 +205,12 @@ func waitMainCI(token, repo, sha, branch string, wait time.Duration, noMainCI bo
 		case len(runs) > 0 && len(pending) == 0:
 			if len(soft) > 0 {
 				fmt.Fprintf(stdout, "%d run(s) ended skipped or neutral, which are not failures:\n%s", len(soft), runList(soft, true))
+			}
+			if len(waivedRuns) > 0 {
+				fmt.Fprintf(stdout, "%d run(s) failed ONLY through the waived job(s) %s, which never started:\n%s",
+					len(waivedRuns), waivedNames, runList(waivedRuns, true))
+				fmt.Fprintf(stdout, "CI on main is green at %s apart from the waived job(s) %s (%d run(s))\n", short(sha), waivedNames, len(runs))
+				return 0
 			}
 			fmt.Fprintf(stdout, "CI on main is green at %s (%d run(s))\n", short(sha), len(runs))
 			return 0

@@ -85,7 +85,12 @@ var (
 	osExit      = os.Exit
 	userHomeDir = os.UserHomeDir
 	runMerge    = execMerge
-	httpDo      = func(req *http.Request) (*http.Response, error) {
+	// ghmergeHelp is `ghmerge --help`, asked once when a waiver is requested.
+	ghmergeHelp = func() (string, error) {
+		out, err := exec.Command("ghmerge", "--help").CombinedOutput()
+		return string(out), err
+	}
+	httpDo = func(req *http.Request) (*http.Response, error) {
 		return (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	}
 )
@@ -196,6 +201,18 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "ghrelease: %v\n", err)
 			return 2
 		}
+		// ⛔ BEFORE ANY NETWORK CALL. ghrelease execs the ghmerge on PATH, and an
+		// older one answers "unknown flag: --waive" only after every other
+		// check here has run (and, for a first run, after a tag lookup and an
+		// ordering lookup that were all wasted).
+		if out, err := ghmergeHelp(); err != nil || !strings.Contains(out, "--waive") {
+			fmt.Fprintf(stderr, "ghrelease: the ghmerge on PATH does not support --waive, so nothing was asked of GitHub.\n"+
+				"ghrelease: install a current one: GOBIN=~/.local/bin go install github.com/go-gitsafe/gitsafe/cmd/ghmerge@latest\n")
+			if err != nil {
+				fmt.Fprintf(stderr, "ghrelease: (running `ghmerge --help` failed: %v)\n", err)
+			}
+			return 1
+		}
 		mw = &mainWaiver{names: o.waive, evidence: o.mainEvidence, number: number, tag: tag}
 	}
 	token, err := token(*tokenFile)
@@ -274,7 +291,12 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	if err := runMerge(repo, number, mergeFlags(o), stdout, stderr); err != nil {
+	// An already-merged pull request needs no ghmerge at all (it would only say
+	// "already merged" and exit 0), so an old ghmerge cannot get in the way of
+	// the rerun that tags it.
+	if merged, msha, _, err := mergeState(token, repo, number); err == nil && merged && msha != "" {
+		fmt.Fprintf(stdout, "%s#%d is already merged\n", repo, number)
+	} else if err := runMerge(repo, number, mergeFlags(o), stdout, stderr); err != nil {
 		// ghmerge has already said why on stderr. Saying it twice would bury
 		// its reason under this one.
 		fmt.Fprintf(stderr, "ghrelease: not tagging, because the merge did not happen\n")

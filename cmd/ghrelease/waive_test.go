@@ -32,7 +32,17 @@ type waiveMain struct {
 	events     []string
 	stamps     []string
 	mergeFlags []string
+	// help is what `ghmerge --help` prints; requests counts every call that
+	// reached GitHub; ran counts execs of ghmerge; open makes the pull request
+	// not merged on its first read (so ghmerge IS run), merged otherwise.
+	help     string
+	requests int
+	ran      int
+	open     bool
+	prReads  int
 }
+
+const newHelp = "Usage: ghmerge [flags]\n      --waive stringArray   waive this check\n"
 
 func jobJSON(name, conclusion string, runner string) string {
 	return fmt.Sprintf(`{"id":1,"name":%q,"status":"completed","conclusion":%q,"runner_id":%s,"runner_name":null,"steps":[]}`, name, conclusion, runner)
@@ -43,7 +53,7 @@ func newWaiveMain() *waiveMain {
 		script: [][]string{{run1("ci", "completed", "failure")}},
 		jobs: `{"total_count":2,"jobs":[` + jobJSON("test (ubuntu)", "success", "12") + `,` +
 			jobJSON("test (macos)", "cancelled", "null") + `]}`,
-		me:        "me",
+		me: "me", help: newHelp, open: true,
 		comment:   fmt.Sprintf(`{"body":"darwin/arm64 at %s","issue_url":"https://api.github.com/repos/o/r/issues/3","user":{"login":"me"}}`, mergeSHA),
 		stampCode: http.StatusCreated,
 	}
@@ -52,6 +62,7 @@ func newWaiveMain() *waiveMain {
 func (g *waiveMain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.requests++
 	w.Header().Set("X-RateLimit-Remaining", "4000")
 	switch r.Method + " " + r.URL.Path {
 	case "GET /repos/o/r/git/matching-refs/tags/v":
@@ -59,7 +70,8 @@ func (g *waiveMain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET /repos/o/r/git/ref/tags/v1.0.0":
 		http.NotFound(w, r)
 	case "GET /repos/o/r/pulls/3":
-		fmt.Fprintf(w, `{"merged":true,"merge_commit_sha":%q,"base":{"ref":"main"}}`, mergeSHA)
+		g.prReads++
+		fmt.Fprintf(w, `{"merged":%v,"merge_commit_sha":%q,"base":{"ref":"main"}}`, !(g.open && g.prReads == 1), mergeSHA)
 	case "GET /repos/o/r/actions/runs":
 		runs := g.script[min(g.polls, len(g.script)-1)]
 		g.polls++
@@ -118,8 +130,12 @@ func waiveScenario(t *testing.T, g *waiveMain, args ...string) (code int, out, e
 	}
 	runMerge = func(_ string, _ int, flags []string, _, _ io.Writer) error {
 		g.mergeFlags = flags
+		g.ran++
 		return nil
 	}
+	oldHelp := ghmergeHelp
+	t.Cleanup(func() { ghmergeHelp = oldHelp })
+	ghmergeHelp = func() (string, error) { return g.help, nil }
 	sleep, now = clk.sleep, clk.now
 	var o, e bytes.Buffer
 	full := append([]string{"-token-file", withToken(t, "t"), "-no-backfill"}, args...)
@@ -278,6 +294,93 @@ func TestWaiveFlagValidation(t *testing.T) {
 				t.Errorf("exit %d, merge flags %q:\n%s", code, g.mergeFlags, errs)
 			}
 		})
+	}
+}
+
+// ⛔ A failed run must never be printed under "skipped or neutral". On
+// textinput's first real waiver it was.
+func TestAWaivedFailureIsNamedAsAFailureNotAsSkipped(t *testing.T) {
+	g := newWaiveMain()
+	code, out, errs := waiveScenario(t, g, waiveFlags("--main-evidence", mainEvidence)...)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if strings.Contains(out, "skipped or neutral") {
+		t.Errorf("a failed run is listed as skipped or neutral:\n%s", out)
+	}
+	for _, want := range []string{
+		"1 run(s) failed ONLY through the waived job(s) 'test (macos)', which never started:",
+		"ci: failure",
+		"apart from the waived job(s) 'test (macos)'",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// A run that failed on a job that is NOT waived is refused, waiver or not.
+func TestARunFailingOnAnUnwaivedJobIsStillRefused(t *testing.T) {
+	g := newWaiveMain()
+	g.jobs = `{"total_count":2,"jobs":[` + jobJSON("lint", "failure", "5") + `,` + jobJSON("test (macos)", "cancelled", "null") + `]}`
+	code, out, errs := waiveScenario(t, g, waiveFlags("--main-evidence", mainEvidence)...)
+	if code != 1 || g.tagged() || len(g.stamps) != 0 {
+		t.Errorf("exit %d, events %v", code, g.events)
+	}
+	if !strings.Contains(errs, `job "lint" of run "ci" is failure and is not waived`) || strings.Contains(out, "ONLY through") {
+		t.Errorf("stderr:\n%s\nstdout:\n%s", errs, out)
+	}
+}
+
+// An old ghmerge is refused at once, before any call to GitHub.
+func TestAnOldGhmergeIsRefusedBeforeAnyNetworkCall(t *testing.T) {
+	g := newWaiveMain()
+	g.help = "Usage: ghmerge [flags]\n      --wait duration\n"
+	code, _, errs := waiveScenario(t, g, waiveFlags("--main-evidence", mainEvidence)...)
+	if code != 1 || g.requests != 0 || g.ran != 0 {
+		t.Errorf("exit %d, %d request(s), %d ghmerge run(s)", code, g.requests, g.ran)
+	}
+	for _, want := range []string{"does not support --waive", "go install github.com/go-gitsafe/gitsafe/cmd/ghmerge@latest"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errs)
+		}
+	}
+}
+
+func TestAGhmergeThatCannotBeRunIsRefusedToo(t *testing.T) {
+	g := newWaiveMain()
+	srv := httptest.NewServer(g)
+	t.Cleanup(srv.Close)
+	old := ghmergeHelp
+	t.Cleanup(func() { ghmergeHelp = old })
+	ghmergeHelp = func() (string, error) { return "", fmt.Errorf("executable file not found") }
+	var o, e bytes.Buffer
+	code := run([]string{"-token-file", withToken(t, "t"), "--waive", "x", "--evidence", prEvidence, "o/r", "3", "v1.0.0"}, &o, &e)
+	if code != 1 || g.requests != 0 || !strings.Contains(e.String(), "executable file not found") {
+		t.Errorf("exit %d, %d request(s):\n%s", code, g.requests, e.String())
+	}
+}
+
+// Without a waiver ghmerge's help is never asked: an old ghmerge still works.
+func TestHelpIsNotAskedWithoutAWaiver(t *testing.T) {
+	g := newWaiveMain()
+	g.script = [][]string{{run1("ci", "completed", "success")}}
+	g.help = ""
+	if code, _, errs := waiveScenario(t, g); code != 0 {
+		t.Errorf("exit %d: %s", code, errs)
+	}
+}
+
+// An already merged pull request needs no ghmerge at all.
+func TestAnAlreadyMergedPullRequestDoesNotExecGhmerge(t *testing.T) {
+	g := newWaiveMain()
+	g.open = false
+	code, out, errs := waiveScenario(t, g, waiveFlags("--main-evidence", mainEvidence)...)
+	if code != 0 || g.ran != 0 || !g.tagged() {
+		t.Errorf("exit %d, ghmerge ran %d time(s), tagged %v: %s", code, g.ran, g.tagged(), errs)
+	}
+	if !strings.Contains(out, "o/r#3 is already merged") {
+		t.Errorf("stdout:\n%s", out)
 	}
 }
 
