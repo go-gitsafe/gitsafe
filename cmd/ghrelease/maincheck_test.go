@@ -91,7 +91,7 @@ func scenario(t *testing.T, script [][]string, args ...string) (code int, g *fak
 		req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
 		return http.DefaultClient.Do(req)
 	}
-	runMerge = func(string, int, io.Writer, io.Writer) error { return nil }
+	runMerge = func(string, int, []string, io.Writer, io.Writer) error { return nil }
 	sleep, now = clk.sleep, clk.now
 	var o, e bytes.Buffer
 	full := append([]string{"-token-file", withToken(t, "t"), "-no-backfill"}, args...)
@@ -152,7 +152,9 @@ func TestMainRedIsNotTaggedAndNamesTheFailingRun(t *testing.T) {
 func TestControlTheOldBehaviourTagsARedMain(t *testing.T) {
 	old := waitMain
 	t.Cleanup(func() { waitMain = old })
-	waitMain = func(string, string, string, string, time.Duration, bool, *budget, io.Writer, io.Writer) int { return 0 }
+	waitMain = func(string, string, string, string, time.Duration, bool, *budget, *mainWaiver, io.Writer, io.Writer) int {
+		return 0
+	}
 	code, g, _ := redMain(t)
 	if code != 0 || len(g.tagged) != 1 {
 		t.Fatalf("the control did not reproduce the defect: exit %d, tagged %v", code, g.tagged)
@@ -242,7 +244,7 @@ func TestTooManyRunsToJudgeIsNotTagged(t *testing.T) {
 		return http.DefaultClient.Do(req)
 	}
 	var o, e bytes.Buffer
-	if code := waitMainCI("t", "o/r", mergeSHA, "main", time.Minute, false, newBudget(0), &o, &e); code == 0 {
+	if code := waitMainCI("t", "o/r", mergeSHA, "main", time.Minute, false, newBudget(0), nil, &o, &e); code == 0 {
 		t.Error("tagged with 149 runs unread")
 	}
 }
@@ -262,7 +264,7 @@ func TestALowBudgetStopsTheWait(t *testing.T) {
 	}
 	sleep = func(time.Duration) {}
 	var o, e bytes.Buffer
-	if code := waitMainCI("t", "o/r", mergeSHA, "main", time.Hour, false, newBudget(defaultMargin), &o, &e); code == 0 ||
+	if code := waitMainCI("t", "o/r", mergeSHA, "main", time.Hour, false, newBudget(defaultMargin), nil, &o, &e); code == 0 ||
 		!strings.Contains(e.String(), "REST budget") {
 		t.Errorf("exit %d, stderr %q", code, e.String())
 	}
@@ -282,7 +284,7 @@ func TestARefusedListingIsNotTagged(t *testing.T) {
 		return http.DefaultClient.Do(req)
 	}
 	var o, e bytes.Buffer
-	if code := waitMainCI("t", "o/r", mergeSHA, "main", time.Hour, false, newBudget(0), &o, &e); code == 0 ||
+	if code := waitMainCI("t", "o/r", mergeSHA, "main", time.Hour, false, newBudget(0), nil, &o, &e); code == 0 ||
 		!strings.Contains(e.String(), "burst limit") {
 		t.Errorf("exit %d, stderr %q", code, e.String())
 	}

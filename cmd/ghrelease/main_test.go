@@ -47,7 +47,13 @@ func install(t *testing.T, s *stub) {
 			return nil, s.doErr
 		}
 		if r, ok := s.byPath[req.Method+" "+req.URL.Path]; ok {
-			return r, nil
+			// The same path can now be asked twice (the merge state before the
+			// merge, again after it), so each answer gets a fresh body.
+			b, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(strings.NewReader(string(b)))
+			c := *r
+			c.Body = io.NopCloser(strings.NewReader(string(b)))
+			return &c, nil
 		}
 		if req.Method == http.MethodGet && strings.HasPrefix(req.URL.Path, "/repos/o/r/git/matching-refs/") {
 			return reply(http.StatusOK, `[]`), nil // no existing release: any tag is above
@@ -60,7 +66,7 @@ func install(t *testing.T, s *stub) {
 		}
 		return reply(http.StatusNotFound, "{}"), nil
 	}
-	runMerge = func(string, int, io.Writer, io.Writer) error { s.ran++; return s.merged }
+	runMerge = func(string, int, []string, io.Writer, io.Writer) error { s.ran++; return s.merged }
 }
 
 // withToken points the token file at a temporary one.
@@ -172,8 +178,9 @@ func TestAMergeThatWorksIsTaggedAtItsMergeCommit(t *testing.T) {
 	if !strings.Contains(out.String(), "cafebabe") {
 		t.Errorf("stdout = %q, want the merge commit named", out.String())
 	}
-	if s.ran != 1 {
-		t.Errorf("merged %d time(s)", s.ran)
+	// GitHub already says "merged" in this fixture, so ghmerge is not run.
+	if s.ran != 0 {
+		t.Errorf("ghmerge was run %d time(s) for an already merged pull request", s.ran)
 	}
 	// go-gitsafe/gitsafe#59: the GitHub release is created too, for this
 	// tag, with GitHub's generated notes.
