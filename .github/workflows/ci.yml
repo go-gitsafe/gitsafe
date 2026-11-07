@@ -115,7 +115,21 @@ jobs:
           BIN="$(go env GOPATH)/bin"
           "$BIN/govulncheck" -format json ./... > /tmp/vuln.json || true
           test -s /tmp/vuln.json || { echo "::error::govulncheck wrote nothing at all"; exit 1; }
-          "$BIN/vulngate" -go "$(go env GOVERSION)" /tmp/vuln.json
+          # ⛔ TWO DASHES, AND BEFORE THE PIN MOVES. fleettools converted all 54
+          # commands to cobra in its v0.53.0 "with a single-dash compatibility
+          # shim and no flag day": `-go` still works, and says so on every run --
+          # "this shim will not outlive the next major". A warning inside a GREEN
+          # lane is a warning nobody reads, so it would surface as a red night
+          # later, for a reason unrelated to anything this lane measures.
+          #
+          # Safe in both directions, which is why it can land before the bump:
+          # Go's own flag package documents that "double dashes are also
+          # permitted", so `--go` is accepted by the PINNED v0.20.1 binary here
+          # as well as by the cobra one that Renovate's #79 brings (v0.80.0 --
+          # proposed by the customManager added to this org's preset on
+          # 2026-11-01, which reads pins inside `run:` blocks that no other
+          # manager sees).
+          "$BIN/vulngate" --go "$(go env GOVERSION)" /tmp/vuln.json
 
   cross:
     name: cross ${{ matrix.goos }}/${{ matrix.goarch }}
