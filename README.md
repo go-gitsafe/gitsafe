@@ -1035,6 +1035,49 @@ wrong for a census, where the end is the summary — and nothing in the text say
 one it is. That one stays a note, and the package says so rather than pretending to
 it.
 
+## A branch started from a ref nobody refreshed
+
+`git checkout -b work origin/main` reads as "branch from main". It branches from
+whatever `origin/main` pointed at the last time this clone fetched — and in a
+repository several sessions push to, that is a commit which stopped being main
+some time ago.
+
+⛔ **Nothing downstream says so.** The branch is created, the code builds, the
+tests pass, the push succeeds and the pull request opens. The first thing that
+objects is GitHub's **CONFLICTING**, after the build, the push, the pull request
+and whatever CI ran against a base nobody is on. `guard-bash` refuses it at the
+branch, which is the last moment it costs nothing:
+
+```
+git checkout -b work origin/main                      # refused
+git fetch origin && git checkout -b work origin/main  # allowed
+```
+
+It happened **twice in one session with the lesson already written down between
+the two** — once orphaning a documentation branch, once sending three pull
+requests against a base Renovate had moved an hour earlier. That is the signal
+that a note is not enough.
+
+### The one heuristic, and why it is sound here
+
+The rule cannot look at the repository: it is a pre-tool hook that receives the
+command as **text**, with no clone to inspect and no network. So it asks whether
+the same command also fetches.
+
+In an interactive shell that would be a poor proxy — a person fetches, reads the
+log, thinks, and branches three commands later. ⛔ But this guard hooks an
+**agent's** tool calls, and an agent's commands are self-contained: each is
+issued without memory of the shell state the last one left. On the session that
+prompted the rule, every branch created correctly carried its own `git fetch` in
+the same command, and every stale one had no fetch anywhere near it.
+
+A **tag** is not a remote-tracking ref for this purpose, because a tag does not
+move: `git checkout -b work v1.2.3` is reproducible whether or not the clone is
+current, and is allowed. So are a branch from `HEAD`, a branch from a local ref,
+and plain switching — `stalebase_test.go` asserts seventeen such commands are
+**not** refused, because a guard that refuses ordinary work is one people learn
+to route around, and the routing becomes habit.
+
 ## A producer killed by its consumer
 
 `guard-bash` refuses a pipeline that would kill the command whose work matters.
@@ -1243,7 +1286,7 @@ the same way the guards print.
 
 ```
 guardscan                      every transcript under ~/.claude/projects
-guardscan --rule shellwork     one rule
+guardscan --rule stalebase     one rule
 guardscan --escaped            only where somebody reached for the escape
 ```
 
