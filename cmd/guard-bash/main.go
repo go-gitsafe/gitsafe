@@ -39,6 +39,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
+	"github.com/go-gitsafe/gitsafe/stalebase"
 	"github.com/go-gitsafe/gitsafe/volatile"
 )
 
@@ -125,6 +126,21 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s.\n\n%s\n\n%s",
 				f.Why(), f.String(), pipestatus.Advice))
+		}
+	}
+	// ⛔ `git checkout -b work origin/main` reads as "branch from main" and
+	// branches from whatever this clone last fetched. On 2026-11-07 one session
+	// did it twice with the lesson written down between the two: once orphaning
+	// a documentation branch, once sending three pull requests against a base
+	// Renovate had moved an hour earlier. Everything downstream was green both
+	// times, and the only thing that said otherwise was GitHub's CONFLICTING,
+	// after the build, the push and the pull request. The refusal belongs at the
+	// branch, which is the last moment it costs nothing. See [stalebase].
+	if os.Getenv(stalebase.Escape) == "" {
+		if f := stalebase.Check(p.ToolInput.Command); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s.\n\nIt matched %s\n\n%s",
+				f.Why, f.Match, stalebase.Advice(f.Ref)))
 		}
 	}
 	// ⛔ The SIBLING damage of the one above, and separable from it: a consumer
