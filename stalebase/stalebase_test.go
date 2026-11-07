@@ -79,6 +79,45 @@ func TestItStaysShutOnOrdinaryWork(t *testing.T) {
 	}
 }
 
+// TestARedirectionIsNotAStartingPoint is the regression for the false refusal
+// this rule produced TEN MINUTES after it was installed, on its own author.
+//
+// ⛔ `git branch --show-current >> "$S/f.txt"` creates nothing: --show-current
+// is a query. But the flag was skipped and the operands came out as
+// [">>", "\"$S/f.txt\""] — two of them, the second with a slash in it — so the
+// rule read "branch <thing> from a remote-tracking ref" and told its author to
+// fetch a file. That is the shape that makes a guard noise, and noise is how a
+// guard gets routed around.
+func TestARedirectionIsNotAStartingPoint(t *testing.T) {
+	for _, cmd := range []string{
+		`git branch --show-current >> "$S/rststat.txt"`, // the exact command
+		`git branch --show-current > /tmp/out.txt`,
+		`git branch --list >> out.txt 2>&1`,
+		`git branch -a > "$S/b.txt" 2>/dev/null`,
+		`git switch -c work > log.txt`, // no base named
+		`git checkout -b work 2>>errors.log`,
+		`git branch --show-current >>"$S/x.txt"`, // glued, no space
+	} {
+		if f := Check(cmd); f.Found() {
+			t.Errorf("refused a redirection as a starting point: %s\n  match=%s ref=%s",
+				cmd, f.Match, f.Ref)
+		}
+	}
+
+	// ⛔ And the witness in the other direction: a redirection must not HIDE a
+	// real stale base either, or the fix would have turned a false refusal into
+	// a false pass.
+	for _, cmd := range []string{
+		"git checkout -b work origin/main > log.txt",
+		"git checkout -b work origin/main 2>&1",
+		`git branch work origin/main >> "$S/out.txt"`,
+	} {
+		if f := Check(cmd); !f.Found() {
+			t.Errorf("a real stale base went unseen behind a redirection: %s", cmd)
+		}
+	}
+}
+
 // TestTheEscapeIsHonouredOnTheCommandItself.
 //
 // ⛔ As a PREFIX, because the guard runs as a pre-tool hook and reads the

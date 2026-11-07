@@ -187,16 +187,42 @@ func afterCreateFlag(args []string, flags ...string) ([]string, bool) {
 
 // operands are the non-flag arguments, which for these subcommands are the new
 // branch name and its optional starting point.
+//
+// ⛔ REDIRECTIONS ARE NOT OPERANDS, and leaving them in refused a legitimate
+// command within ten minutes of this rule being installed:
+//
+//	git branch --show-current >> "$S/rststat.txt"
+//
+// `--show-current` is a flag and was skipped, so the operands came out as
+// [">>", "\"$S/rststat.txt\""] — two of them, the second containing a slash,
+// which read as "branch <thing> from remote-tracking ref". A query that creates
+// nothing was refused, and the advice told its author to fetch a file.
+//
+// A ref cannot carry `<` or `>`: git's own check-ref-format rejects the shell
+// metacharacters, and no remote names a branch that way. So a field holding
+// either is plumbing — an operator, or the file it points at — and a field that
+// IS an operator takes the next field with it. The same goes for a field that
+// opens with a quote or a `$`: that is an expansion, not a ref this rule can
+// reason about, and guessing is how a guard earns its reputation for noise.
 func operands(args []string) []string {
 	var out []string
-	for _, a := range args {
-		if a == "--" {
-			continue
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+		case strings.HasPrefix(a, "-"):
+		case strings.ContainsAny(a, "<>"):
+			// `>` and `>>` stand alone and swallow their target; `2>/dev/null`
+			// carries its own.
+			if strings.HasSuffix(a, ">") || strings.HasSuffix(a, "<") {
+				i++
+			}
+		case strings.HasPrefix(a, `"`), strings.HasPrefix(a, "'"), strings.HasPrefix(a, "$"),
+			strings.HasPrefix(a, "`"), strings.Contains(a, "="):
+			// A shell expansion or an assignment, not a ref.
+		default:
+			out = append(out, a)
 		}
-		if strings.HasPrefix(a, "-") {
-			continue
-		}
-		out = append(out, a)
 	}
 	return out
 }
