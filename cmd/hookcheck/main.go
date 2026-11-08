@@ -199,10 +199,18 @@ var corpus = []struct {
 	// the endpoint, and a row for it is how that stays a decision.
 	{"reading the comments, no method and no field",
 		"gh api repos/go-zpkg/zbk/issues/282/comments", "allow"},
-	// ⭐ Deliberately allowed: no fleet program edits a pull request body yet,
-	// and a refusal with no answer is one that gets worked around.
-	{"patching a pull request body, which no program covers",
-		"gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@/tmp/b.md", "allow"},
+	// ⛔⛔ THIS ROW SAID "allow" UNTIL 2026-11-08, on the grounds that a
+	// refusal with no program to name gets worked around. What got worked
+	// around instead was the rule: `gh issue create`, the one tracker write
+	// with no program, went through by hand three times. A write no program
+	// covers is now refused, and the refusal asks for the tool.
+	{"patching a pull request body, which no program covers yet",
+		"gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@/tmp/b.md", "refuse"},
+	{"opening an issue by hand", "gh issue create --repo go-fde/fde --title t --body-file /tmp/b.md", "refuse"},
+	{"rerunning a job by hand, no program yet", "gh run rerun 42480491136 --failed", "refuse"},
+	{"the program that opens an issue", "ghissue go-fde/fde --new --title t --body-file /tmp/b.md", "allow"},
+	{"a GraphQL query is a read, though gh POSTs it", `gh api graphql -f query='query { viewer { login } }'`, "allow"},
+	{"listing failed runs", "gh run list --branch main --status failure", "allow"},
 	{"the words, not the act", `git commit -m 'gh issue comment was refused twice'`, "allow"},
 	{"asking what it does is not doing it", "gh pr merge --help", "allow"},
 	// ⛔ THIS RULE HAS NO ESCAPE, AND v0.37.0 ADVERTISED ONE THAT COULD NOT

@@ -53,6 +53,39 @@ func TestVolatileReadsCwd(t *testing.T) {
 	}
 }
 
+// A GitHub write by hand is refused in two voices: naming the program when one
+// does the act, and asking for one when none does — never letting it through.
+func TestGHByHandNamesTheProgramOrAsksForOne(t *testing.T) {
+	for _, tc := range []struct {
+		cmd  string
+		want []string
+		not  string
+	}{
+		{"gh issue create --repo o/r --title t --body-file b.md",
+			[]string{"Use instead:", "ghissue <owner/repo> --new"}, "no fleet program"},
+		{"gh run rerun 42 --failed",
+			[]string{"no fleet program does that act yet", "There is no program to use instead", "ask for a program"}, "Use instead:"},
+	} {
+		out, _ := drive(t, `{"tool_input":{"command":"`+tc.cmd+`"}}`)
+		var d decision
+		if err := json.Unmarshal([]byte(out), &d); err != nil {
+			t.Fatalf("%s: not the JSON the harness expects: %v\n%s", tc.cmd, err, out)
+		}
+		reason := d.HookSpecificOutput.PermissionDecisionReason
+		if d.HookSpecificOutput.PermissionDecision != "deny" {
+			t.Errorf("%s: decision = %q", tc.cmd, d.HookSpecificOutput.PermissionDecision)
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(reason, w) {
+				t.Errorf("%s: the reason does not say %q:\n%s", tc.cmd, w, reason)
+			}
+		}
+		if strings.Contains(reason, tc.not) {
+			t.Errorf("%s: the reason says %q, which is the other voice:\n%s", tc.cmd, tc.not, reason)
+		}
+	}
+}
+
 // Everything else passes silently. A hook that printed on every command would
 // be noise, and noise is how a guard stops being read.
 func TestAllowsSilently(t *testing.T) {

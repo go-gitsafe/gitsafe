@@ -173,7 +173,16 @@ func run(stdin io.Reader, stdout io.Writer) int {
 	// from the command's own text, the way [volatile] and [bypass] read theirs.
 	// Measured with hookcheck on the installed v0.37.0 binary, which answered
 	// "refuse" to the escape row the corpus says to allow.
+	//
+	// ⛔ A WRITE NO PROGRAM COVERS IS REFUSED TOO, since 2026-11-08: it used to
+	// pass, so `gh issue create` was typed by hand three times. The refusal
+	// then asks for the missing tool rather than naming one.
 	if f := ghbyhand.Check(p.ToolInput.Command); f.Found() {
+		if f.Missing {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s.\n\n%s\n\nThere is no program to use instead: %s",
+				f.Why(), f.String(), f.Instead))
+		}
 		return deny(stdout, fmt.Sprintf(
 			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
 			f.Why(), f.String(), f.Instead, ghbyhand.Advice))

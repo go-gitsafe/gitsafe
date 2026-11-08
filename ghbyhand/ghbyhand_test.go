@@ -17,6 +17,10 @@ func TestRefuses(t *testing.T) {
 		{"issue reopen", "gh issue reopen 282", "ghissue"},
 		{"pr merge", "gh pr merge 443 --squash", "ghmerge"},
 		{"repo create", "gh repo create go-zpkg/thing --public", "ghnew"},
+		// The act that went through by hand three times on 2026-11-08, while
+		// this rule allowed every write outside its table.
+		{"issue create", "gh issue create --repo go-fde/fde --title t --body-file b.md", "ghissue <owner/repo> --new"},
+		{"api issues collection", "gh api repos/go-fde/fde/issues -f title=t -F body=@b.md", "ghissue <owner/repo> --new"},
 
 		// The two forms actually typed on 2026-11-08. The second carries no
 		// -X at all: a field makes gh POST.
@@ -46,6 +50,9 @@ func TestRefuses(t *testing.T) {
 			if !strings.Contains(f.Instead, tc.wantInstead) {
 				t.Errorf("Instead = %q, want it to name %q", f.Instead, tc.wantInstead)
 			}
+			if f.Missing {
+				t.Errorf("a program covers this act, but the finding says none does")
+			}
 			// A refusal that cannot say what it refused, or what to do, is the
 			// kind that gets worked around.
 			if f.Why() == "" || f.String() == "" || f.Act == "" {
@@ -53,6 +60,57 @@ func TestRefuses(t *testing.T) {
 					f.Why(), f.String(), f.Act)
 			}
 		})
+	}
+}
+
+// TestRefusesWhatNoProgramDoes is the hole closed on 2026-11-08: a write with
+// no fleet program used to be ALLOWED, so it was typed by hand. It is now
+// refused, and the refusal asks for the tool instead of naming one.
+func TestRefusesWhatNoProgramDoes(t *testing.T) {
+	for _, cmd := range []string{
+		// Allowed until this change, as "no program covers it".
+		"gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@b.md",
+		"gh pr edit 443 --body-file b.md",
+		"gh pr close 443",
+		"gh pr review 443 --approve",
+		"gh run rerun 42480491136 --failed",
+		"gh run cancel 42480491136",
+		"gh release create v1.0.0",
+		"gh release delete v1.0.0",
+		"gh label create bug",
+		"gh issue edit 9 --add-label bug",
+		"gh issue delete 9",
+		"gh repo edit --description x",
+		"gh repo delete go-zpkg/thing",
+		"gh secret set NAME",
+		"gh workflow run ci.yml",
+		"gh api -X DELETE repos/o/r/git/refs/heads/x",
+		"gh api repos/o/r/pulls -f title=t -f head=x -f base=main",
+		"gh api rate_limit -F a=b",
+		`gh api graphql -f query='mutation { addStar(input:{starrableId:"x"}) { clientMutationId } }'`,
+		// A verb this rule has never heard of is a write until listed as a read.
+		"gh issue frobnicate 9",
+		// The repository flag before the noun does not hide a write.
+		"gh -R o/r pr edit 4 --body-file b.md",
+		"gh --repo=o/r run rerun 42",
+	} {
+		f := Check(cmd)
+		if !f.Found() {
+			t.Errorf("Check(%q) allowed a write no program covers", cmd)
+			continue
+		}
+		if !f.Missing || f.Instead != MissingTool {
+			t.Errorf("Check(%q): Missing=%v Instead=%q, want the missing-tool refusal", cmd, f.Missing, f.Instead)
+		}
+		if !strings.Contains(f.Why(), "no fleet program") {
+			t.Errorf("Check(%q): Why = %q, want it to say no program does it", cmd, f.Why())
+		}
+	}
+	// The refusal must ask for the tool, and say where it goes.
+	for _, want := range []string{"ask for a program", "go-fleettools/fleettools", "Do not type it by hand"} {
+		if !strings.Contains(MissingTool, want) {
+			t.Errorf("MissingTool does not say %q", want)
+		}
 	}
 }
 
@@ -82,9 +140,48 @@ func TestAllows(t *testing.T) {
 		// advice recommends.
 		"gh pr create --title t --body-file b.md",
 
-		// No fleet program edits a pull request body yet, so refusing this
-		// would be a refusal with no answer.
-		"gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@b.md",
+		// Reads that the old table never had to list, and that the read list
+		// now must: each one is a false refusal if it is missing.
+		"gh issue status",
+		"gh pr diff 443",
+		"gh pr status",
+		"gh pr checkout 443",
+		"gh run list --branch main --status failure",
+		"gh run download 42480491136 -n logs",
+		"gh repo view go-fde/fde --json name",
+		"gh repo list go-fde --limit 100 --json name,description",
+		"gh repo clone go-fde/fde ~/Documents/VCS/GIT/localhost/go-fde-fde",
+		"gh release list --repo go-fde/fde",
+		"gh release download v0.1.0 -p '*.tar.gz'",
+		"gh workflow list",
+		"gh search issues veracrypt --owner go-fde",
+		"gh search code --owner go-fde Detect",
+		"gh label list",
+		"gh secret list",
+		"gh variable get NAME",
+		"gh ruleset check main",
+		"gh auth token",
+		"gh status",
+		"gh --version",
+		"gh issue",
+		// A repository flag BEFORE the noun: 47 runs of the first form in the
+		// record, which guardscan found refused before this shipped.
+		"gh -R go-webengine/engine pr checks 282 --watch",
+		"gh --repo go-pkgx/pkgx pr view 89 --json statusCheckRollup",
+		"gh --repo=go-pkgx/pkgx release list",
+		"gh -Rgo-pkgx/pkgx run list",
+		"gh -R",
+		"gh -R o/r",
+		// Local configuration, not GitHub state.
+		"gh auth setup-git",
+		"gh repo set-default go-fde/fde",
+		"gh ssh-key list",
+		"gh gpg-key list",
+		// A GraphQL QUERY is POSTed by gh, and is still a read.
+		`gh api graphql -f query='query { viewer { login } }'`,
+		"gh api graphql -F owner=o -f query=@q.graphql",
+		// Explicit GET with a field: gh sends the fields as a query string.
+		"gh api -X GET search/issues -f q=veracrypt",
 
 		// The words, not the act.
 		`git commit -m "gh issue comment was refused twice"`,
@@ -156,6 +253,10 @@ func TestWritesAPI(t *testing.T) {
 		{[]string{"gh", "api", "p", "-X", "GET"}, false},
 		{[]string{"gh", "api", "p", "--method=HEAD"}, false},
 		{[]string{"gh", "api", "p", "--jq", ".x"}, false},
+		// An explicit GET wins over fields: gh sends them as a query string.
+		{[]string{"gh", "api", "-X", "GET", "p", "-f", "q=x"}, false},
+		{[]string{"gh", "api", "p", "-f", "q=x", "--method=GET"}, false},
+		{[]string{"gh", "api", "p", "-f", "a=b", "-X", "POST"}, true},
 		// -X as the last word: nothing follows it, and reading past the end
 		// would be a panic rather than a refusal.
 		{[]string{"gh", "api", "p", "-X"}, false},
@@ -244,13 +345,33 @@ func TestShort(t *testing.T) {
 	}
 }
 
-// TestCheckAPIWithoutAPath: `gh api` with no path-looking argument must not
-// panic and must not refuse.
+// TestIsIssuesCollection keeps "open an issue" to the one endpoint that does it.
+func TestIsIssuesCollection(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"repos/o/r/issues", true},
+		{"/repos/o/r/issues/", true},
+		{"repos/o/r/issues/1", false},
+		{"repos/o/r/issues/1/comments", false},
+		{"repos/o/r/pulls", false},
+		{"orgs/o/issues", false},
+		{"", false},
+	} {
+		if got := isIssuesCollection(tc.path); got != tc.want {
+			t.Errorf("isIssuesCollection(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestCheckAPIWithoutAPath: `gh api` with no path-looking argument and no
+// write must not panic and must not refuse.
 func TestCheckAPIWithoutAPath(t *testing.T) {
 	for _, cmd := range []string{
 		"gh api",
 		"gh api --jq .x",
-		"gh api rate_limit -F a=b", // a write, but not to a comments path
+		"gh api rate_limit",
 	} {
 		if f := Check(cmd); f.Found() {
 			t.Errorf("Check(%q) refused it: %s", cmd, f.Instead)

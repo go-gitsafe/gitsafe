@@ -1505,18 +1505,45 @@ gh issue comment / pr comment   →  ghissue <owner/repo> <n> --body-file <file>
 gh issue close / reopen         →  ghissue … --close --reason completed / --reopen
 gh pr merge                     →  ghmerge <n>, or ghrelease <n> <tag>
 gh repo create                  →  ghnew -public|-private <name>
+gh issue create                 →  ghissue <owner/repo> --new --title <t> --body-file <file>
 gh api … /issues/<n>/comments   →  ghissue …   (write methods only)
+gh api … /repos/<o>/<r>/issues  →  ghissue … --new   (write methods only)
 ```
 
-The table is short on purpose: every entry names a program that **exists**, and
-a refusal that cannot say what to do instead is one that gets worked around.
+#### A write with no program is refused too, and the refusal asks for one
+
+Until 2026-11-08 the rule refused only the acts in that table, and let every
+other write through on the grounds that *"a refusal that cannot say what to do
+instead is one that gets worked around"*. What got worked around was the rule:
+`gh issue create` — the one tracker write with no program — went through by hand
+three times in one session, under an instruction that every GitHub write goes
+through a fleet program. The operator's answer is the rule as it stands now:
+**refuse, and ask for the tool to be added.**
+
+So the rule no longer lists what to refuse; it lists what to **allow** — the
+reads — and refuses everything else. A write it has no program for is refused
+with `ghbyhand.MissingTool`: *do not type it by hand, tell the user which act is
+missing, and ask for a program in go-fleettools/fleettools*. `ghissue --new` is
+the first program written that way (go-fleettools/fleettools#209).
 
 What it does **not** refuse is the half that decides whether the rule survives:
-every `gh` read — `issue view`, `pr checks --watch`, `run watch`, `api
-rate_limit`, `api …/check-runs` — plus `gh pr create --body-file`, which is how
-a pull request is opened here, and `gh api -X PATCH …/pulls/<n>`, because no
-fleet program edits a pull request body yet. A **GET** of the comments endpoint
-is allowed too: the rule turns on the method, not on the path.
+every `gh` read — `issue view`, `pr checks --watch`, `run watch`, `run list`,
+`repo clone`, `release download`, `search …`, `api rate_limit`, `api
+…/check-runs`, a GraphQL **query** (gh POSTs it, and it is still a read), `api
+-X GET … -f q=…` — plus `gh pr create --body-file`, which is how a pull request
+is opened here, and the two commands that only write the **local** git config,
+`auth setup-git` and `repo set-default`. A repository flag before the noun (`gh
+-R o/r pr checks 1`) is read through. A read it does not know is a false
+refusal, and a row to add to `readVerbs`.
+
+`guardscan --rule ghbyhand` over the whole record (496 527 commands) is what
+found the `-R` form and the local-config commands before this shipped. What it
+still refuses there are real writes with no program yet, by number of runs:
+`gh workflow run` (768), `gh run rerun` (745), `gh release create` (509), `gh pr
+edit` and `gh api -X PATCH …/pulls/<n>` (437 + part of 1 737), `gh pr close`
+(188), `gh run cancel`, `gh issue edit`, `gh pr update-branch`, `gh release
+edit`, `gh pr ready`, `gh repo fork`, `gh secret set`, `gh repo edit`, `gh pr
+review`. Each is a program to write, not a command to type.
 
 ⛔ Two details were measured rather than assumed. A write needs no `-X`: `gh api
 <path> -F body=@file` is a POST because a field was given, which is the form
@@ -1527,8 +1554,11 @@ path, which is why one rule covers both.
 Eighteen cases went into `hookcheck` on the day the rule shipped — six refused,
 twelve allowed — so the paragraph above about the newest rule being the one the
 table never asked about does not become true a second time.
-`GITSAFE_ALLOW_RAW_GH=1` in front of one command is the way past, for a verb no
-program covers yet or to reproduce a failure the program hides.
+
+There is **no escape**. v0.37.0 advertised `GITSAFE_ALLOW_RAW_GH=1`, which could
+never fire — the hook runs before any shell, so the prefix reaches it as text —
+and it was removed rather than repaired (#93). A refusal here means the program
+is what to run, or the program is what to write.
 
 
 ## GitLab: `glscopes` and `glci`
