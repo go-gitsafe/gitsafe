@@ -29,12 +29,28 @@
 //
 // # What it refuses, stated as the ACT
 //
-// Changing GitHub state with `gh` when a fleet program does that exact act.
+// Changing GitHub state with `gh`, at all. `gh` is for READS; the one write it
+// keeps is `gh pr create`, the documented way a pull request is opened here.
 //
-// The table is deliberately short. Every entry names a program that exists and
-// is installed, because a refusal that cannot say what to do instead is a
-// refusal that gets worked around — and a long table would drift out of date
-// and start refusing things with no answer.
+// Two kinds of refusal, and the second is the one that closes the hole:
+//
+//   - a fleet program does that act: the refusal names it, with its real
+//     argument shape (the table below);
+//   - no fleet program does it YET: the refusal says so, and asks for one to be
+//     written rather than for the act to be typed by hand.
+//
+// ⛔⛔ UNTIL 2026-11-08 THE SECOND KIND WAS AN ALLOW, and that was the hole.
+// The rule refused only the acts in its table, so `gh issue create` — the one
+// tracker write with no program — went through, three times in one session,
+// under a standing instruction that every GitHub write goes through a fleet
+// program. The operator's answer was the rule as it now stands: "on refuse et
+// demande l'ajout d'un outil". A write with no program is not a reason to type
+// it by hand; it is a missing tool, and the refusal is how it gets noticed.
+//
+// So the decision turned around: the rule no longer lists what to REFUSE, it
+// lists what to ALLOW (the reads, below), and refuses everything else. A read
+// it does not know is a false refusal, which is a row to add; a write it does
+// not know is exactly what it is for.
 //
 // # What it does NOT refuse, and that half is the point
 //
@@ -42,7 +58,7 @@
 //	gh pr checks --watch               a read, and the documented way to wait
 //	gh pr create --body-file b.md      how a pull request is opened here
 //	gh api rate_limit                  a read, and free
-//	gh api -X PATCH …/pulls/N          no fleet program edits a PR body yet
+//	gh api graphql -f query=…          a query is a read even though gh POSTs it
 //	git commit -m "gh issue comment"   the words, not the act
 //
 // The last line is why this works on STATEMENTS and asks for `gh` in the
@@ -126,10 +142,60 @@ var rules = []rule{
 		"ghissue <owner/repo> <number> --close --reason completed"},
 	{"issue reopen", "reopen an issue",
 		"ghissue <owner/repo> <number> --reopen"},
+	{"issue create", "open an issue",
+		"ghissue <owner/repo> --new --title <title> --body-file <file>"},
 	{"pr merge", "merge a pull request",
 		"ghmerge <number>, or ghrelease <number> <tag> to merge and tag it"},
 	{"repo create", "create a repository",
 		"ghnew -public|-private <name>"},
+}
+
+// MissingTool is what a refusal says when no fleet program does the act. It
+// asks for the tool: the act is not to be typed by hand, and not to be dropped
+// silently either.
+const MissingTool = "no fleet program does this act yet. Do not type it by " +
+	"hand and do not route around it: stop, tell the user which act is missing, " +
+	"and ask for a program to be added to go-fleettools/fleettools (Go, cobra, " +
+	"a test, body and token read from files) — then add its row to this rule's " +
+	"table. If the command is in fact a READ this rule does not know, that is a " +
+	"row for its read list instead."
+
+// readVerbs is every `gh <noun> <verb>` this rule lets through, because it
+// only READS GitHub (or reads it into a local file). Anything else is a write.
+// `pr create` is the one write here, and it is here on purpose: it is how a
+// pull request is opened in this fleet.
+//
+// `repo set-default` and `auth setup-git` write the LOCAL git config, not
+// GitHub, so they are here too: `auth setup-git` has 164 runs in the record,
+// and a refusal asking for a tool would be wrong about it.
+var readVerbs = map[string][]string{
+	"issue":       {"list", "view", "status"},
+	"pr":          {"list", "view", "status", "checks", "diff", "checkout", "create"},
+	"run":         {"list", "view", "watch", "download"},
+	"workflow":    {"list", "view"},
+	"repo":        {"list", "view", "clone", "set-default"},
+	"release":     {"list", "view", "download"},
+	"auth":        {"status", "token", "setup-git"},
+	"ssh-key":     {"list"},
+	"gpg-key":     {"list"},
+	"label":       {"list"},
+	"secret":      {"list"},
+	"variable":    {"list", "get"},
+	"cache":       {"list"},
+	"ruleset":     {"list", "view", "check"},
+	"gist":        {"list", "view", "clone"},
+	"org":         {"list"},
+	"project":     {"list", "view", "field-list", "item-list"},
+	"extension":   {"list", "search", "browse"},
+	"config":      {"get", "list"},
+	"alias":       {"list"},
+	"attestation": {"verify", "download"},
+}
+
+// readNouns are `gh` commands that read whatever follows them.
+var readNouns = map[string]bool{
+	"search": true, "status": true, "version": true, "help": true,
+	"browse": true, "completion": true, "--version": true,
 }
 
 // Finding is why a command was refused. The zero value means nothing was found.
@@ -138,8 +204,10 @@ type Finding struct {
 	Match string
 	// Act is what that statement would do, in words.
 	Act string
-	// Instead is the fleet program that does it.
+	// Instead is the fleet program that does it, or [MissingTool].
 	Instead string
+	// Missing is true when no fleet program does the act yet.
+	Missing bool
 }
 
 // Found reports whether this finding is a refusal.
@@ -147,7 +215,15 @@ func (f Finding) Found() bool { return f.Instead != "" }
 
 // Why names the act, for a caller that prints it.
 func (f Finding) Why() string {
+	if f.Missing {
+		return "it would " + f.Act + " by hand, and no fleet program does that act yet"
+	}
 	return "it would " + f.Act + " by hand, and the fleet has a program for that act"
+}
+
+// missing is the refusal for a write no program covers.
+func missing(st, act string) Finding {
+	return Finding{Match: short(st), Act: act, Instead: MissingTool, Missing: true}
 }
 
 func (f Finding) String() string {
@@ -186,8 +262,17 @@ func checkStatement(st string) Finding {
 			return Finding{}
 		}
 	}
-	// Two words, because every verb in the table is `gh <noun> <verb>`. A
-	// one-word `gh` invocation (`gh auth status`) cannot match.
+	words = dropGlobalRepo(words)
+	if len(words) < 2 {
+		return Finding{}
+	}
+	if words[1] == "api" {
+		return checkAPI(st, words)
+	}
+	if readNouns[words[1]] {
+		return Finding{}
+	}
+	// Two words, because every verb in the table is `gh <noun> <verb>`.
 	if len(words) >= 3 {
 		pair := words[1] + " " + words[2]
 		for _, r := range rules {
@@ -195,41 +280,91 @@ func checkStatement(st string) Finding {
 				return Finding{Match: short(st), Act: r.act, Instead: r.instead}
 			}
 		}
+		for _, v := range readVerbs[words[1]] {
+			if v == words[2] {
+				return Finding{}
+			}
+		}
+		return missing(st, "run `gh "+pair+"`, which is not a read,")
 	}
-	if words[1] == "api" {
-		return checkAPI(st, words)
-	}
+	// `gh issue` alone prints the sub-command list: a read.
 	return Finding{}
 }
 
-// checkAPI covers the same acts reached through the raw endpoint. Only the
-// comment endpoints are refused, and only with a WRITE method: `gh api` is the
-// escape hatch for everything the fleet does not cover, and refusing it whole
-// would leave reads — rate_limit, check-runs — with nothing to use.
+// checkAPI covers the raw endpoint. A call that does not write is a read and
+// goes through; a write is refused, naming the program when one covers it.
 //
 // ⛔ A WRITE IS NOT ALWAYS SPELLED. POSTing to a collection needs no -X at all:
 // `gh api <path> -F body=@file` is a POST because a field was given, which is
 // documented gh behaviour and is exactly the form that was typed on 2026-11-08.
-// So a field-bearing call to a comments collection counts as a write.
+// So a field-bearing call counts as a write.
+//
+// ⭐ EXCEPT GraphQL QUERIES. `gh api graphql -f query=…` is a POST by
+// construction, and reading through GraphQL is ordinary here; only a
+// `mutation` changes state.
 func checkAPI(st string, words []string) Finding {
 	path := ""
+	graphql := false
 	for _, w := range words[2:] {
+		if w == "graphql" {
+			graphql = true
+			break
+		}
 		if !strings.HasPrefix(w, "-") && strings.Contains(w, "/") {
 			path = w
 			break
 		}
 	}
-	if path == "" || !isCommentsPath(path) {
+	if graphql {
+		if strings.Contains(st, "mutation") {
+			return missing(st, "run a GraphQL mutation")
+		}
 		return Finding{}
 	}
 	if !writesAPI(words) {
 		return Finding{}
 	}
-	return Finding{
-		Match:   short(st),
-		Act:     "comment on an issue or pull request",
-		Instead: "ghissue <owner/repo> <number> --body-file <file>",
+	switch {
+	case isCommentsPath(path):
+		return Finding{
+			Match:   short(st),
+			Act:     "comment on an issue or pull request",
+			Instead: "ghissue <owner/repo> <number> --body-file <file>",
+		}
+	case isIssuesCollection(path):
+		return Finding{
+			Match:   short(st),
+			Act:     "open an issue",
+			Instead: "ghissue <owner/repo> --new --title <title> --body-file <file>",
+		}
 	}
+	return missing(st, "write to the GitHub API")
+}
+
+// dropGlobalRepo removes a repository flag written BEFORE the noun —
+// `gh -R o/r pr list` — so the noun and verb are read where they are.
+//
+// ⛔ guardscan found it on the whole record before this shipped: 47 runs of
+// `gh -R go-webengine/engine pr checks …` read as the verb "-R", which made
+// every one of them a write with no program.
+// The caller has already checked there are at least two words.
+func dropGlobalRepo(words []string) []string {
+	w := words[1]
+	switch {
+	case (w == "-R" || w == "--repo") && len(words) >= 3:
+		return append([]string{words[0]}, words[3:]...)
+	case strings.HasPrefix(w, "--repo=") || (strings.HasPrefix(w, "-R") && len(w) > 2):
+		return append([]string{words[0]}, words[2:]...)
+	}
+	return words
+}
+
+// isIssuesCollection reports whether the path is a repository's issue
+// collection, the endpoint an issue is opened at.
+func isIssuesCollection(path string) bool {
+	p := strings.Trim(path, "/")
+	parts := strings.Split(p, "/")
+	return len(parts) == 4 && parts[0] == "repos" && parts[3] == "issues"
 }
 
 // isCommentsPath reports whether the path addresses an issue's or pull
@@ -239,26 +374,26 @@ func isCommentsPath(path string) bool {
 	return strings.Contains(path, "/issues/") && strings.HasSuffix(strings.TrimRight(path, "/"), "/comments")
 }
 
-// writesAPI reports whether this `gh api` call would change state: an explicit
-// write method, or any field, which makes gh send a POST.
+// writesAPI reports whether this `gh api` call would change state. An explicit
+// method decides; without one, any field makes gh send a POST. With `-X GET`
+// gh sends the fields as a query string, which is a read.
 func writesAPI(words []string) bool {
+	fields := false
 	for i, w := range words {
 		switch {
 		case w == "-X" || w == "--method":
-			if i+1 < len(words) && isWriteMethod(words[i+1]) {
-				return true
+			if i+1 < len(words) {
+				return isWriteMethod(words[i+1])
 			}
 		case strings.HasPrefix(w, "--method="):
-			if isWriteMethod(strings.TrimPrefix(w, "--method=")) {
-				return true
-			}
+			return isWriteMethod(strings.TrimPrefix(w, "--method="))
 		case w == "-F" || w == "-f" || w == "--field" || w == "--raw-field" ||
 			w == "--input" || strings.HasPrefix(w, "--field=") ||
 			strings.HasPrefix(w, "--raw-field=") || strings.HasPrefix(w, "--input="):
-			return true
+			fields = true
 		}
 	}
-	return false
+	return fields
 }
 
 func isWriteMethod(m string) bool {
