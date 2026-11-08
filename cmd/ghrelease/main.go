@@ -120,7 +120,16 @@ type options struct {
 	// the merge commit.
 	waive                  []string
 	evidence, mainEvidence string
+	// issuesWaiver is passed to ghmerge's issues gate (see package issuegate).
+	issuesWaiver    string
+	issuesWaiverSet bool
 }
+
+// errMergedIssuesOpen is ghmerge's exit status 3: the pull request WAS merged,
+// but an issue it closes could not be closed. The tag is still cut, because
+// the merge commit exists and a release is not undone by an open issue; the
+// run then exits non-zero so the issue is not forgotten.
+var errMergedIssuesOpen = errors.New("merged, but an issue the pull request closes could not be closed")
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
 // backfill is a real subcommand, so `ghrelease backfill -h` is asked of it.
@@ -133,6 +142,7 @@ func RootCmd() *cobra.Command {
 		// tag; it must reach RunE rather than be refused as an unknown command.
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			o.issuesWaiverSet = cmd.Flags().Changed("issues-waiver")
 			if code := execute(args, o, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
 				return cliflags.Status(code)
 			}
@@ -158,6 +168,8 @@ func RootCmd() *cobra.Command {
 		"the record of the local run standing in for the waived check (required with --waive)")
 	f.StringVar(&o.mainEvidence, "main-evidence", "", "the same for the MERGE COMMIT: a comment on the pull request holding the merge commit's full SHA. "+
 		"Without it a waived check that also failed to start on the default branch merges but is not tagged")
+	f.StringVar(&o.issuesWaiver, "issues-waiver", "", "passed to ghmerge: merge although the body mentions an open issue without Closes/Fixes/Resolves or Refs in front of it; "+
+		"the reason is recorded as a comment on the pull request; an empty reason is refused")
 	c.AddCommand(backfillCmd())
 	return c
 }
@@ -187,6 +199,18 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
 		fmt.Fprintf(stderr, "usage: ghrelease [flags] [owner/repo] <pr-number> <tag>\n")
 		return 2
+	}
+	if o.issuesWaiverSet {
+		if strings.TrimSpace(o.issuesWaiver) == "" {
+			fmt.Fprintf(stderr, "ghrelease: --issues-waiver needs a reason; there is no default and an empty one is refused\n")
+			return 2
+		}
+		// Before any network call, like --waive: an older ghmerge has no such flag.
+		if out, err := ghmergeHelp(); err != nil || !strings.Contains(out, "--issues-waiver") {
+			fmt.Fprintf(stderr, "ghrelease: the ghmerge on PATH has no issues gate (--issues-waiver), so nothing was asked of GitHub.\n"+
+				"ghrelease: install a current one: GOBIN=~/.local/bin go install github.com/go-gitsafe/gitsafe/cmd/ghmerge@latest\n")
+			return 1
+		}
 	}
 	var mw *mainWaiver
 	switch {
@@ -291,12 +315,18 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	issuesOpen := false
 	// An already-merged pull request needs no ghmerge at all (it would only say
 	// "already merged" and exit 0), so an old ghmerge cannot get in the way of
 	// the rerun that tags it.
 	if merged, msha, _, err := mergeState(token, repo, number); err == nil && merged && msha != "" {
 		fmt.Fprintf(stdout, "%s#%d is already merged\n", repo, number)
-	} else if err := runMerge(repo, number, mergeFlags(o), stdout, stderr); err != nil {
+	} else if err := runMerge(repo, number, mergeFlags(o), stdout, stderr); errors.Is(err, errMergedIssuesOpen) {
+		// ghmerge has named the issue on stderr. The merge happened, so the
+		// release goes ahead; the exit status says the job is not finished.
+		issuesOpen = true
+		fmt.Fprintf(stderr, "ghrelease: the pull request is merged; tagging goes ahead, but the run will exit 1 for the issue above\n")
+	} else if err != nil {
 		// ghmerge has already said why on stderr. Saying it twice would bury
 		// its reason under this one.
 		fmt.Fprintf(stderr, "ghrelease: not tagging, because the merge did not happen\n")
@@ -336,6 +366,9 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		if _, _, err := backfillRepo(token, repo, tag, time.Time{}, *backfillMax, false, b, stdout); err != nil {
 			fmt.Fprintf(stderr, "ghrelease: %s is released; catching up older tags stopped: %v\n", tag, err)
 		}
+	}
+	if issuesOpen {
+		return 1
 	}
 	return 0
 }
@@ -503,7 +536,12 @@ func originRepo() (string, error) {
 func execMerge(repo string, number int, flags []string, stdout, stderr io.Writer) error {
 	cmd := exec.Command("ghmerge", append(flags, repo, strconv.Itoa(number))...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	return cmd.Run()
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 3 {
+		return errMergedIssuesOpen
+	}
+	return err
 }
 
 // mergeFlags is what ghrelease passes on to ghmerge: the waiver and its
@@ -515,6 +553,9 @@ func mergeFlags(o options) []string {
 	}
 	if o.evidence != "" {
 		f = append(f, "--evidence", o.evidence)
+	}
+	if o.issuesWaiverSet {
+		f = append(f, "--issues-waiver", o.issuesWaiver)
 	}
 	return f
 }

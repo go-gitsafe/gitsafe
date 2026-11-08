@@ -136,6 +136,42 @@ steps), not the annotation text, which is for people and can be reworded; it was
 checked against GitHub's published schema, and not yet against a live
 unacquired job.
 
+### The issues gate: no pull request lands over a silently open issue
+
+A pull request that says "see #12" leaves #12 open when it lands, and nobody is
+told. `ghmerge` therefore reads the pull request body **before any write**:
+
+1. It finds every `#N` and `owner/repo#N` (code spans, fenced blocks, HTML
+   comments and URLs are ignored; an issue URL after a keyword counts) and asks
+   GitHub for each with ONE `GET /repos/{r}/issues/{n}`. Pull requests, closed
+   issues and numbers that are no issue (404) are ignored. More than 50 distinct
+   references is refused: the body is untrusted and the budget is shared.
+2. Each open issue must be preceded, on the same line, by a closing keyword
+   (`close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`,
+   `resolved`) or by `Refs` (case-insensitive: stays open on purpose). Like
+   GitHub, a closing keyword covers ONE reference (`Closes #1, #2` closes only
+   #1); `Refs #1, #2 and #3` covers all three, because it is the safe one.
+3. A bare mention is refused, naming each issue and both accepted forms:
+
+       ghmerge: refusing to merge o/r#5 — the pull request body mentions open
+       issue(s) o/r#7 without saying what happens to them. Write `Closes o/r#7`
+       (or Fixes/Resolves) if this pull request finishes it, or `Refs o/r#7` if
+       it stays open on purpose; or merge anyway with --issues-waiver
+       "<reason>", which is recorded as a comment
+
+4. `--issues-waiver "<reason>"` merges anyway and posts `issues gate waived:
+   <reason>` on the pull request BEFORE the merge. There is no default; an empty
+   reason is refused (exit 2); a stamp that cannot be posted refuses the merge.
+5. After the merge every issue closed by keyword is read back. If GitHub did not
+   close it (another repository, a base branch that is not the default, a missing
+   permission) `ghmerge` comments `Closed by <owner/repo>#<PR> (merge <sha12>)`
+   and closes it, and says so. If it cannot, it exits **3** naming the issue: the
+   merge happened. `ghrelease` passes `--issues-waiver` through, still tags a
+   merged pull request on exit 3, and then exits 1.
+
+An already-merged pull request is not re-gated. The parser is `issuegate`,
+fuzzed in CI (`FuzzParse`).
+
 ### `--wait`: a refusal that carries its own remedy
 
 GitHub refuses a merge with a 403 that **names the instant the window reopens**.
@@ -192,7 +228,7 @@ which is why `ghauth.RetryAt` reads those and nothing else.
 | `git-pre-push-guard` | The **global** pre-push hook. Refuses a URL that carries a credential, a write to the branch pull requests land on, and a push that publishes an undeclared nested repository — whoever runs git, and whatever they run it with. |
 | `gitpush` | Pushes without a token ever reaching a command line: it **names** a credential helper rather than reading the secret, refuses a remote URL that carries one, and redacts what it prints by shape. Takes the same arguments as the command it replaces. |
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
-| `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. With `--wait 30m` it also waits out a 403 that names the instant the window reopens, instead of handing that clock to a person. |
+| `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. It refuses a body that mentions an open issue without `Closes`/`Refs`, and closes what GitHub left open after the merge (`--issues-waiver` to override). With `--wait 30m` it also waits out a 403 that names the instant the window reopens, instead of handing that clock to a person. |
 | `ghnew` | Creates a repository that **already has a default branch**, so no commit of yours ever has to land on it unreviewed. An empty repository has no branches, `gh pr create` has no base, and the way out that presents itself is pushing straight to the default branch — four repositories were bootstrapped that way here in one afternoon. It asks GitHub to write the first commit, then **looks** to confirm the branch is there before saying it worked. There is no flag to skip that. |
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
 | `ghpkg` | Lists and deletes the versions of a published package. Refuses to delete without `--yes`, printing what it would remove; refuses a tag that names no version or two; and **names the other tags on the manifest it is about to delete**, because several can point at one. |

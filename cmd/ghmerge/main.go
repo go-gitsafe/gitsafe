@@ -42,6 +42,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/go-gitsafe/gitsafe/issuegate"
 	"github.com/go-gitsafe/gitsafe/waiver"
 	"github.com/spf13/cobra"
 )
@@ -102,6 +103,11 @@ type options struct {
 	// be waived on a local run recorded as a comment on the pull request.
 	waive    []string
 	evidence string
+	// issuesWaiver lets the merge go ahead over an issue mentioned without a
+	// keyword; issuesWaiverSet says the flag was given, so that an EMPTY reason
+	// can be refused rather than read as "no waiver". See package issuegate.
+	issuesWaiver    string
+	issuesWaiverSet bool
 }
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
@@ -112,6 +118,7 @@ func RootCmd() *cobra.Command {
 		Short: "Merge a pull request once it is mergeable, with the token kept out of argv",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			o.issuesWaiverSet = cmd.Flags().Changed("issues-waiver")
 			if code := execute(args, o, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
 				return cliflags.Status(code)
 			}
@@ -128,6 +135,8 @@ func RootCmd() *cobra.Command {
 		"needs --evidence. A check that ran and failed is never waived")
 	f.StringVar(&o.evidence, "evidence", "", "URL of the pull request comment, written by you, that holds the full SHA of the commit "+
 		"judged: the record of the local run that stands in for the waived check (required with --waive)")
+	f.StringVar(&o.issuesWaiver, "issues-waiver", "", "merge although the body mentions an open issue without `Closes`/`Fixes`/`Resolves` or `Refs` in front of it; "+
+		"the reason is posted as a comment on the pull request. There is no default and an empty reason is refused")
 	return c
 }
 
@@ -140,6 +149,10 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		return 2
 	case len(o.waive) == 0 && o.evidence != "":
 		fmt.Fprintf(stderr, "ghmerge: --evidence without --waive: nothing to waive\n")
+		return 2
+	}
+	if o.issuesWaiverSet && strings.TrimSpace(o.issuesWaiver) == "" {
+		fmt.Fprintf(stderr, "ghmerge: --issues-waiver needs a reason; there is no default and an empty one is refused\n")
 		return 2
 	}
 	if err := waiver.Names(o.waive); err != nil {
@@ -258,6 +271,23 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintf(stdout, "%s#%d: %d check(s), %d status(es), all green\n", repo, number, len(runs), len(sts))
 	}
+	// ⛔ THE ISSUES GATE. Read-only, and before the first write below: a
+	// pull request that mentions an open issue without saying what happens to
+	// it is refused here, so nothing has been stamped or merged.
+	gh := ghIssues{token}
+	verdict, err := issuegate.Classify(gh, pr.Body, repo)
+	if err != nil {
+		fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — issues gate: %v\n", repo, number, err)
+		return 1
+	}
+	issuesWaived := false
+	if why := verdict.Refusal(); why != "" {
+		if !o.issuesWaiverSet {
+			fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — %s\n", repo, number, why)
+			return 1
+		}
+		issuesWaived = true
+	}
 	if len(waived) > 0 {
 		// (d), then the stamp: the last thing that can refuse and the first thing
 		// written. The waiver is never silent.
@@ -277,7 +307,15 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "%s#%d: WAIVED %s (never started); stamp posted\n", repo, number, quoted(waived))
 	}
-	if err := merge(token, repo, number, *squash); err != nil {
+	if issuesWaived {
+		if err := comment(token, repo, number, issuegate.WaiverStamp(o.issuesWaiver)); err != nil {
+			fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — the issues waiver stamp could not be posted: %v\n", repo, number, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s#%d: issues gate WAIVED for %s; stamp posted\n", repo, number, issueNames(verdict.Unclassed))
+	}
+	mergeSHA, err := merge(token, repo, number, *squash)
+	if err != nil {
 		if len(waived) > 0 {
 			// The stamp above says "Merged"; correct the record if it did not.
 			_ = comment(token, repo, number, "The merge stamped above did NOT happen: "+err.Error())
@@ -286,6 +324,9 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "merged\n")
+	// The issues this body closes must be closed now, by GitHub or by us. The
+	// exit status is decided at the end, so the branch is still tidied.
+	unclosed := issuesAfterMerge(gh, verdict, repo, number, mergeSHA, stdout, stderr)
 	if *del {
 		// ⛔ The head branch of a pull request from a FORK lives in the
 		// contributor's repository, not this one. Deleting it is not this
@@ -318,6 +359,9 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "branch %s was already gone\n", pr.Head.Ref)
 			}
 		}
+	}
+	if unclosed > 0 {
+		return exitIssueNotClosed
 	}
 	return 0
 }
@@ -503,6 +547,7 @@ type pr struct {
 	State     string `json:"state"`
 	Merged    bool   `json:"merged"`
 	Draft     bool   `json:"draft"`
+	Body      string `json:"body"`
 	Mergeable *bool  `json:"mergeable"`
 	// MergeableState answers a different question from Mergeable, on the same
 	// object this tool already fetches. Mergeable is "does it apply cleanly";
@@ -770,11 +815,18 @@ func getOnce(token, url string, into any) error {
 	return json.NewDecoder(resp.Body).Decode(into)
 }
 
-func merge(token, repo string, number int, squash bool) error {
-	return retrying(func() error { return mergeOnce(token, repo, number, squash) })
+// merge merges and returns the merge commit's SHA, as GitHub answers it ("" if
+// the answer carried none).
+func merge(token, repo string, number int, squash bool) (sha string, err error) {
+	err = retrying(func() error {
+		var e error
+		sha, e = mergeOnce(token, repo, number, squash)
+		return e
+	})
+	return sha, err
 }
 
-func mergeOnce(token, repo string, number int, squash bool) error {
+func mergeOnce(token, repo string, number int, squash bool) (string, error) {
 	method := "merge"
 	if squash {
 		method = "squash"
@@ -783,13 +835,13 @@ func mergeOnce(token, repo string, number int, squash bool) error {
 	req, err := http.NewRequest(http.MethodPut,
 		fmt.Sprintf("%s/repos/%s/pulls/%d/merge", apiBase, repo, number), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		return fmt.Errorf("merging: %w", err)
+		return "", fmt.Errorf("merging: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -797,10 +849,15 @@ func mergeOnce(token, repo string, number int, squash bool) error {
 		// ⚠ The wrapping keeps "GitHub refused the merge:" in front of the
 		// sentence, and errors.As still reaches the Refusal underneath it — so
 		// retrying sees the deadline a reader sees.
-		return fmt.Errorf("GitHub refused the merge: %w",
+		return "", fmt.Errorf("GitHub refused the merge: %w",
 			ghauth.Refused(resp.StatusCode, resp.Header, body, ghauth.Now(resp.Header, now())))
 	}
-	return nil
+	var done struct {
+		SHA string `json:"sha"`
+	}
+	// The merge happened; an answer that cannot be read only costs the SHA.
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&done)
+	return done.SHA, nil
 }
 
 func quoted(names []string) string {
