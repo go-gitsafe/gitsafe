@@ -204,7 +204,13 @@ var corpus = []struct {
 	{"patching a pull request body, which no program covers",
 		"gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@/tmp/b.md", "allow"},
 	{"the words, not the act", `git commit -m 'gh issue comment was refused twice'`, "allow"},
-	{"the escape, which is an act", "GITSAFE_ALLOW_RAW_GH=1 gh issue comment 282 --body-file /tmp/r.md", "allow"},
+	{"asking what it does is not doing it", "gh pr merge --help", "allow"},
+	// ⛔ THIS RULE HAS NO ESCAPE, AND v0.37.0 ADVERTISED ONE THAT COULD NOT
+	// FIRE: a PreToolUse hook runs before any shell, so a prefix reaches it
+	// inside a string. The row asserts the removal rather than the repair,
+	// which is the direction recorded on the `escape-honoured-as-a-prefix`
+	// branch — make the commands that should work work, not the workaround.
+	{"the removed prefix opens nothing", "GITSAFE_ALLOW_RAW_GH=1 gh issue comment 282 --body-file /tmp/r.md", "refuse"},
 
 	{"a status with no pipeline before it", "go build ./...; echo $?", "allow"},
 	{"a redirect is not a pipe, and is what the rule asks for", `go test ./... > /tmp/out.txt 2>&1`, "allow"},

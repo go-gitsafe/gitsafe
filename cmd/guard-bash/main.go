@@ -167,12 +167,16 @@ func run(stdin io.Reader, stdout io.Writer) int {
 	// It goes before [shellwork] deliberately: both could refuse the same
 	// command, and the specific advice — the name of the program to run — is
 	// worth more than the general one. See [ghbyhand].
-	if os.Getenv(ghbyhand.Escape) == "" {
-		if f := ghbyhand.Check(p.ToolInput.Command); f.Found() {
-			return deny(stdout, fmt.Sprintf(
-				"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
-				f.Why(), f.String(), f.Instead, ghbyhand.Advice))
-		}
+	// ⛔ NO os.Getenv WRAPPER, UNLIKE ITS NEIGHBOURS ABOVE. This hook runs
+	// BEFORE any shell, so an escape typed in front of the command has not been
+	// assigned to anything when the guard reads it: [ghbyhand.Escape] is read
+	// from the command's own text, the way [volatile] and [bypass] read theirs.
+	// Measured with hookcheck on the installed v0.37.0 binary, which answered
+	// "refuse" to the escape row the corpus says to allow.
+	if f := ghbyhand.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
+			f.Why(), f.String(), f.Instead, ghbyhand.Advice))
 	}
 	// ⛔ THE INSTRUCTION FILE'S SECOND SECTION, which until now lived only
 	// there: "No awk, sed, shell, python or perl — write the tool in Go …

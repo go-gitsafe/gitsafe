@@ -28,6 +28,12 @@ func TestRefuses(t *testing.T) {
 
 		// Shapes that must not hide the act.
 		{"env assignment first", "GH_PAGER=cat gh issue comment 9 --body-file b.md", "ghissue"},
+		// ⛔ THERE IS NO ESCAPE, so the prefix v0.37.0 advertised is just an
+		// assignment the rule steps over. Asserted rather than left implicit:
+		// a reader who finds the old doc comment will try this.
+		{"the removed escape does not open it", "GITSAFE_ALLOW_RAW_GH=1 gh issue comment 9 --body-file b.md", "ghissue"},
+		{"nor in company", "GH_PAGER=cat GITSAFE_ALLOW_RAW_GH=1 gh pr merge 443", "ghmerge"},
+		{"--help for another program does not excuse the act", "gh issue comment 9 --body-file b.md && ghissue --help", "ghissue"},
 		{"absolute path", "/opt/homebrew/bin/gh issue comment 9 --body-file b.md", "ghissue"},
 		{"second statement", "cd /tmp && gh issue comment 9 --body-file b.md", "ghissue"},
 		{"inside a pipeline stage", "echo hi | gh issue comment 9 --body-file b.md", "ghissue"},
@@ -83,6 +89,14 @@ func TestAllows(t *testing.T) {
 		// The words, not the act.
 		`git commit -m "gh issue comment was refused twice"`,
 		`echo 'gh pr merge 443' > notes.txt`,
+
+		// ⛔ ASKING WHAT A COMMAND DOES IS NOT DOING IT. This rule refused all
+		// four of these until hookcheck said so, on a row that was already in
+		// the corpus for the sibling rules.
+		"gh pr merge --help",
+		"gh issue comment --help",
+		"gh issue close -h",
+		"gh repo create --help",
 
 		// Other programs whose names contain the verbs.
 		"ghissue go-zpkg/zbk 282 --body-file r.md",
