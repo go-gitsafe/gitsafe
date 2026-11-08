@@ -49,13 +49,11 @@
 // command position: the phrase appears in commit messages and in prose about
 // this very rule.
 //
-// # The escape
+// # There is no escape, on purpose
 //
-//	GITSAFE_ALLOW_RAW_GH=1
-//
-// in front of ONE command, which is an act rather than a setting. There are
-// legitimate uses — a verb no fleet program covers yet, or reproducing a
-// failure the program hides — and both are better for being deliberate.
+// See the note above the rule table. A refusal here means one of two things:
+// the fleet program is what to run, or this rule is wrong about that command
+// and the allow list needs a row. Neither is solved by a prefix.
 //
 // # What it deliberately does not try to know
 //
@@ -72,20 +70,30 @@ import (
 	"github.com/go-gitsafe/gitsafe/shellcmd"
 )
 
-// Escape is the ASSIGNMENT that allows one command through, written in front of
-// it, and it is read from the command's own text rather than from this
-// process's environment.
+// ⛔⛔ THIS RULE HAS NO ESCAPE, AND IT HAD ONE FOR ONE VERSION.
 //
-// ⛔⛔ AN ENVIRONMENT VARIABLE CANNOT WORK HERE, AND THE FIRST VERSION OF THIS
-// RULE USED ONE. A PreToolUse hook runs BEFORE any shell, so
-// `GITSAFE_ALLOW_RAW_GH=1 gh issue comment …` reaches the guard as a STRING:
-// nothing has assigned anything yet, and os.Getenv is empty. `hookcheck` caught
-// it on the installed binary — the escape row answered "refuse" where the
-// corpus said "allow" — after a green local suite. [volatile], [stalebase],
-// [discard] and [bypass] already read their escapes this way, and
-// discard.Escape records why; this is the fifth site with that shape, and
-// extracting it is a change of its own rather than a line in this one.
-const Escape = "GITSAFE_ALLOW_RAW_GH"
+// v0.37.0 shipped a `GITSAFE_ALLOW_RAW_GH` that could never fire. A PreToolUse
+// hook runs BEFORE any shell, so an assignment written in front of the command
+// reaches the guard as part of a STRING — nothing has been assigned, and
+// os.Getenv is empty. `hookcheck` said so on the installed binary, after a
+// green local suite: the escape row answered "refuse" where the corpus says
+// "allow".
+//
+// The fix is not to make the assignment readable. `priorart` found a pushed
+// branch with no pull request, `escape-honoured-as-a-prefix`, whose commit
+// records the decision already taken:
+//
+//	The operator chose a different direction: make the commands that should
+//	work work, rather than make a workaround work.
+//
+// So the escape is REMOVED rather than repaired. A rule that advertises a way
+// past which opens nothing is worse than one that advertises none: the reader
+// spends a turn on it and concludes the guard is broken. And an escape that
+// cannot be satisfied is one to delete, not to prop up.
+//
+// What replaces it is the allow list. Anything this refuses that should work is
+// a row to add — `--help` was the first, found the same way — or a fleet
+// program to write. Both are better answers than a prefix.
 
 // Advice is what to do instead, in general. A guard that says no without
 // saying what to do gets worked around.
@@ -95,8 +103,9 @@ const Advice = "The fleet programs take the body from a FILE and the token from 
 	"argument. To find out whether a program already covers something, ask " +
 	"rather than remember: `ls ~/.local/bin`, or `fleetverbs --match <word> " +
 	"--cli ~/Documents/VCS/GIT/localhost/go-fleettools-fleettools` which reads " +
-	"the source and answers \"does anything here already do X?\". `" + Escape +
-	"=1` in front of one command is the escape."
+	"the source and answers \"does anything here already do X?\". If this refusal " +
+	"is wrong about the command, that is a row to add to the allow list rather " +
+	"than a prefix to type: there is deliberately no way past."
 
 // rule maps a hand-written act to the program that performs it.
 type rule struct {
@@ -163,12 +172,6 @@ func Check(cmd string) Finding {
 
 // checkStatement asks about one simple command.
 func checkStatement(st string) Finding {
-	fields := strings.Fields(st)
-	for i := 0; i < len(fields) && isAssignment(fields[i]); i++ {
-		if name, value, _ := strings.Cut(fields[i], "="); name == Escape && value != "" && value != "0" {
-			return Finding{}
-		}
-	}
 	words := command(st)
 	if len(words) < 2 || !isGH(words[0]) {
 		return Finding{}

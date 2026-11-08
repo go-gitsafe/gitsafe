@@ -28,14 +28,12 @@ func TestRefuses(t *testing.T) {
 
 		// Shapes that must not hide the act.
 		{"env assignment first", "GH_PAGER=cat gh issue comment 9 --body-file b.md", "ghissue"},
-		// An escape set to nothing, or to 0, is not an escape — the same
-		// reading [volatile] and [bypass] apply.
-		{"escape set to empty", "GITSAFE_ALLOW_RAW_GH= gh issue comment 9 --body-file b.md", "ghissue"},
-		{"escape set to zero", "GITSAFE_ALLOW_RAW_GH=0 gh issue comment 9 --body-file b.md", "ghissue"},
-		// ⛔ The escape must be in FRONT of the command. After it, it is an
-		// argument to gh and assigns nothing.
-		{"escape as an argument", "gh issue comment 9 --body-file b.md GITSAFE_ALLOW_RAW_GH=1", "ghissue"},
-		{"--help for another program in the pipeline", "gh issue comment 9 --body-file b.md && ghissue --help", "ghissue"},
+		// ⛔ THERE IS NO ESCAPE, so the prefix v0.37.0 advertised is just an
+		// assignment the rule steps over. Asserted rather than left implicit:
+		// a reader who finds the old doc comment will try this.
+		{"the removed escape does not open it", "GITSAFE_ALLOW_RAW_GH=1 gh issue comment 9 --body-file b.md", "ghissue"},
+		{"nor in company", "GH_PAGER=cat GITSAFE_ALLOW_RAW_GH=1 gh pr merge 443", "ghmerge"},
+		{"--help for another program does not excuse the act", "gh issue comment 9 --body-file b.md && ghissue --help", "ghissue"},
 		{"absolute path", "/opt/homebrew/bin/gh issue comment 9 --body-file b.md", "ghissue"},
 		{"second statement", "cd /tmp && gh issue comment 9 --body-file b.md", "ghissue"},
 		{"inside a pipeline stage", "echo hi | gh issue comment 9 --body-file b.md", "ghissue"},
@@ -99,12 +97,6 @@ func TestAllows(t *testing.T) {
 		"gh issue comment --help",
 		"gh issue close -h",
 		"gh repo create --help",
-
-		// ⛔ THE ESCAPE IS AN ASSIGNMENT IN FRONT OF THE COMMAND, read from the
-		// command's text: a PreToolUse hook runs before any shell, so there is
-		// no environment for it to be in.
-		"GITSAFE_ALLOW_RAW_GH=1 gh issue comment 282 --body-file r.md",
-		"GH_PAGER=cat GITSAFE_ALLOW_RAW_GH=1 gh pr merge 443",
 
 		// Other programs whose names contain the verbs.
 		"ghissue go-zpkg/zbk 282 --body-file r.md",
