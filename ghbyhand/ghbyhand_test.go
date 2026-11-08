@@ -20,6 +20,10 @@ func TestRefuses(t *testing.T) {
 		// The act that went through by hand three times on 2026-11-08, while
 		// this rule allowed every write outside its table.
 		{"issue create", "gh issue create --repo go-fde/fde --title t --body-file b.md", "ghissue <owner/repo> --new"},
+		// gitsafe#90: a nested module's release (media/v0.2.0) was typed by hand
+		// because the refusal named no program; ghrelease now does it.
+		{"release create", "gh release create media/v0.2.0 --generate-notes", "ghrelease"},
+		{"release create names the nested form", "gh release create v1.0.0", "<dir>/vX.Y.Z"},
 		{"api issues collection", "gh api repos/go-fde/fde/issues -f title=t -F body=@b.md", "ghissue <owner/repo> --new"},
 
 		// The two forms actually typed on 2026-11-08. The second carries no
@@ -75,7 +79,6 @@ func TestRefusesWhatNoProgramDoes(t *testing.T) {
 		"gh pr review 443 --approve",
 		"gh run rerun 42480491136 --failed",
 		"gh run cancel 42480491136",
-		"gh release create v1.0.0",
 		"gh release delete v1.0.0",
 		"gh label create bug",
 		"gh issue edit 9 --add-label bug",

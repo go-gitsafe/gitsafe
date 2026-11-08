@@ -146,6 +146,9 @@ var rules = []rule{
 		"ghissue <owner/repo> --new --title <title> --body-file <file>"},
 	{"pr merge", "merge a pull request",
 		"ghmerge <number>, or ghrelease <number> <tag> to merge and tag it"},
+	{"release create", "create a release",
+		"ghrelease <number> <tag> to merge, tag and release (a nested Go module's tag is <dir>/vX.Y.Z, checked against <dir>/go.mod), " +
+			"or ghrelease -release-only <tag> for a tag that already exists"},
 	{"repo create", "create a repository",
 		"ghnew -public|-private <name>"},
 }

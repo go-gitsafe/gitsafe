@@ -114,6 +114,9 @@ type options struct {
 	waitMain             time.Duration
 	noMainCI             bool
 	allowLower           bool
+	// makeLatest: a nested module's release is NOT marked Latest unless this is
+	// set (the repository's Latest stays the root module's); see nested.go.
+	makeLatest bool
 	// waive, evidence, mainEvidence: see package waiver and waive.go. A check
 	// that never started may be waived on a local run recorded as a comment on
 	// the pull request; the default-branch wait needs its own evidence, naming
@@ -162,6 +165,8 @@ func RootCmd() *cobra.Command {
 	f.BoolVar(&o.noMainCI, "no-main-ci", false, "tag even when NO workflow run appears on the default branch within 2 minutes (a repository without CI on push to main)")
 	f.BoolVar(&o.allowLower, "allow-lower", false, "tag even when the tag is not above the repository's highest release (a deliberate backport on a release branch); "+
 		"the release is then NOT marked Latest (make_latest false), so a backport never becomes @latest")
+	f.BoolVar(&o.makeLatest, "make-latest", false, "for a nested module's tag (<dir>/vX.Y.Z): let GitHub mark the release Latest "+
+		"(default: it is not, the repository's Latest stays the root module's)")
 	f.StringArrayVar(&o.waive, "waive", nil, "waive this check, which must have NEVER STARTED (no runner acquired, no step run); repeatable; "+
 		"passed to ghmerge and applied again to the merge commit; needs --evidence")
 	f.StringVar(&o.evidence, "evidence", "", "URL of the pull request comment, written by you, holding the full SHA of the pull request's head: "+
@@ -188,7 +193,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		notes = &s
 	}
 	if *releaseOnly {
-		return resumeRelease(args, *tokenFile, notes, stdout, stderr)
+		return resumeRelease(args, *tokenFile, notes, o.makeLatest, stdout, stderr)
 	}
 	if o.waitMain < 0 {
 		fmt.Fprintf(stderr, "ghrelease: -wait-main %s: want a duration of 0 or more\n", o.waitMain)
@@ -200,6 +205,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "usage: ghrelease [flags] [owner/repo] <pr-number> <tag>\n")
 		return 2
 	}
+	dir, _, _ := splitTag(tag) // "" for the root module; target has checked the shape
 	if o.issuesWaiverSet {
 		if strings.TrimSpace(o.issuesWaiver) == "" {
 			fmt.Fprintf(stderr, "ghrelease: --issues-waiver needs a reason; there is no default and an empty one is refused\n")
@@ -260,7 +266,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 
 	// Asked BEFORE the merge, like the tag: a tag below the repository's highest
 	// release becomes Latest and hides the new code from @latest (order.go).
-	lower, refusal, err := orderCheck(token, repo, tag, o.allowLower, newBudget(defaultMargin))
+	lower, prev, refusal, err := orderCheck(token, repo, tag, o.allowLower, newBudget(defaultMargin))
 	switch {
 	case err != nil:
 		fmt.Fprintf(stderr, "ghrelease: cannot order %s among the existing tags: %v\n", tag, err)
@@ -299,6 +305,14 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		case merged && sha != "":
 			fmt.Fprintf(stdout, "%s#%d is already merged; would tag %s at %s, its merge commit\n",
 				repo, number, tag, short(sha))
+			if dir != "" {
+				if why, err := checkNestedModule(token, repo, tag, sha); err != nil {
+					fmt.Fprintf(stderr, "ghrelease: could not read %s's go.mod at that commit: %v\n", dir, err)
+				} else if why != "" {
+					fmt.Fprintf(stderr, "ghrelease: would refuse %s: %s\n", tag, why)
+					return 1
+				}
+			}
 		case merged:
 			fmt.Fprintf(stderr, "ghrelease: %s#%d is merged and GitHub gave no merge commit; "+
 				"there is nothing this could tag\n", repo, number)
@@ -339,6 +353,23 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ghrelease: nothing was tagged; tag the merge commit by hand\n")
 		return 1
 	}
+	// A nested module's tag names a module that must EXIST at the commit being
+	// tagged: the go.mod there, its path, its major (nested.go). It cannot be asked
+	// before the merge, which may be what adds the module, so the refusal says
+	// the pull request is merged and nothing was tagged.
+	if dir != "" {
+		why, err := checkNestedModule(token, repo, tag, sha)
+		if err != nil {
+			fmt.Fprintf(stderr, "ghrelease: merged, but could not read %s/go.mod at %s: %v\n", dir, short(sha), err)
+			fmt.Fprintf(stderr, "ghrelease: nothing was tagged\n")
+			return 1
+		}
+		if why != "" {
+			fmt.Fprintf(stderr, "ghrelease: %s#%d is merged, but %s is not a tag of a module found at its merge commit %s: %s\n", repo, number, tag, short(sha), why)
+			fmt.Fprintf(stderr, "ghrelease: nothing was tagged\n")
+			return 1
+		}
+	}
 	// A tag marks a merged, CI-GREEN default-branch commit: the pull request's
 	// checks passing says nothing about the push-to-main run (maincheck.go).
 	// Both paths get here -- a fresh merge and "is already merged".
@@ -354,7 +385,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	// The release is part of the job: a tag without one leaves the
 	// repository's Releases page, and its Latest badge, on the previous
 	// version (go-gitsafe/gitsafe#59: three times on 2026-10-26).
-	if err := createRelease(token, repo, tag, notes, !lower); err != nil {
+	if err := createRelease(token, repo, tag, notes, !lower && (dir == "" || o.makeLatest), nestedPrev(dir, prev)); err != nil {
 		return releaseMissing(stderr, repo, tag, err)
 	}
 	fmt.Fprintf(stdout, "released %s\n", tag)
@@ -384,7 +415,7 @@ func releaseMissing(stderr io.Writer, repo, tag string, err error) int {
 
 // resumeRelease creates the release of a tag that already exists. It never
 // creates, moves or deletes a tag: a missing tag is an error.
-func resumeRelease(args []string, tokenFile string, notes *string, stdout, stderr io.Writer) int {
+func resumeRelease(args []string, tokenFile string, notes *string, makeLatest bool, stdout, stderr io.Writer) int {
 	var repo, tag string
 	var err error
 	switch len(args) {
@@ -396,8 +427,9 @@ func resumeRelease(args []string, tokenFile string, notes *string, stdout, stder
 	default:
 		err = errors.New("-release-only takes [owner/repo] <tag>")
 	}
-	if err == nil && !strings.HasPrefix(tag, "v") {
-		err = fmt.Errorf("%q is not a version tag; Go modules want a leading v", tag)
+	dir, _, shaped := splitTag(tag)
+	if err == nil && !shaped {
+		err = fmt.Errorf("%q is not a version tag; Go modules want a leading v (a nested module's tag is <dir>/vX.Y.Z)", tag)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
@@ -424,8 +456,9 @@ func resumeRelease(args []string, tokenFile string, notes *string, stdout, stder
 		fmt.Fprintf(stdout, "%s already has a release for %s; nothing to do\n", repo, tag)
 		return 0
 	}
-	// An existing tag: Latest only if it is the newest (GitHub's "legacy").
-	if err := createRelease(token, repo, tag, notes, true); err != nil {
+	// An existing tag: Latest only if it is the newest (GitHub's "legacy"); never
+	// for a nested module's, unless --make-latest.
+	if err := createRelease(token, repo, tag, notes, dir == "" || makeLatest, ""); err != nil {
 		return releaseMissing(stderr, repo, tag, err)
 	}
 	fmt.Fprintf(stdout, "released %s (existing tag, not moved)\n", tag)
@@ -438,8 +471,15 @@ func resumeRelease(args []string, tokenFile string, notes *string, stdout, stder
 // tag (generate_release_notes). make_latest "legacy" lets GitHub mark it
 // Latest only when it is the newest by date and semantic version, so a
 // patch release of an older line does not take the badge.
-func createRelease(token, repo, tag string, notes *string, mayBeLatest bool) error {
+//
+// previous, when not empty, is the previous_tag_name of the generated notes: for
+// a nested module, the highest tag of ITS line, so the notes are not a diff
+// against the root module's last tag.
+func createRelease(token, repo, tag string, notes *string, mayBeLatest bool, previous string) error {
 	body := map[string]any{"tag_name": tag, "name": tag, "make_latest": "legacy"}
+	if previous != "" && notes == nil {
+		body["previous_tag_name"] = previous
+	}
 	if !mayBeLatest {
 		body["make_latest"] = "false" // a deliberate backport (-allow-lower)
 	}
@@ -503,10 +543,19 @@ func target(args []string) (repo string, number int, tag string, err error) {
 	if err != nil {
 		return "", 0, "", fmt.Errorf("%q is not a pull request number", args[len(args)-2])
 	}
-	if !strings.HasPrefix(tag, "v") {
-		return "", 0, "", fmt.Errorf("%q is not a version tag; Go modules want a leading v", tag)
+	if _, _, ok := splitTag(tag); !ok {
+		return "", 0, "", fmt.Errorf("%q is not a version tag; Go modules want a leading v (a nested module's tag is <dir>/vX.Y.Z)", tag)
 	}
 	return repo, number, tag, nil
+}
+
+// nestedPrev is the previous tag to give GitHub for a nested module's notes;
+// for the root module GitHub's own choice stands, as it always did.
+func nestedPrev(dir, prev string) string {
+	if dir == "" {
+		return ""
+	}
+	return prev
 }
 
 // originRepo reads owner/repo from the origin remote.

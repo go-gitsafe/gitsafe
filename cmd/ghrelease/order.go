@@ -121,7 +121,8 @@ func highestRelease(names []string) (best version, found bool) {
 	return best, found
 }
 
-// listTags returns the names of the repository's v* tags.
+// listTags returns the names of the repository's <prefix>v* tags (prefix is ""
+// or "<dir>/"), full names, prefix included.
 //
 // ONE request, with no page or per_page: matching-refs is not paginated and
 // this response is the whole list (see the measurement at the top of the file).
@@ -132,12 +133,12 @@ func highestRelease(names []string) (best version, found bool) {
 // server streaming without end; a body cut at that limit ends mid-array and
 // fails to decode, so a truncated list is an error rather than a short one
 // silently treated as complete.
-func listTags(token, repo string, b *budget) ([]string, error) {
+func listTags(token, repo, prefix string, b *budget) ([]string, error) {
 	if why := b.low(); why != "" {
 		return nil, fmt.Errorf("%s", why)
 	}
 	resp, err := api(token, http.MethodGet,
-		fmt.Sprintf("%s/repos/%s/git/matching-refs/tags/v", apiBase, repo), nil)
+		fmt.Sprintf("%s/repos/%s/git/matching-refs/tags/%sv", apiBase, repo, prefix), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,31 +167,53 @@ func listTags(token, repo string, b *budget) ([]string, error) {
 // checkOrder says whether tag may be created. lower reports an accepted
 // -allow-lower tag, which must not become Latest. A non-nil message is printed
 // on stderr with the refusal.
-func checkOrder(token, repo, tag string, allowLower bool, b *budget) (lower bool, refusal string, err error) {
-	nv, perr := parseStrict(tag)
+//
+// A nested module's tag <dir>/vX.Y.Z is ordered among the <dir>/v* tags ONLY: the
+// root module's v* tags, and other modules', are another line of versions.
+// prev is the highest existing tag of the same line below the new one (with its
+// <dir>/ prefix), for the release notes of a nested module.
+func checkOrder(token, repo, tag string, allowLower bool, b *budget) (lower bool, prev string, refusal string, err error) {
+	dir, ver, _ := splitTag(tag)
+	nv, perr := parseStrict(ver)
 	if perr != nil {
-		return false, perr.Error(), nil
+		return false, "", perr.Error(), nil
 	}
-	names, err := listTags(token, repo, b)
+	prefix := ""
+	if dir != "" {
+		prefix = dir + "/"
+	}
+	names, err := listTags(token, repo, prefix, b)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
-	hi, found := highestRelease(names)
-	if !found || nv.cmp(hi) > 0 {
-		return false, "", nil
+	line := make([]string, 0, len(names))
+	for _, n := range names {
+		if s, ok := strings.CutPrefix(n, prefix); ok {
+			line = append(line, s)
+		}
+	}
+	hi, found := highestRelease(line)
+	if !found {
+		return false, "", "", nil
+	}
+	if nv.cmp(hi) > 0 {
+		return false, prefix + hi.String(), "", nil
 	}
 	if allowLower {
-		return true, "", nil
+		return true, "", "", nil
+	}
+	if prefix != "" {
+		repo += " (" + prefix + "v* tags)"
 	}
 	rel := "lower than"
 	if nv.cmp(hi) == 0 {
 		rel = "equal to"
 	}
-	next := func(v version) string { return v.String() }
-	return false, fmt.Sprintf("%s is %s the highest release of %s, %s: GitHub would make it Latest only if it were the newest, "+
+	next := func(v version) string { return prefix + v.String() }
+	return false, "", fmt.Sprintf("%s is %s the highest release of %s, %s: GitHub would make it Latest only if it were the newest, "+
 		"and `go install ...@latest` would keep resolving to %s, so the new code would be unreachable.\n"+
 		"next versions: PATCH %s, MINOR %s, MAJOR %s\n"+
 		"(a deliberate backport on a release branch: -allow-lower; it is then not marked Latest)",
-		tag, rel, repo, hi, hi,
+		tag, rel, repo, prefix+hi.String(), prefix+hi.String(),
 		next(version{hi[0], hi[1], hi[2] + 1}), next(version{hi[0], hi[1] + 1, 0}), next(version{hi[0] + 1, 0, 0})), nil
 }

@@ -183,7 +183,7 @@ func readState(token, repo string, b *budget) (repoState, error) {
 func (st repoState) missing(skip string, since time.Time) []tagInfo {
 	var out []tagInfo
 	for _, t := range st.tags {
-		if t.Name == skip || st.released[t.Name] || !strings.HasPrefix(t.Name, "v") {
+		if _, _, ok := splitTag(t.Name); !ok || t.Name == skip || st.released[t.Name] {
 			continue
 		}
 		if st.truncated && t.Date.Before(st.oldestRelease) {
@@ -198,11 +198,19 @@ func (st repoState) missing(skip string, since time.Time) []tagInfo {
 	return out
 }
 
-// previous returns the tag just older than t, or "".
+// previous returns the tag just older than t IN THE SAME LINE OF VERSIONS, or "":
+// the root module's tags and each nested module's <dir>/ tags are separate lines,
+// and a diff against another line's tag is not "the commits since the previous
+// release".
 func (st repoState) previous(t tagInfo) string {
 	best := ""
 	var bestDate time.Time
+	tdir, _, _ := splitTag(t.Name)
 	for _, o := range st.tags {
+		odir, _, ok := splitTag(o.Name)
+		if !ok || odir != tdir {
+			continue
+		}
 		if o.Name != t.Name && o.Date.Before(t.Date) && (best == "" || o.Date.After(bestDate)) {
 			best, bestDate = o.Name, o.Date
 		}
