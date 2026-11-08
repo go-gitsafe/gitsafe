@@ -169,6 +169,43 @@ var corpus = []struct {
 	{"the escape, which is an act", "GITSAFE_ALLOW_VOLATILE=1 git clone https://github.com/go-gitsafe/gitsafe /tmp/throwaway", "allow"},
 	{"a status in a tree already there", "git -C /tmp/gitsafe status --short", "allow"},
 
+	// ⛔⛔ AND THIS TABLE ASKED ABOUT `ghbyhand` ON THE DAY IT SHIPPED, which
+	// is the only reason the comment above is not about to be true again. The
+	// rule came from one comment on one issue costing two refusals and a round
+	// trip to the user, while `ghissue` — installed, purpose-built — posted it
+	// first try; the written instruction "look for an existing tool first" did
+	// not fire because nothing RAN it.
+	//
+	// Both halves are asked, because the half that decides whether a guard
+	// survives is what it ALLOWS: `gh` reads are how this fleet watches CI and
+	// reads a tracker, and a rule that refused them would be deleted within a
+	// day.
+	{"commenting on an issue by hand", "gh issue comment 282 --body-file /tmp/r.md", "refuse"},
+	{"commenting on a pull request by hand", "gh pr comment 443 --body-file /tmp/n.md", "refuse"},
+	{"closing an issue by hand", "gh issue close 282", "refuse"},
+	{"merging a pull request by hand", "gh pr merge 443 --squash", "refuse"},
+	{"creating a repository by hand", "gh repo create go-zpkg/thing --public", "refuse"},
+	// ⛔ The raw endpoint reaches the same act, and needs no -X: a field makes
+	// gh POST. This is the second form that was typed on 2026-11-08.
+	{"the raw comments endpoint, POSTing by field alone",
+		"gh api repos/go-zpkg/zbk/issues/282/comments -F body=@/tmp/r.md", "refuse"},
+
+	{"the program that does it", "ghissue go-zpkg/zbk 282 --body-file /tmp/r.md", "allow"},
+	{"reading a tracker", "gh issue view 282 --json title,body", "allow"},
+	{"waiting for checks, which is how this fleet waits", "gh pr checks 443 --watch", "allow"},
+	{"opening a pull request, the documented form", "gh pr create --title t --body-file /tmp/b.md", "allow"},
+	{"reading the budget", "gh api rate_limit --jq .resources.core", "allow"},
+	// ⭐ A GET of the same path is a read. The rule turns on the METHOD, not on
+	// the endpoint, and a row for it is how that stays a decision.
+	{"reading the comments, no method and no field",
+		"gh api repos/go-zpkg/zbk/issues/282/comments", "allow"},
+	// ⭐ Deliberately allowed: no fleet program edits a pull request body yet,
+	// and a refusal with no answer is one that gets worked around.
+	{"patching a pull request body, which no program covers",
+		"gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@/tmp/b.md", "allow"},
+	{"the words, not the act", `git commit -m 'gh issue comment was refused twice'`, "allow"},
+	{"the escape, which is an act", "GITSAFE_ALLOW_RAW_GH=1 gh issue comment 282 --body-file /tmp/r.md", "allow"},
+
 	{"a status with no pipeline before it", "go build ./...; echo $?", "allow"},
 	{"a redirect is not a pipe, and is what the rule asks for", `go test ./... > /tmp/out.txt 2>&1`, "allow"},
 	{"a commit body in a FILE", `git commit -F /tmp/msg.txt`, "allow"},
