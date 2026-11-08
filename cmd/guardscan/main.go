@@ -27,6 +27,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/discard"
+	"github.com/go-gitsafe/gitsafe/ghbyhand"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/redact"
 	"github.com/go-gitsafe/gitsafe/secretarg"
@@ -80,7 +81,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, shellwork, stalebase, volatile)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, ghbyhand, shellwork, stalebase, volatile)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -123,6 +124,15 @@ func rules(cwd, home, tmpdir string) map[string]func(string) (string, bool) {
 		"sigpipe": func(c string) (string, bool) {
 			f := sigpipe.Check(c)
 			return kind(f.Found(), "a producer killed by its consumer")
+		},
+		// ⛔ IN HERE BECAUSE main_test.go REFUSED THE RULE WITHOUT IT, and that
+		// refusal is the repository working: a rule guard-bash runs and
+		// guardscan cannot scan is a rule whose false refusals nobody would
+		// ever count. The act it names is the fleet program, so the kind is
+		// what to run instead.
+		"ghbyhand": func(c string) (string, bool) {
+			f := ghbyhand.Check(c)
+			return kind(f.Found(), f.Act)
 		},
 		"shellwork": func(c string) (string, bool) {
 			f := shellwork.Check(c)

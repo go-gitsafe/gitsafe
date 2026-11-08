@@ -35,6 +35,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/discard"
+	"github.com/go-gitsafe/gitsafe/ghbyhand"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
@@ -153,6 +154,24 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s.\n\n%s\n\n%s",
 				f.Why(), f.String(), sigpipe.Advice))
+		}
+	}
+	// ⛔ THE INSTRUCTION FILE AUTHORISES `gh`, AND THAT IS THE HOLE THIS CLOSES.
+	// "Bash only invokes programs (go, git, gh, gitpush, …)" reads as leave to
+	// type any `gh`, so on 2026-11-08 one comment on one issue cost two refusals
+	// and a round trip to the user — while `ghissue`, purpose-built and already
+	// installed, posted it first try. "Look for an existing tool first" was
+	// written in that same file and in a memory on that exact subject, and
+	// neither fired, because nothing RAN them.
+	//
+	// It goes before [shellwork] deliberately: both could refuse the same
+	// command, and the specific advice — the name of the program to run — is
+	// worth more than the general one. See [ghbyhand].
+	if os.Getenv(ghbyhand.Escape) == "" {
+		if f := ghbyhand.Check(p.ToolInput.Command); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
+				f.Why(), f.String(), f.Instead, ghbyhand.Advice))
 		}
 	}
 	// ⛔ THE INSTRUCTION FILE'S SECOND SECTION, which until now lived only

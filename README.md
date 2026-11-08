@@ -1473,6 +1473,64 @@ positive: over an **empty** corpus every rule must read as unasked, or the
 measurement cannot see the absence it exists for.
 
 
+### `ghbyhand`: the instruction file authorises `gh`, and that was the hole
+
+The standing rule reads *"Bash only invokes programs (go, git, gh, gitpush,
+ghmerge, ghrelease, ghnew, agentsync…)"*, which is leave to type any `gh`. On
+2026-11-08, posting **one comment on one issue** cost two refusals and a round
+trip to the user:
+
+```
+gh issue comment 282 --body-file report.md              refused
+gh api repos/o/r/issues/282/comments -F body=@report.md refused
+ghissue go-zpkg/zbk 282 --body-file report.md           posted, first try
+```
+
+`ghissue` was already installed and purpose-built — it takes the body from a
+**file** and the token from a **file**, sent only in a header, which is why it
+is the shape that gets through. *"Look for an existing tool first"* was written
+in that same instruction file and in a memory whose whole subject is that the
+tools have homes now. Neither fired, because nothing **ran** them: at the moment
+of typing, the thought was "post the comment", not "audit the toolbox". That is
+this repository's own test for when a lesson becomes a refusal.
+
+It also costs more than a retry. `gh` is a general-purpose write primitive, so
+each hand-written spelling is judged on its own and two equivalent ones can
+differ: in that same session `gh api -X PATCH …/pulls/443` went through while
+`gh api …/issues/282/comments` did not. A fleet program has **one** name, which
+can be allowed once.
+
+```
+gh issue comment / pr comment   →  ghissue <owner/repo> <n> --body-file <file>
+gh issue close / reopen         →  ghissue … --close --reason completed / --reopen
+gh pr merge                     →  ghmerge <n>, or ghrelease <n> <tag>
+gh repo create                  →  ghnew -public|-private <name>
+gh api … /issues/<n>/comments   →  ghissue …   (write methods only)
+```
+
+The table is short on purpose: every entry names a program that **exists**, and
+a refusal that cannot say what to do instead is one that gets worked around.
+
+What it does **not** refuse is the half that decides whether the rule survives:
+every `gh` read — `issue view`, `pr checks --watch`, `run watch`, `api
+rate_limit`, `api …/check-runs` — plus `gh pr create --body-file`, which is how
+a pull request is opened here, and `gh api -X PATCH …/pulls/<n>`, because no
+fleet program edits a pull request body yet. A **GET** of the comments endpoint
+is allowed too: the rule turns on the method, not on the path.
+
+⛔ Two details were measured rather than assumed. A write needs no `-X`: `gh api
+<path> -F body=@file` is a POST because a field was given, which is the form
+that was actually typed, so a field-bearing call to a comments collection counts
+as a write. And GitHub serves a pull request's comments from the **issues**
+path, which is why one rule covers both.
+
+Eighteen cases went into `hookcheck` on the day the rule shipped — six refused,
+twelve allowed — so the paragraph above about the newest rule being the one the
+table never asked about does not become true a second time.
+`GITSAFE_ALLOW_RAW_GH=1` in front of one command is the way past, for a verb no
+program covers yet or to reproduce a failure the program hides.
+
+
 ## GitLab: `glscopes` and `glci`
 
 The first look at a GitLab token on this machine printed it. The token file was
