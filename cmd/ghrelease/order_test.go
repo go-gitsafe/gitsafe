@@ -118,7 +118,7 @@ func TestAMalformedTagIsRefused(t *testing.T) {
 func TestControlTheOldBehaviourTagsALowerTag(t *testing.T) {
 	old := orderCheck
 	t.Cleanup(func() { orderCheck = old })
-	orderCheck = func(string, string, string, bool, *budget) (bool, string, error) { return false, "", nil }
+	orderCheck = func(string, string, string, bool, *budget) (bool, string, string, error) { return false, "", "", nil }
 	code, s, _, errs := orderRun(t, "v0.7.1", []string{"v0.9.0"})
 	if code != 0 || !tagged(s) {
 		t.Fatalf("the control did not reproduce the defect: exit %d, tagged %v: %s", code, tagged(s), errs)

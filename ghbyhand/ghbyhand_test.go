@@ -30,6 +30,8 @@ func TestRefuses(t *testing.T) {
 		// The act that went through by hand three times on 2026-11-08, while
 		// this rule allowed every write outside its table.
 		{"issue create", "gh issue create --repo go-fde/fde --title t --body-file b.md", "ghissue <owner/repo> --new"},
+		// gitsafe#90: a nested module's release (media/v0.2.0) was typed by hand.
+		{"release create names the nested form", "gh release create media/v0.2.0 --generate-notes", "<dir>/vX.Y.Z"},
 		{"api issues collection", "gh api repos/go-fde/fde/issues -f title=t -F body=@b.md", "ghissue <owner/repo> --new"},
 
 		// The programs written because this rule asked for them, one row per
