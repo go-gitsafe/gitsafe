@@ -28,6 +28,14 @@ func TestRefuses(t *testing.T) {
 
 		// Shapes that must not hide the act.
 		{"env assignment first", "GH_PAGER=cat gh issue comment 9 --body-file b.md", "ghissue"},
+		// An escape set to nothing, or to 0, is not an escape — the same
+		// reading [volatile] and [bypass] apply.
+		{"escape set to empty", "GITSAFE_ALLOW_RAW_GH= gh issue comment 9 --body-file b.md", "ghissue"},
+		{"escape set to zero", "GITSAFE_ALLOW_RAW_GH=0 gh issue comment 9 --body-file b.md", "ghissue"},
+		// ⛔ The escape must be in FRONT of the command. After it, it is an
+		// argument to gh and assigns nothing.
+		{"escape as an argument", "gh issue comment 9 --body-file b.md GITSAFE_ALLOW_RAW_GH=1", "ghissue"},
+		{"--help for another program in the pipeline", "gh issue comment 9 --body-file b.md && ghissue --help", "ghissue"},
 		{"absolute path", "/opt/homebrew/bin/gh issue comment 9 --body-file b.md", "ghissue"},
 		{"second statement", "cd /tmp && gh issue comment 9 --body-file b.md", "ghissue"},
 		{"inside a pipeline stage", "echo hi | gh issue comment 9 --body-file b.md", "ghissue"},
@@ -83,6 +91,20 @@ func TestAllows(t *testing.T) {
 		// The words, not the act.
 		`git commit -m "gh issue comment was refused twice"`,
 		`echo 'gh pr merge 443' > notes.txt`,
+
+		// ⛔ ASKING WHAT A COMMAND DOES IS NOT DOING IT. This rule refused all
+		// four of these until hookcheck said so, on a row that was already in
+		// the corpus for the sibling rules.
+		"gh pr merge --help",
+		"gh issue comment --help",
+		"gh issue close -h",
+		"gh repo create --help",
+
+		// ⛔ THE ESCAPE IS AN ASSIGNMENT IN FRONT OF THE COMMAND, read from the
+		// command's text: a PreToolUse hook runs before any shell, so there is
+		// no environment for it to be in.
+		"GITSAFE_ALLOW_RAW_GH=1 gh issue comment 282 --body-file r.md",
+		"GH_PAGER=cat GITSAFE_ALLOW_RAW_GH=1 gh pr merge 443",
 
 		// Other programs whose names contain the verbs.
 		"ghissue go-zpkg/zbk 282 --body-file r.md",

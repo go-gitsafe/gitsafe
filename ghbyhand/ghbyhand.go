@@ -72,7 +72,19 @@ import (
 	"github.com/go-gitsafe/gitsafe/shellcmd"
 )
 
-// Escape is the environment variable that allows one command through.
+// Escape is the ASSIGNMENT that allows one command through, written in front of
+// it, and it is read from the command's own text rather than from this
+// process's environment.
+//
+// ⛔⛔ AN ENVIRONMENT VARIABLE CANNOT WORK HERE, AND THE FIRST VERSION OF THIS
+// RULE USED ONE. A PreToolUse hook runs BEFORE any shell, so
+// `GITSAFE_ALLOW_RAW_GH=1 gh issue comment …` reaches the guard as a STRING:
+// nothing has assigned anything yet, and os.Getenv is empty. `hookcheck` caught
+// it on the installed binary — the escape row answered "refuse" where the
+// corpus said "allow" — after a green local suite. [volatile], [stalebase],
+// [discard] and [bypass] already read their escapes this way, and
+// discard.Escape records why; this is the fifth site with that shape, and
+// extracting it is a change of its own rather than a line in this one.
 const Escape = "GITSAFE_ALLOW_RAW_GH"
 
 // Advice is what to do instead, in general. A guard that says no without
@@ -151,9 +163,25 @@ func Check(cmd string) Finding {
 
 // checkStatement asks about one simple command.
 func checkStatement(st string) Finding {
+	fields := strings.Fields(st)
+	for i := 0; i < len(fields) && isAssignment(fields[i]); i++ {
+		if name, value, _ := strings.Cut(fields[i], "="); name == Escape && value != "" && value != "0" {
+			return Finding{}
+		}
+	}
 	words := command(st)
 	if len(words) < 2 || !isGH(words[0]) {
 		return Finding{}
+	}
+	// ⛔ ASKING A COMMAND WHAT IT DOES IS NOT DOING IT, and this rule refused
+	// `gh pr merge --help` until hookcheck said so: that row was already in the
+	// corpus, for the sibling rules, and it is the kind of false refusal that
+	// gets a guard deleted. Reading the documentation of the thing you are
+	// being told not to run is exactly what someone does next.
+	for _, w := range words[1:] {
+		if w == "--help" || w == "-h" {
+			return Finding{}
+		}
 	}
 	// Two words, because every verb in the table is `gh <noun> <verb>`. A
 	// one-word `gh` invocation (`gh auth status`) cannot match.
