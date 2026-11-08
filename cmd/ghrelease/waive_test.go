@@ -40,6 +40,8 @@ type waiveMain struct {
 	ran      int
 	open     bool
 	prReads  int
+	// mergeErr is what the stubbed ghmerge returns.
+	mergeErr error
 }
 
 const newHelp = "Usage: ghmerge [flags]\n      --waive stringArray   waive this check\n"
@@ -131,7 +133,7 @@ func waiveScenario(t *testing.T, g *waiveMain, args ...string) (code int, out, e
 	runMerge = func(_ string, _ int, flags []string, _, _ io.Writer) error {
 		g.mergeFlags = flags
 		g.ran++
-		return nil
+		return g.mergeErr
 	}
 	oldHelp := ghmergeHelp
 	t.Cleanup(func() { ghmergeHelp = oldHelp })

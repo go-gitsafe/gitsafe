@@ -64,6 +64,8 @@ jobs:
         include:
           - { target: FuzzFind, pkg: ./redact }
           - { target: FuzzLocateMatchesWholeText, pkg: ./redact }
+          # A pull request body is untrusted text, parsed before a merge.
+          - { target: FuzzParse, pkg: ./issuegate }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
