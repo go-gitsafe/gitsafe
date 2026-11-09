@@ -55,6 +55,47 @@ func TestABareNumberMeansThisRepository(t *testing.T) {
 	}
 }
 
+// ⛔⛔ THE COMMA DEPENDS ON THE KEYWORD, which is the part I got wrong twice.
+// A closing keyword governs the ONE reference after it — GitHub's rule — while
+// `Refs` is deliberately generous, because keeping an issue open is the safe
+// answer. A test for only one of them would have confirmed either of my two
+// wrong general rules.
+func TestAClosingKeywordGovernsOneReferenceAndRefsGovernsTheList(t *testing.T) {
+	closes := bodyFile(t, "Closes other/repo#1, #2\n")
+	rc, out, _ := prbody(t, closes, "--repo", "me/mine")
+	if rc != 1 {
+		t.Fatalf("rc = %d, want 1: #2 is bare after a closing keyword", rc)
+	}
+	if !strings.Contains(out, "closes  other/repo#1") || !strings.Contains(out, "bare    me/mine#2") {
+		t.Errorf("a closing keyword did not stop at the first reference:\n%s", out)
+	}
+
+	refs := bodyFile(t, "Refs other/repo#1, #2 and #3\n")
+	rc, out, _ = prbody(t, refs, "--repo", "me/mine")
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0: Refs keeps the whole list open", rc)
+	}
+	for _, want := range []string{"refs    other/repo#1", "refs    me/mine#2", "refs    me/mine#3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Refs did not carry across the list, missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// ⛔ THE EXEMPTION EXISTS, and I wrote in this command's own comment that it did
+// not. issuegate.Strip removes code spans, so a keyword in backticks is prose —
+// which is how a body may explain the rule without obeying it.
+func TestAKeywordInACodeSpanIsNotAReference(t *testing.T) {
+	p := bodyFile(t, "A sentence saying `Closes #9` inside a code span.\n")
+	rc, out, _ := prbody(t, p, "--repo", "me/mine")
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0", rc)
+	}
+	if !strings.Contains(out, "mentions no issue") {
+		t.Errorf("a code span was parsed as a reference:\n%s", out)
+	}
+}
+
 // And the other half of that body: a reference spelled in full in the prose,
 // with no keyword, is what the gate actually refuses.
 func TestAReferenceSpelledInProseIsBare(t *testing.T) {

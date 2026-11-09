@@ -11,27 +11,35 @@
 // refusal cost an edit, a re-read and a second merge attempt, after CI had
 // already run.
 //
-// ⛔⛔ AND THE FOURTH TAUGHT SOMETHING I FIRST GOT WRONG, WHICH IS THE WHOLE
-// ARGUMENT FOR THE TOOL. That body said
+// ⛔⛔ AND THE RULES ARE NOT WHAT A CAREFUL READER GUESSES, WHICH IS THE WHOLE
+// ARGUMENT FOR ASKING RATHER THAN REASONING. Measured against
+// [issuegate.Parse], each one its own run:
 //
-//	Refs go-zpkg/pantry-overlay#89, #88
+//	Closes other/repo#1, #2            closes other/repo#1 · BARE this/repo#2
+//	Refs other/repo#1, #2 and #3       refs all three
+//	a line saying `Closes #9` in a code span    mentions no issue
 //
-// and the gate still refused `go-zpkg/pantry-overlay#88`. I wrote here, in this
-// comment, that the cause was the comma — "a keyword governs the reference that
-// FOLLOWS it". Then I ran this command against that body, and it answered:
+// Three separate behaviours, and I got each of them wrong in turn before
+// running it:
 //
-//	refs    go-zpkg/pantry-overlay#89
-//	refs    go-zpkg/zbk#88
+//  1. THE COMMA DEPENDS ON THE KEYWORD. A closing keyword governs the ONE
+//     reference after it — GitHub's rule, and `Refs` is deliberately more
+//     generous because keeping an issue open is the safe answer. I first wrote
+//     "a keyword governs the reference that follows it" as a general rule, then
+//     "corrected" it to "the comma carries the keyword". Both halves are true of
+//     one keyword and false of the other.
+//  2. A BARE `#N` MEANS THIS REPOSITORY, which is the trap that actually
+//     refused a merge: `Refs go-zpkg/pantry-overlay#89, #88` dispositioned
+//     `go-zpkg/zbk#88` — a different issue sharing a number — while
+//     `go-zpkg/pantry-overlay#88`, spelled in full further up the prose, stayed
+//     bare.
+//  3. THE EXEMPTION ALREADY EXISTS. [issuegate.Strip] removes fenced blocks,
+//     HTML comments, inline code spans and URLs, so a keyword inside backticks
+//     is prose. I wrote that there was no such exemption, in this comment,
+//     while the function that provides it was three files away.
 //
-// The comma carries the keyword perfectly well. What it does NOT carry is the
-// REPOSITORY: a bare `#88` resolves to the pull request's OWN repo, so that
-// line dispositioned `go-zpkg/zbk#88` — a different issue that happens to share
-// a number — while `go-zpkg/pantry-overlay#88`, spelled in full further up the
-// prose, stayed bare.
-//
-// A cross-repository trap, not a punctuation one. I had the mechanism backwards
-// and the only thing that corrected it was asking the code that enforces the
-// rule. That is what this command is for.
+// Each correction came from one run of this command, and none of them from
+// reading more carefully.
 //
 // # Judge and subject are the same code
 //
@@ -105,10 +113,19 @@ func rootCmd() (*cobra.Command, *int) {
 body says what happens to that issue — the same question ghmerge asks at merge
 time, asked by the same code, before the pull request exists.
 
-⛔ A bare ` + "`#N`" + ` means THIS repository. ` + "`Refs other/repo#89, #88`" + ` dispositions
-other/repo#89 and this/repo#88 — not other/repo#88 — so a reference to another
-repository has to be spelled in full after the keyword as well. That is what
-refused a merge on 2026-11-09, and the fix is to say the repository twice.
+Three rules, each measured rather than assumed:
+
+  Closes other/repo#1, #2        closes other/repo#1 and leaves #2 BARE — a
+                                 closing keyword governs ONE reference
+  Refs other/repo#1, #2 and #3   keeps all three open: Refs is generous
+                                 because that is the safe answer
+  ` + "`Closes #9`" + ` in backticks         not a reference at all; code spans,
+                                 fenced blocks, HTML comments and URLs are
+                                 stripped before anything is parsed
+
+⛔ And a bare ` + "`#N`" + ` means THIS repository, whatever came before it:
+` + "`Refs other/repo#89, #88`" + ` dispositions other/repo#89 and this/repo#88. Spell the
+repository on every reference that is not ours.
 
 It asks GitHub nothing: whether an issue is open is ghmerge's business, whether
 a reference carries a disposition is text.
