@@ -192,7 +192,15 @@ var corpus = []struct {
 
 	{"the program that does it", "ghissue go-zpkg/zbk 282 --body-file /tmp/r.md", "allow"},
 	{"reading a tracker", "gh issue view 282 --json title,body", "allow"},
-	{"waiting for checks, which is how this fleet waits", "gh pr checks 443 --watch", "allow"},
+	// ⛔⛔ THIS ROW SAID "allow" UNTIL 2026-11-09, described as "how this fleet
+	// waits". It is not how anything waits: measured twice within one hour on
+	// go-zpkg/zbk#447, the watch exited 0 on a run whose `test` lane was red,
+	// then exited 0 on 24 checks still at `conclusion: null`. The rule's own
+	// note calling it "the documented way to wait" is why the mistake kept
+	// happening — using it was compliance.
+	{"the WAITING form, which answers before there is anything to judge",
+		"gh pr checks 443 --watch", "refuse"},
+	{"the one-shot, which claims nothing about the future", "gh pr checks 443", "allow"},
 	{"opening a pull request, the documented form", "gh pr create --title t --body-file /tmp/b.md", "allow"},
 	{"reading the budget", "gh api rate_limit --jq .resources.core", "allow"},
 	// ⭐ A GET of the same path is a read. The rule turns on the METHOD, not on
