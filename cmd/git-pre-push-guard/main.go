@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-gitsafe/gitsafe/bigblob"
 	"github.com/go-gitsafe/gitsafe/gitlink"
 	"github.com/go-gitsafe/gitsafe/protect"
 	"github.com/go-gitsafe/gitsafe/redact"
@@ -55,7 +56,88 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if code := judgeGitlinks(args, refs, stderr); code != 0 {
 		return code
 	}
+	if code := judgeBigBlobs(args, refs, stderr); code != 0 {
+		return code
+	}
 	return chain(args, bytes.NewReader(refs), stdout, stderr)
+}
+
+// judgeBigBlobs refuses a push that would publish a file of [bigblob.Limit]
+// or more, in ANY commit it sends.
+//
+// A 14 MB build binary went up in go-quake1/engine#79 by `git add -A`; the
+// next commit removed it, main received a squash and stayed clean, and the
+// binary is still served from the pull request's head, which GitHub keeps
+// and the owner cannot delete. The tree at the tip had nothing to see: the
+// objects the push sends do. Binaries have no business in the history.
+//
+// The base is what the remote already has: the ref's old value, and every
+// remote-tracking ref of the remote. A repository pushed for the first time
+// has no base, and every large file in it is reported.
+func judgeBigBlobs(args []string, refs []byte, stderr io.Writer) int {
+	if os.Getenv("GITSAFE_ALLOW_BIGBLOB") != "" {
+		return 0
+	}
+	remote := "origin"
+	if len(args) >= 1 && args[0] != "" {
+		remote = args[0]
+	}
+	var found []bigblob.Blob
+	seen := map[string]bool{}
+	for _, u := range protect.Parse(bytes.NewReader(refs)) {
+		if u.Deleting() {
+			continue // a deletion publishes nothing
+		}
+		for _, b := range bigBlobsIn(u, remote) {
+			if !seen[b.SHA] {
+				seen[b.SHA] = true
+				found = append(found, b)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return 0
+	}
+	fmt.Fprintf(stderr, "\ngit: refusing to push — it would publish %d file(s) of %s or more:\n\n", len(found), bigblob.Human(bigblob.Limit))
+	for _, b := range found {
+		fmt.Fprintf(stderr, "      %s\n", b)
+	}
+	fmt.Fprintf(stderr, "\n  Every commit of a push is published, not only the last one: a file\n")
+	fmt.Fprintf(stderr, "  added and then deleted is still in the history, and a pull request's\n")
+	fmt.Fprintf(stderr, "  head keeps it on GitHub for good (the owner cannot delete refs/pull/*).\n")
+	fmt.Fprintf(stderr, "  Build outputs come from `git add -A`; name files instead.\n\n")
+	fmt.Fprintf(stderr, "  Take it out of every commit before pushing, for example:\n")
+	fmt.Fprintf(stderr, "      git rebase -i <base>        # drop or edit the commit that added it\n")
+	fmt.Fprintf(stderr, "      echo /<path> >> .gitignore\n\n")
+	fmt.Fprintf(stderr, "  A large file that really belongs in the history (a corpus, a font),\n")
+	fmt.Fprintf(stderr, "  say so on purpose:\n")
+	fmt.Fprintf(stderr, "      GITSAFE_ALLOW_BIGBLOB=1 gitpush %s ...\n\n", remote)
+	return 1
+}
+
+// bigBlobsIn lists the large blobs one ref update would send. When git cannot
+// say (an unknown sha, no git at all) it says nothing: the other judges and
+// the server still stand.
+func bigBlobsIn(u protect.Update, remote string) []bigblob.Blob {
+	revArgs := []string{"rev-list", "--objects", u.LocalSHA, "--not", "--remotes=" + remote}
+	if !u.Creating() {
+		revArgs = append(revArgs, u.RemoteSHA)
+	}
+	out, err := gitOutput(revArgs...)
+	if err != nil || out == "" {
+		return nil
+	}
+	shas, path := bigblob.Objects(strings.NewReader(out))
+	if len(shas) == 0 {
+		return nil
+	}
+	cmd := exec.Command("git", "cat-file", "--batch-check=%(objecttype) %(objectname) %(objectsize)")
+	cmd.Stdin = strings.NewReader(strings.Join(shas, "\n") + "\n")
+	check, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	return bigblob.Over(bytes.NewReader(check), path, bigblob.Limit)
 }
 
 // judgeBranches refuses a write to the branch pull requests land on.

@@ -567,6 +567,25 @@ Three things go through untouched:
 The refusal names each path and prints the recovery: `git rm -r --cached`, an
 amend, and the `.gitignore` line that stops it coming back.
 
+**A large file, in any commit the push sends.** go-quake1/engine#79 picked up
+a 14 MB build binary through `git add -A`, and the next commit removed it. Main
+received a squash and stayed clean, but the binary is still served from the
+pull request's head: GitHub keeps `refs/pull/*`, and the owner cannot delete
+those refs. A check on the final tree, like CI's "nothing big is tracked",
+cannot see such a file.
+
+The objects a push sends can. The guard runs `git rev-list --objects
+<new> --not <old> --remotes=<remote>`, then `git cat-file --batch-check`, and
+refuses every blob of **1 MiB** or more. The refusal prints the path, the size
+and the blob id.
+
+- **A repository pushed for the first time** has no base, so every large file
+  in it is reported.
+- **When git cannot read the push** (an unknown sha, a deletion), the guard
+  says nothing, and the other judges still apply.
+- **A large file that really belongs in the history**, such as a corpus or a
+  font: put `GITSAFE_ALLOW_BIGBLOB=1` in front of **one** command.
+
 ## Chaining
 
 Setting `core.hooksPath` makes git look **only** there, which would silently
