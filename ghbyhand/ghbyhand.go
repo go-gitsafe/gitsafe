@@ -162,7 +162,7 @@ var rules = []rule{
 	{"run rerun", "re-run a workflow run", "ghrun <owner/repo> rerun <run-id> [--failed]"},
 	{"run cancel", "cancel a workflow run", "ghrun <owner/repo> cancel <run-id>"},
 	{"release create", "create a release",
-		"ghrelease <pr> <tag> to merge and release, or ghrelease --release-only [owner/repo] <tag> for an existing tag"},
+		"ghrelease <pr> <tag> to merge and release (a nested Go module's tag is <dir>/vX.Y.Z), or ghrelease --release-only [owner/repo] <tag> for an existing tag"},
 	{"release edit", "edit a release",
 		"ghrel <owner/repo> <tag> edit [--title T] [--notes-file F]"},
 	{"release upload", "upload a release asset",
