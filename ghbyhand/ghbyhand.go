@@ -55,7 +55,7 @@
 // # What it does NOT refuse, and that half is the point
 //
 //	gh issue list / view               reads: the fleet has no quarrel with them
-//	gh pr checks --watch               a read, and the documented way to wait
+//	gh pr checks 443                   one-shot: a table, claiming nothing ahead
 //	gh pr create --body-file b.md      how a pull request is opened here
 //	gh api rate_limit                  a read, and free
 //	gh api graphql -f query=…          a query is a read even though gh POSTs it
@@ -187,6 +187,49 @@ var rules = []rule{
 		"ghnew -public|-private <name>"},
 }
 
+// waitRules are READS that are allowed in general and refused in their WAITING
+// form. They are not writes, and that is the point: this rule's other rows are
+// about changing GitHub by hand, and these are about a command that answers
+// BEFORE THERE IS ANYTHING TO JUDGE.
+//
+// ⛔⛔ THE COMMENT THIS REPLACES CALLED IT "the documented way to wait", AND
+// THAT SENTENCE IS WHY THE MISTAKE KEPT HAPPENING. `gh pr checks --watch` was
+// in the read list with that note, and the machine's CLAUDE.md prescribed it,
+// so using it was COMPLIANCE rather than carelessness. Measured on
+// go-zpkg/zbk#447, 2026-11-09, twice within one hour on one pull request:
+//
+//	first head    exit 0, and commits/<sha>/check-runs held `failure test`
+//	second head   exit 0, and all 24 checks were still `conclusion: null`
+//
+// The second is the worse one: nothing was wrong, the run was simply not over,
+// and the exit status said it was. Those are the third and fourth recorded
+// occurrences; `gh run watch` has its own, from 2026-10-25, written into
+// prwait's own --help — "it returned three times while the run was still in
+// progress, and each time the conclusion read next did not exist yet".
+//
+// ⛔ ONE-SHOT STAYS A READ. `gh pr checks 443` prints a table and claims
+// nothing about the future, so it is honest and is not refused; only --watch
+// is. A refusal wider than the defect is how a guard earns its false positives
+// (fifteen of them, in this fleet's record).
+//
+// `pr checks` and `run watch` therefore stay in readVerbs below, and this table
+// is consulted FIRST: removing them there would turn a one-shot read into a
+// MissingTool refusal the day somebody deleted a row here.
+var waitRules = []struct {
+	verb    string // the `gh <noun> <verb>` pair
+	flag    string // the flag that turns the read into a wait; "" = the verb always waits
+	act     string
+	instead string
+}{
+	{"pr checks", "--watch", "wait for a pull request's checks",
+		"prwait -repo <owner/repo> <number> — it refuses to call an unfinished " +
+			"or empty list a pass, which is the whole difference"},
+	{"run watch", "", "wait for a workflow run",
+		"prwait -repo <owner/repo> !<run-id> — the sigil says it is a RUN, and a " +
+			"run is judged by the same rule as any other check: not finished is " +
+			"never a pass"},
+}
+
 // MissingTool is what a refusal says when no fleet program does the act. It
 // asks for the tool: the act is not to be typed by hand, and not to be dropped
 // silently either.
@@ -312,6 +355,16 @@ func checkStatement(st string) Finding {
 	// Two words, because every verb in the table is `gh <noun> <verb>`.
 	if len(words) >= 3 {
 		pair := words[1] + " " + words[2]
+		// FIRST, because both of these pairs are in the read list: a one-shot
+		// `gh pr checks` is a read and only its --watch form is refused.
+		for _, w := range waitRules {
+			if w.verb != pair {
+				continue
+			}
+			if w.flag == "" || hasFlag(words, w.flag) {
+				return Finding{Match: short(st), Act: w.act, Instead: w.instead}
+			}
+		}
 		for _, r := range rules {
 			if r.verb == pair {
 				return Finding{Match: short(st), Act: r.act, Instead: r.instead}
@@ -326,6 +379,19 @@ func checkStatement(st string) Finding {
 	}
 	// `gh issue` alone prints the sub-command list: a read.
 	return Finding{}
+}
+
+// hasFlag reports whether words carries flag, in either spelling gh accepts:
+// `--watch` on its own, or `--watch=…`. A prefix match alone would answer yes
+// to `--watchdog`, which is nobody's flag today and is exactly the kind of
+// thing a guard is wrong about for years.
+func hasFlag(words []string, flag string) bool {
+	for _, w := range words {
+		if w == flag || strings.HasPrefix(w, flag+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 // checkAPI covers the raw endpoint. A call that does not write is a read and

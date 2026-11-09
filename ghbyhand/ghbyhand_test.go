@@ -11,6 +11,16 @@ func TestRefuses(t *testing.T) {
 	for _, tc := range []struct {
 		name, cmd, wantInstead string
 	}{
+		// ⛔⛔ THE TWO WAITS, which this rule used to ALLOW with the note "a read,
+		// and the documented way to wait". Each is a read in general and a lie in
+		// its waiting form, measured twice on one pull request on 2026-11-09:
+		// exit 0 on a run whose `test` lane was red, then exit 0 on 24 checks
+		// still at `conclusion: null`.
+		{"pr checks --watch", "gh pr checks 443 --watch --interval 30", "prwait"},
+		{"pr checks --watch with -R before the noun",
+			"gh -R go-webengine/engine pr checks 282 --watch", "prwait"},
+		{"run watch", "gh run watch 42480491136 --exit-status", "prwait"},
+
 		{"issue comment", "gh issue comment 282 --body-file report.md", "ghissue"},
 		{"pr comment", "gh pr comment 443 --body-file note.md", "ghissue"},
 		{"issue close", "gh issue close 282", "ghissue"},
@@ -143,8 +153,12 @@ func TestAllows(t *testing.T) {
 		"gh issue view 282 --json title,body",
 		"gh pr list --state open",
 		"gh pr view 443 --json body",
-		"gh pr checks 443 --watch --interval 30",
-		"gh run watch 42480491136 --exit-status",
+		// ⛔ ONE-SHOT, AND STILL A READ. `gh pr checks` prints a table and claims
+		// nothing about the future; only its --watch form is refused. A refusal
+		// wider than the defect is how a guard earns the false positives that get
+		// it deleted.
+		"gh pr checks 443",
+		"gh pr checks 443 --json name,state",
 		"gh run view --job 128727470929 --log-failed",
 		"gh release view v0.72.0 --json assets",
 		"gh api rate_limit --jq .resources.core",
@@ -182,8 +196,10 @@ func TestAllows(t *testing.T) {
 		"gh --version",
 		"gh issue",
 		// A repository flag BEFORE the noun: 47 runs of the first form in the
-		// record, which guardscan found refused before this shipped.
-		"gh -R go-webengine/engine pr checks 282 --watch",
+		// record, which guardscan found refused before this shipped. The --watch
+		// spelling of it is now in TestRefuses, so this keeps the -R case on a
+		// form that is still a read.
+		"gh -R go-webengine/engine pr checks 282",
 		"gh --repo go-pkgx/pkgx pr view 89 --json statusCheckRollup",
 		"gh --repo=go-pkgx/pkgx release list",
 		"gh -Rgo-pkgx/pkgx run list",
