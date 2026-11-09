@@ -34,6 +34,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
 	"github.com/go-gitsafe/gitsafe/stalebase"
+	"github.com/go-gitsafe/gitsafe/testrun"
 	"github.com/go-gitsafe/gitsafe/volatile"
 	"github.com/spf13/cobra"
 )
@@ -81,7 +82,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, ghbyhand, shellwork, stalebase, volatile)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, ghbyhand, testrun, shellwork, stalebase, volatile)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -136,6 +137,10 @@ func rules(cwd, home, tmpdir string) map[string]func(string) (string, bool) {
 		},
 		"shellwork": func(c string) (string, bool) {
 			f := shellwork.Check(c)
+			return kind(f.Found(), f.Kind)
+		},
+		"testrun": func(c string) (string, bool) {
+			f := testrun.Check(c)
 			return kind(f.Found(), f.Kind)
 		},
 		"stalebase": func(c string) (string, bool) {

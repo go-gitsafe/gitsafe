@@ -41,6 +41,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
 	"github.com/go-gitsafe/gitsafe/stalebase"
+	"github.com/go-gitsafe/gitsafe/testrun"
 	"github.com/go-gitsafe/gitsafe/volatile"
 )
 
@@ -187,6 +188,27 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
 			f.Why(), f.String(), f.Instead, ghbyhand.Advice))
 	}
+	// ⛔⛔ A FILTERED TEST RUN WHOSE FILTER NOBODY CHECKS. `ok` is about the
+	// tests that RAN: on 2026-11-09 `go test -run 'TestREADME|TestUsage|TestMain'`
+	// printed `ok … 0.159s` while `TestREADME` matched nothing, the other two
+	// alternatives matched four tests, and the README gate being checked had not
+	// run at all. Go warns only when the selection is WHOLLY empty, and exits 0
+	// even then. See [testrun].
+	//
+	// ⛔ NO ESCAPE, per the direction recorded in v0.37.1 for [ghbyhand]: the
+	// escape it announced was removed rather than fixed. `gotest` takes the same
+	// arguments and runs the same command, so there is nothing an escape would
+	// buy except the defect.
+	//
+	// Before [shellwork] because it is the specific rule and that one is the
+	// general one — though shellwork does not cover this at all, since
+	// `go test ./...` is invoking a tool and is exactly what it allows.
+	if f := testrun.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
+			f.Why(), f.String(), f.Instead, testrun.Advice))
+	}
+
 	// ⛔ THE INSTRUCTION FILE'S SECOND SECTION, which until now lived only
 	// there: "No awk, sed, shell, python or perl — write the tool in Go …
 	// Bash only invokes tools … no pipes, loops".
