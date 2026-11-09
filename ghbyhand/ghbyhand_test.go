@@ -22,6 +22,31 @@ func TestRefuses(t *testing.T) {
 		{"issue create", "gh issue create --repo go-fde/fde --title t --body-file b.md", "ghissue <owner/repo> --new"},
 		{"api issues collection", "gh api repos/go-fde/fde/issues -f title=t -F body=@b.md", "ghissue <owner/repo> --new"},
 
+		// The programs written because this rule asked for them, one row per
+		// act, each in the spelling the record shows was typed.
+		{"issue edit", "gh issue edit 677 --body-file b.md", "--edit"},
+		{"pr edit", "gh pr edit 17 -R go-notebook/playground --body-file b.md", "ghpr"},
+		{"api PATCH of a pull request", "gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@b.md", "ghpr <owner/repo> <number> edit"},
+		{"pr close", "gh pr close 77 -R go-fft/fft", "ghpr"},
+		{"pr reopen", "gh pr reopen 17 --repo usbarmory/tamago-go", "ghpr"},
+		{"pr ready", "gh pr ready 1 -R go-wasmcontainers/relay", "ghpr"},
+		{"pr update-branch", "gh pr update-branch 815", "ghpr"},
+		{"pr review", "gh pr review 105 --approve --body-file b.md", "ghpr"},
+		{"workflow run", "gh workflow run build.yml -f recipes=x", "ghrun <owner/repo> dispatch"},
+		{"run rerun", "gh run rerun 41853676310 -R go-widgets/window --failed", "ghrun <owner/repo> rerun"},
+		{"run cancel", "gh run cancel 41239533630", "ghrun <owner/repo> cancel"},
+		{"release create", "gh release create v0.40.1 --notes-file n.md", "ghrelease"},
+		{"release edit", "gh release edit v0.11.0 -R go-llmflow/gateway --notes-file n.md", "ghrel"},
+		{"release upload", "gh release upload v0.1.0 -R go-quake1/freepak pak0.pak", "ghrel"},
+		{"release delete", "gh release delete v0.10.0 --repo go-widgets/mvvm --yes", "ghrel"},
+		{"repo fork", "gh repo fork glauth/ldap --org go-authn --clone=false", "ghrepo"},
+		{"repo edit", "gh repo edit go-authn/ldap --description x", "ghrepo"},
+		{"repo rename", "gh repo rename jpeg2000 --repo go-images/go-jpeg2000 --yes", "--confirm"},
+		{"repo archive", "gh repo archive tannevaled/notify --yes", "--confirm"},
+		{"repo delete", "gh repo delete go-ansible/connection --yes", "--confirm"},
+		{"repo sync", "gh repo sync tannevaled/purego --source ebitengine/purego", "ghrepo"},
+		{"secret set", "gh secret set RENOVATE_TOKEN --repo go-docutils/.github", "secret-set"},
+
 		// The two forms actually typed on 2026-11-08. The second carries no
 		// -X at all: a field makes gh POST.
 		{"api comments with a field", "gh api repos/go-zpkg/zbk/issues/282/comments -F body=@r.md", "ghissue"},
@@ -68,22 +93,14 @@ func TestRefuses(t *testing.T) {
 // refused, and the refusal asks for the tool instead of naming one.
 func TestRefusesWhatNoProgramDoes(t *testing.T) {
 	for _, cmd := range []string{
-		// Allowed until this change, as "no program covers it".
-		"gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@b.md",
-		"gh pr edit 443 --body-file b.md",
-		"gh pr close 443",
-		"gh pr review 443 --approve",
-		"gh run rerun 42480491136 --failed",
-		"gh run cancel 42480491136",
-		"gh release create v1.0.0",
-		"gh release delete v1.0.0",
+		// Writes no fleet program does, still (2026-11-09). The ones that
+		// stood here first — pr edit, run rerun, release edit, repo delete… —
+		// now have programs, and moved to TestRefuses.
 		"gh label create bug",
-		"gh issue edit 9 --add-label bug",
 		"gh issue delete 9",
-		"gh repo edit --description x",
-		"gh repo delete go-zpkg/thing",
-		"gh secret set NAME",
-		"gh workflow run ci.yml",
+		"gh issue transfer 9 o/other",
+		"gh run delete 42480491136",
+		"gh secret delete NAME",
 		"gh api -X DELETE repos/o/r/git/refs/heads/x",
 		"gh api repos/o/r/pulls -f title=t -f head=x -f base=main",
 		"gh api rate_limit -F a=b",
@@ -91,8 +108,8 @@ func TestRefusesWhatNoProgramDoes(t *testing.T) {
 		// A verb this rule has never heard of is a write until listed as a read.
 		"gh issue frobnicate 9",
 		// The repository flag before the noun does not hide a write.
-		"gh -R o/r pr edit 4 --body-file b.md",
-		"gh --repo=o/r run rerun 42",
+		"gh -R o/r issue delete 4",
+		"gh --repo=o/r run delete 42",
 	} {
 		f := Check(cmd)
 		if !f.Found() {
@@ -342,6 +359,25 @@ func TestShort(t *testing.T) {
 	got := short(long)
 	if !strings.HasSuffix(got, "…") || len(got) > 80 {
 		t.Errorf("short(long) = %q (len %d)", got, len(got))
+	}
+}
+
+// TestIsPullPath keeps "edit a pull request" to one pull request.
+func TestIsPullPath(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"repos/o/r/pulls/443", true},
+		{"/repos/o/r/pulls/443/", true},
+		{"repos/o/r/pulls", false},
+		{"repos/o/r/pulls/443/reviews", false},
+		{"repos/o/r/issues/443", false},
+		{"", false},
+	} {
+		if got := isPullPath(tc.path); got != tc.want {
+			t.Errorf("isPullPath(%q) = %v, want %v", tc.path, got, tc.want)
+		}
 	}
 }
 

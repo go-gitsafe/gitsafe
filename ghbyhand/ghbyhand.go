@@ -144,6 +144,43 @@ var rules = []rule{
 		"ghissue <owner/repo> <number> --reopen"},
 	{"issue create", "open an issue",
 		"ghissue <owner/repo> --new --title <title> --body-file <file>"},
+	{"issue edit", "edit an issue",
+		"ghissue <owner/repo> <number> --edit [--title T] [--body-file F] [--add-label L] [--remove-label L]"},
+
+	// ⭐ The tools written on 2026-11-08/09 because this rule asked for them:
+	// each act below was refused with MissingTool first (fleettools#211-#214).
+	{"pr edit", "edit a pull request",
+		"ghpr <owner/repo> <number> edit [--title T] [--body-file F]"},
+	{"pr close", "close a pull request", "ghpr <owner/repo> <number> close"},
+	{"pr reopen", "reopen a pull request", "ghpr <owner/repo> <number> reopen"},
+	{"pr ready", "mark a pull request ready for review", "ghpr <owner/repo> <number> ready"},
+	{"pr update-branch", "update a pull request's branch", "ghpr <owner/repo> <number> update-branch"},
+	{"pr review", "review a pull request",
+		"ghpr <owner/repo> <number> review --approve|--comment|--request-changes --body-file <file>"},
+	{"workflow run", "dispatch a workflow",
+		"ghrun <owner/repo> dispatch <workflow> --ref <branch> [--input k=v]"},
+	{"run rerun", "re-run a workflow run", "ghrun <owner/repo> rerun <run-id> [--failed]"},
+	{"run cancel", "cancel a workflow run", "ghrun <owner/repo> cancel <run-id>"},
+	{"release create", "create a release",
+		"ghrelease <pr> <tag> to merge and release, or ghrelease --release-only [owner/repo] <tag> for an existing tag"},
+	{"release edit", "edit a release",
+		"ghrel <owner/repo> <tag> edit [--title T] [--notes-file F]"},
+	{"release upload", "upload a release asset",
+		"ghrel <owner/repo> <tag> upload <file>... [--clobber]"},
+	{"release delete", "delete a release",
+		"ghrel <owner/repo> <tag> delete --confirm <tag>"},
+	{"repo fork", "fork a repository", "ghrepo <owner/repo> fork [--org O] [--name N]"},
+	{"repo edit", "edit a repository's settings",
+		"ghrepo <owner/repo> edit [--description D | --description-file F] [--homepage U] [--topic T]"},
+	{"repo rename", "rename a repository",
+		"ghrepo <owner/repo> rename <new-name> --confirm <owner/repo>"},
+	{"repo archive", "archive a repository",
+		"ghrepo <owner/repo> archive --confirm <owner/repo>"},
+	{"repo delete", "delete a repository",
+		"ghrepo <owner/repo> delete --confirm <owner/repo>"},
+	{"repo sync", "sync a fork with its upstream", "ghrepo <owner/repo> sync [--branch B]"},
+	{"secret set", "set an Actions secret",
+		"ghrepo <owner/repo> secret-set <NAME> --value-file <0600 file>"},
 	{"pr merge", "merge a pull request",
 		"ghmerge <number>, or ghrelease <number> <tag> to merge and tag it"},
 	{"repo create", "create a repository",
@@ -337,6 +374,14 @@ func checkAPI(st string, words []string) Finding {
 			Act:     "open an issue",
 			Instead: "ghissue <owner/repo> --new --title <title> --body-file <file>",
 		}
+	case isPullPath(path):
+		// The PATCH of a pull request body: 1 737 runs of `gh api` writes in
+		// the record, most of them this one.
+		return Finding{
+			Match:   short(st),
+			Act:     "edit a pull request",
+			Instead: "ghpr <owner/repo> <number> edit [--title T] [--body-file F]",
+		}
 	}
 	return missing(st, "write to the GitHub API")
 }
@@ -357,6 +402,13 @@ func dropGlobalRepo(words []string) []string {
 		return append([]string{words[0]}, words[2:]...)
 	}
 	return words
+}
+
+// isPullPath reports whether the path is one pull request, the endpoint its
+// title and body are edited at.
+func isPullPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && parts[0] == "repos" && parts[3] == "pulls" && parts[4] != ""
 }
 
 // isIssuesCollection reports whether the path is a repository's issue

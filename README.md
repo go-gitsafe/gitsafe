@@ -1538,12 +1538,30 @@ refusal, and a row to add to `readVerbs`.
 
 `guardscan --rule ghbyhand` over the whole record (496 527 commands) is what
 found the `-R` form and the local-config commands before this shipped. What it
-still refuses there are real writes with no program yet, by number of runs:
+still refused there were real writes with no program, by number of runs:
 `gh workflow run` (768), `gh run rerun` (745), `gh release create` (509), `gh pr
 edit` and `gh api -X PATCH …/pulls/<n>` (437 + part of 1 737), `gh pr close`
 (188), `gh run cancel`, `gh issue edit`, `gh pr update-branch`, `gh release
 edit`, `gh pr ready`, `gh repo fork`, `gh secret set`, `gh repo edit`, `gh pr
-review`. Each is a program to write, not a command to type.
+review`. Each was a program to write, not a command to type — and the operator's
+rule is exactly that: *"si un outil manque à la flotte, on l'ajoute"*. They were
+written the next day in go-fleettools/fleettools, and the refusal now names them:
+
+```
+gh issue edit                        →  ghissue <o/r> <n> --edit …
+gh pr edit|close|reopen|ready|
+   update-branch|review, api PATCH
+   …/pulls/<n>                       →  ghpr <o/r> <n> <verb> …
+gh workflow run / run rerun|cancel   →  ghrun <o/r> dispatch|rerun|cancel …
+gh release create                    →  ghrelease (it creates; --release-only for a tag)
+gh release edit|upload|delete        →  ghrel <o/r> <tag> edit|upload|delete …
+gh repo fork|edit|rename|archive|
+   delete|sync, gh secret set        →  ghrepo <o/r> <verb> …   (destructive verbs need --confirm)
+```
+
+What is left with no program — `gh issue delete|transfer`, `gh label create`,
+`gh run delete`, `gh secret delete`, raw `gh api` writes elsewhere — is still
+refused with the request for one.
 
 ⛔ Two details were measured rather than assumed. A write needs no `-X`: `gh api
 <path> -F body=@file` is a POST because a field was given, which is the form

@@ -63,7 +63,7 @@ func TestGHByHandNamesTheProgramOrAsksForOne(t *testing.T) {
 	}{
 		{"gh issue create --repo o/r --title t --body-file b.md",
 			[]string{"Use instead:", "ghissue <owner/repo> --new"}, "no fleet program"},
-		{"gh run rerun 42 --failed",
+		{"gh issue delete 42",
 			[]string{"no fleet program does that act yet", "There is no program to use instead", "ask for a program"}, "Use instead:"},
 	} {
 		out, _ := drive(t, `{"tool_input":{"command":"`+tc.cmd+`"}}`)
