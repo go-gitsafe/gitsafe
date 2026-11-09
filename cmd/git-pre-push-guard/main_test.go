@@ -239,6 +239,90 @@ func TestRefusesAnUndeclaredNestedRepository(t *testing.T) {
 	}
 }
 
+// go-quake1/engine#79: a build binary committed by `git add -A`, removed by
+// the next commit. The tip is clean; the push still sends it, so it is refused.
+func TestRefusesALargeFileEvenWhenALaterCommitDeletesIt(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "README.md")
+	gitIn(t, dir, "commit", "-qm", "first")
+	base := gitIn(t, dir, "rev-parse", "HEAD")
+
+	big := make([]byte, 2<<20)
+	for i := range big {
+		big[i] = byte(i * 7) // not all zeros, so nothing compresses it away
+	}
+	if err := os.WriteFile(filepath.Join(dir, "quake-wasmbox"), big, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "E2 (with the build output by mistake)")
+	gitIn(t, dir, "rm", "-q", "quake-wasmbox")
+	gitIn(t, dir, "commit", "-qm", "remove the binary")
+	tip := gitIn(t, dir, "rev-parse", "HEAD")
+	if out := gitIn(t, dir, "ls-tree", "-r", "--name-only", tip); strings.Contains(out, "quake-wasmbox") {
+		t.Fatalf("the tip still holds it; the test does not test what it says:\n%s", out)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	refs := "refs/heads/work " + tip + " refs/heads/work " + base + "\n"
+	var errb bytes.Buffer
+	if code := judgeBigBlobs([]string{"origin"}, []byte(refs), &errb); code != 1 {
+		t.Fatalf("exit %d, want 1 — the deleted binary was not refused:\n%s", code, errb.String())
+	}
+	for _, want := range []string{"quake-wasmbox", "2.0 MiB", "GITSAFE_ALLOW_BIGBLOB", "refs/pull"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, errb.String())
+		}
+	}
+	// A creation (no remote value) is judged too.
+	created := "refs/heads/work " + tip + " refs/heads/work 0000000000000000000000000000000000000000\n"
+	var errc bytes.Buffer
+	if code := judgeBigBlobs([]string{"origin"}, []byte(created), &errc); code != 1 {
+		t.Errorf("a new branch carrying it: exit %d, want 1:\n%s", code, errc.String())
+	}
+
+	// From the binary's removal onward, nothing large is sent: let it through.
+	removal := gitIn(t, dir, "rev-parse", "HEAD~1")
+	clean := "refs/heads/work " + tip + " refs/heads/work " + removal + "\n"
+	var errd bytes.Buffer
+	if code := judgeBigBlobs([]string{"origin"}, []byte(clean), &errd); code != 0 {
+		t.Errorf("a push sending only the removal: exit %d:\n%s", code, errd.String())
+	}
+
+	t.Setenv("GITSAFE_ALLOW_BIGBLOB", "1")
+	var erre bytes.Buffer
+	if code := judgeBigBlobs([]string{"origin"}, []byte(refs), &erre); code != 0 {
+		t.Errorf("GITSAFE_ALLOW_BIGBLOB did not let it through: %s", erre.String())
+	}
+}
+
+// What git cannot read, and a deletion, are not refused by this judge.
+func TestBigBlobGuardIgnoresWhatItShould(t *testing.T) {
+	const zero = "0000000000000000000000000000000000000000"
+	for name, refs := range map[string]string{
+		"a deletion":        "(delete) " + zero + " refs/heads/gone bbbb\n",
+		"an unreadable sha": "refs/heads/x notasha refs/heads/x alsonot\n",
+		"nothing at all":    "",
+	} {
+		var errb bytes.Buffer
+		if code := judgeBigBlobs([]string{"origin"}, []byte(refs), &errb); code != 0 {
+			t.Errorf("%s: exit %d, want 0:\n%s", name, code, errb.String())
+		}
+	}
+}
+
 // The push that changes nothing of the kind is not the guard's business, and a
 // deletion has no commit to read at all.
 func TestGitlinkGuardIgnoresWhatItShould(t *testing.T) {
