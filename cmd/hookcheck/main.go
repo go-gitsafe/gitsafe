@@ -239,6 +239,23 @@ var corpus = []struct {
 	// `tail` reads to the end so the build finishes, a file can be read again
 	// for free, and a read-only producer abandons nothing.
 	{"harmless", "go test ./...", "allow"},
+
+	// ⛔⛔ THE FILTERED RUN WHOSE FILTER NOBODY CHECKS. `ok` is about the tests
+	// that RAN: on 2026-11-09 `go test -run 'TestREADME|TestUsage|TestMain'`
+	// printed `ok … 0.159s` while TestREADME matched nothing, the other two
+	// alternatives matched four tests, and the README gate being checked had not
+	// run at all. Go warns only when the selection is WHOLLY empty, and exits 0
+	// even then.
+	{"a filtered run, whose filter nobody checks", "go test -run TestFoo ./pkg", "refuse"},
+	{"the same, with the equals spelling", "go test -run=TestFoo ./pkg", "refuse"},
+	{"the compiled binary's spelling", "go test -test.run=TestFoo", "refuse"},
+	// ⛔ And the three halves that decide whether the rule survives: an
+	// unfiltered run is the overwhelming majority and is untouched, the wrapper
+	// that DOES check is allowed, and asking what it does is not doing it.
+	{"an unfiltered run, which cannot have an alternative that missed",
+		"go test -count=1 -race ./cmd/zbk", "allow"},
+	{"the program that checks the filter", "gotest -run TestFoo ./pkg", "allow"},
+	{"asking a filtered run what it does", "go test -run TestFoo --help", "allow"},
 }
 
 // Split so that writing this file is not itself a forbidden command — the
