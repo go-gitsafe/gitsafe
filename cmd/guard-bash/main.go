@@ -39,9 +39,9 @@ import (
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
-	"github.com/go-gitsafe/gitsafe/testrun"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
 	"github.com/go-gitsafe/gitsafe/stalebase"
+	"github.com/go-gitsafe/gitsafe/testrun"
 	"github.com/go-gitsafe/gitsafe/volatile"
 )
 
