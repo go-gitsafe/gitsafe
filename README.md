@@ -499,6 +499,7 @@ go install github.com/go-gitsafe/gitsafe/cmd/hookcheck@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glci@latest
 go install github.com/go-gitsafe/gitsafe/cmd/guardscan@latest
+go install github.com/go-gitsafe/gitsafe/cmd/prbody@latest
 
 which -a gitpush ghrelease git-credential-tokenfile   # one path each, the one you meant
 ```
