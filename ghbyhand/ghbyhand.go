@@ -448,8 +448,23 @@ func checkAPI(st string, words []string) Finding {
 			Act:     "edit a pull request",
 			Instead: "ghpr <owner/repo> <number> edit [--title T] [--body-file F]",
 		}
+	case isPagesPath(path):
+		// A *.github.io repository starts as a "legacy" Pages site; a workflow
+		// that builds the content needs "workflow", set once (fleettools#238).
+		return Finding{
+			Match:   short(st),
+			Act:     "change a repository's GitHub Pages site",
+			Instead: "ghrepo <owner/repo> pages workflow",
+		}
 	}
 	return missing(st, "write to the GitHub API")
+}
+
+// isPagesPath reports whether the path is a repository's Pages site, the
+// endpoint its build type is set at.
+func isPagesPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 4 && parts[0] == "repos" && parts[3] == "pages"
 }
 
 // dropGlobalRepo removes a repository flag written BEFORE the noun —

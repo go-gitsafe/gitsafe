@@ -39,6 +39,8 @@ func TestRefuses(t *testing.T) {
 		{"issue edit", "gh issue edit 677 --body-file b.md", "--edit"},
 		{"pr edit", "gh pr edit 17 -R go-notebook/playground --body-file b.md", "ghpr"},
 		{"api PATCH of a pull request", "gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@b.md", "ghpr <owner/repo> <number> edit"},
+		{"api PUT of a pages site", "gh api -X PUT repos/go-slides-usercontent/go-slides-usercontent.github.io/pages -f build_type=workflow", "ghrepo <owner/repo> pages workflow"},
+		{"api POST creating a pages site", "gh api repos/o/r/pages -f build_type=workflow", "ghrepo <owner/repo> pages workflow"},
 		{"pr close", "gh pr close 77 -R go-fft/fft", "ghpr"},
 		{"pr reopen", "gh pr reopen 17 --repo usbarmory/tamago-go", "ghpr"},
 		{"pr ready", "gh pr ready 1 -R go-wasmcontainers/relay", "ghpr"},
