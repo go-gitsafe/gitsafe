@@ -34,6 +34,7 @@ import (
 	"os"
 
 	"github.com/go-gitsafe/gitsafe/bypass"
+	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/ghbyhand"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
@@ -207,6 +208,23 @@ func run(stdin io.Reader, stdout io.Writer) int {
 		return deny(stdout, fmt.Sprintf(
 			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
 			f.Why(), f.String(), f.Instead, testrun.Advice))
+	}
+
+	// ⛔⛔ A GATE AND THE WRITE IT GATES, IN ONE COMMAND LINE. See [chainedgate].
+	//
+	// This one is not about forgetting to run the check. The check RAN, printed
+	// its refusal, and the pull request was created by the next word on the same
+	// line — three times on 2026-11-09 and 2026-11-10, twice with the refusal
+	// read and acted on one command too late. A `;` leaves no moment in which a
+	// verdict can change anything.
+	//
+	// ⛔ `&&` IS ALLOWED, and that is what makes this a rule rather than an
+	// obstacle: it is the spelling in which the shell itself enforces the
+	// verdict. A rule with no correct form gets routed around.
+	if f := chainedgate.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
+			f.Why(), f.String(), f.Instead, chainedgate.Advice))
 	}
 
 	// ⛔ THE INSTRUCTION FILE'S SECOND SECTION, which until now lived only
