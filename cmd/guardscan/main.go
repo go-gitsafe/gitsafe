@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/go-gitsafe/gitsafe/bypass"
+	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/ghbyhand"
@@ -82,7 +83,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, ghbyhand, testrun, shellwork, stalebase, volatile)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, ghbyhand, testrun, chainedgate, shellwork, stalebase, volatile)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -142,6 +143,10 @@ func rules(cwd, home, tmpdir string) map[string]func(string) (string, bool) {
 		"testrun": func(c string) (string, bool) {
 			f := testrun.Check(c)
 			return kind(f.Found(), f.Kind)
+		},
+		"chainedgate": func(c string) (string, bool) {
+			f := chainedgate.Check(c)
+			return kind(f.Found(), f.Gate+" chained with "+f.Write)
 		},
 		"stalebase": func(c string) (string, bool) {
 			f := stalebase.Check(c)
