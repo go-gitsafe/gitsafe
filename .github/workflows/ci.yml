@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.3' }
+        with: { go-version: '1.27.4' }
       # ⛔ SAY WHICH TOOLCHAIN RAN. A green check that does not record the
       # compiler behind it makes every figure measured under it unattributable:
       # go.mod said 1.26 on a sibling repository for weeks while its CI asked
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.3' }
+        with: { go-version: '1.27.4' }
       - run: go version
       - run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 45s ${{ matrix.pkg }}
 
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.3' }
+        with: { go-version: '1.27.4' }
       - run: go version
       # ⛔ WHY THIS REPOSITORY OF ALL OF THEM. gitsafe is what the fleet trusts
       # to keep a credential out of a URL, and it had no lane asking whether
@@ -148,7 +148,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.3' }
+        with: { go-version: '1.27.4' }
       # ⛔ SAY WHICH TOOLCHAIN RAN. A green check that does not record the
       # compiler behind it makes every figure measured under it unattributable:
       # go.mod said 1.26 on a sibling repository for weeks while its CI asked
