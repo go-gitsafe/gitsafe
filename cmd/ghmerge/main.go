@@ -127,7 +127,8 @@ func RootCmd() *cobra.Command {
 	}
 	f := c.Flags()
 	f.BoolVar(&o.squash, "squash", true, "squash the commits into one")
-	f.BoolVar(&o.del, "delete-branch", true, "delete the head branch after merging")
+	f.BoolVar(&o.del, "delete-branch", true, "delete the head branch after merging, after retargeting every open pull request "+
+		"based on it onto this one's base (GitHub would close them); a retarget that fails keeps the branch and exits 4")
 	f.StringVar(&o.tokenFile, "token-file", "", "the file holding the token (default ~/"+defaultToken+")")
 	f.DurationVar(&o.wait, "wait", 0,
 		"spend up to this long waiting out a refusal GitHub said to wait out (0: refuse at once)")
@@ -327,6 +328,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	// The issues this body closes must be closed now, by GitHub or by us. The
 	// exit status is decided at the end, so the branch is still tidied.
 	unclosed := issuesAfterMerge(gh, verdict, repo, number, mergeSHA, stdout, stderr)
+	retargetFailed := false
 	if *del {
 		// ⛔ The head branch of a pull request from a FORK lives in the
 		// contributor's repository, not this one. Deleting it is not this
@@ -342,6 +344,10 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "the head repository is gone, so there is no branch to delete\n")
 		case !strings.EqualFold(head, repo):
 			fmt.Fprintf(stdout, "branch %s left alone: it is in %s, not %s\n", pr.Head.Ref, head, repo)
+		case !retargetStacked(token, repo, pr.Head.Ref, pr.Base.Ref, stdout, stderr):
+			// ⛔ Deleting a branch closes every open pull request based on
+			// it. They were not all moved, so the branch stays.
+			retargetFailed = true
 		default:
 			gone, err := deleteBranch(token, repo, pr.Head.Ref)
 			switch {
@@ -359,6 +365,9 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "branch %s was already gone\n", pr.Head.Ref)
 			}
 		}
+	}
+	if retargetFailed {
+		return exitRetargetFailed
 	}
 	if unclosed > 0 {
 		return exitIssueNotClosed
@@ -565,6 +574,11 @@ type pr struct {
 			FullName string `json:"full_name"`
 		} `json:"repo"`
 	} `json:"head"`
+	// Base is where it would land, and where a pull request stacked on this
+	// one's head branch is moved once this one is merged.
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 }
 
 type checkRun struct {
