@@ -64,6 +64,8 @@ func (f *waiveFake) serve(t *testing.T) {
 			f.events = append(f.events, "merge")
 			w.WriteHeader(f.mergeStatus)
 			fmt.Fprint(w, `{"merged":true}`)
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.Contains(p, "/check-runs"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"total_count": len(f.runs), "check_runs": f.runs})
 		case strings.Contains(p, "/actions/runs"):

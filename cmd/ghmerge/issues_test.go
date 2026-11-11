@@ -41,6 +41,8 @@ func (h *hub) serve(t *testing.T) {
 		}
 		parts := strings.Split(strings.TrimPrefix(p, "/repos/"), "/")
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(p, "/merge"):
 			h.merged = true
 			for k := range h.autoShut {

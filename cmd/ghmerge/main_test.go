@@ -43,6 +43,8 @@ func server(t *testing.T, prBody map[string]any, runs []map[string]any, sts ...m
 	m, d := false, false
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			m = true
 			w.WriteHeader(http.StatusOK)
@@ -330,6 +332,8 @@ func TestABranchLeftBehindIsNotAFailure(t *testing.T) {
 	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			fmt.Fprint(w, `{"merged":true}`)
 		case strings.Contains(r.URL.Path, "/check-runs"):
@@ -524,6 +528,8 @@ func TestNullMergeableIsWaitedOutNotMergedThrough(t *testing.T) {
 	merged := false
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			merged = true
 			fmt.Fprint(w, `{"merged":true}`)
@@ -772,6 +778,8 @@ func TestASecondPageIsRead(t *testing.T) {
 	merged := false
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			merged = true
 			fmt.Fprint(w, `{"merged":true}`)
@@ -948,6 +956,8 @@ func TestWaitingOutARefusalGitHubSaidToWaitOut(t *testing.T) {
 			refusals, merged := 0, false
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
+				case isStackedList(r):
+					fmt.Fprint(w, "[]")
 				case strings.HasSuffix(r.URL.Path, "/merge"):
 					if refusals == 0 {
 						refusals++
@@ -1025,6 +1035,8 @@ func TestAResetAlreadyPassedStillWaitsAMinute(t *testing.T) {
 	refusals := 0
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			if refusals == 0 {
 				refusals++
@@ -1085,6 +1097,8 @@ func TestAHostClockAnHourOffDoesNotChangeTheWait(t *testing.T) {
 	refusals := 0
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			if refusals == 0 {
 				refusals++
@@ -1183,6 +1197,8 @@ func TestAnAbsentBranchIsNotReportedAsDeleted(t *testing.T) {
 	runs := []map[string]any{{"name": "test", "status": "completed", "conclusion": "success"}}
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			fmt.Fprint(w, `{"merged":true}`)
 		case strings.Contains(r.URL.Path, "/check-runs"):
@@ -1295,6 +1311,8 @@ func TestTheGreenPathAsksForNoWorkflowRuns(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/actions/runs"):
 			asked = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []any{}})
+		case isStackedList(r):
+			fmt.Fprint(w, "[]")
 		case strings.HasSuffix(r.URL.Path, "/merge"):
 			fmt.Fprint(w, `{"merged":true}`)
 		case strings.Contains(r.URL.Path, "/check-runs"):
