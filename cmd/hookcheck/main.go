@@ -201,7 +201,22 @@ var corpus = []struct {
 	{"the WAITING form, which answers before there is anything to judge",
 		"gh pr checks 443 --watch", "refuse"},
 	{"the one-shot, which claims nothing about the future", "gh pr checks 443", "allow"},
-	{"opening a pull request, the documented form", "gh pr create --title t --body-file /tmp/b.md", "allow"},
+	// ⛔ THESE FOUR ROWS SAID "allow" (the first) UNTIL 2026-11-12: `gh pr create`
+	// was the one write left as plain gh, and nothing made the checks on its body
+	// run. Five agent-written pull requests were refused by ghmerge for a bare
+	// issue reference, each fixed by hand at the last step (gitsafe#113). It is
+	// allowed only behind prbody AND paritycheck text on the SAME file, joined
+	// by `&&`.
+	{"opening a pull request behind both checks",
+		"prbody /tmp/b.md --repo go-zpkg/zbk && paritycheck text /tmp/b.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "allow"},
+	{"opening a pull request with neither check",
+		"gh pr create --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request with only prbody",
+		"prbody /tmp/b.md --repo go-zpkg/zbk && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request with only paritycheck",
+		"paritycheck text /tmp/b.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request, the checks run on ANOTHER file",
+		"prbody /tmp/a.md --repo go-zpkg/zbk && paritycheck text /tmp/a.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
 	{"reading the budget", "gh api rate_limit --jq .resources.core", "allow"},
 	// ⭐ A GET of the same path is a read. The rule turns on the METHOD, not on
 	// the endpoint, and a row for it is how that stays a decision.

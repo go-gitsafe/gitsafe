@@ -139,3 +139,44 @@ func TestUnreadableInputIsNoOpinion(t *testing.T) {
 		}
 	}
 }
+
+// ⛔ gh pr create from a body file is refused unless prbody AND paritycheck text
+// ran on it first, `&&`-joined, and the refusal gives the line to type
+// (gitsafe#113).
+func TestPRCreateNeedsBothChecks(t *testing.T) {
+	const create = `gh pr create --repo o/r --title t --body-file /tmp/b.md`
+	for name, tc := range map[string]struct {
+		cmd  string
+		deny bool
+	}{
+		"both checks":      {`prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && ` + create, false},
+		"neither":          {create, true},
+		"only prbody":      {`prbody /tmp/b.md --repo o/r && ` + create, true},
+		"only paritycheck": {`paritycheck text /tmp/b.md && ` + create, true},
+	} {
+		out, code := drive(t, `{"tool_input":{"command":`+jsonString(tc.cmd)+`}}`)
+		if code != 0 {
+			t.Errorf("%s: exit %d", name, code)
+		}
+		if !tc.deny {
+			if out != "" {
+				t.Errorf("%s: refused: %s", name, out)
+			}
+			continue
+		}
+		var d decision
+		if err := json.Unmarshal([]byte(out), &d); err != nil {
+			t.Fatalf("%s: not a decision: %v\n%s", name, err, out)
+		}
+		reason := d.HookSpecificOutput.PermissionDecisionReason
+		want := `prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && ` + create
+		if d.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(reason, "Type this instead: "+want) {
+			t.Errorf("%s: decision %q, reason:\n%s", name, d.HookSpecificOutput.PermissionDecision, reason)
+		}
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
