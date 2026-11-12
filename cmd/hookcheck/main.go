@@ -256,6 +256,29 @@ var corpus = []struct {
 		"go test -count=1 -race ./cmd/zbk", "allow"},
 	{"the program that checks the filter", "gotest -run TestFoo ./pkg", "allow"},
 	{"asking a filtered run what it does", "go test -run TestFoo --help", "allow"},
+
+	// ⛔ THE NEWEST RULE AGAIN, and the comment above the volatile rows is the
+	// reason these exist on the day `literaltick` shipped rather than after the
+	// next recount: "right on all N" is a verdict about this table, not about
+	// the guard, and the rule with the freshest scar is the one most likely to
+	// be outside it.
+	//
+	// The scar: three mangled `agentsync tell` messages in one session
+	// (2026-11-07/08), the third inside a message explaining the first two. The
+	// shell ran what was between the backticks, spliced the output into the
+	// text, and the tool answered success.
+	{"prose backticks in a double-quoted message", `agentsync tell peer "the eighth was ` + tick + `brandcheck -org` + tick + ` in brand-complete.yml"`, "refuse"},
+	{"a commit message typed inline", `git commit -m "see ` + tick + `gopin --help` + tick + `"`, "refuse"},
+	{"bare, outside quotes", "echo " + tick + "date" + tick, "refuse"},
+	// ⛔ A single quote inside double quotes is an APOSTROPHE, not quoting, so
+	// the substitution still runs. Measured against sh rather than reasoned:
+	// `echo "see '`+tick+`echo RAN`+tick+`'"` prints `see 'RAN'`.
+	{"single quotes inside double quotes do not quote", `foo --note "see '` + tick + `x` + tick + `'"`, "refuse"},
+
+	{"single quotes, which stop the shell dead", `agentsync tell peer 'the eighth was ` + tick + `brandcheck -org` + tick + ` here'`, "allow"},
+	{"the modern substitution form", `vulngate --go "$(go env GOVERSION)" /tmp/vuln.json`, "allow"},
+	{"an escaped backtick is literal", `echo "cost \` + tick + `x\` + tick + ` dollars"`, "allow"},
+	{"the escape, which is an act", "GITSAFE_ALLOW_BACKTICK=1 echo " + tick + "date" + tick, "allow"},
 }
 
 // backgroundCorpus is asked with run_in_background set, because the
@@ -294,6 +317,10 @@ func allCases() []testCase {
 // Split so that writing this file is not itself a forbidden command — the
 // guard reads the text of what runs, and a literal here would be one.
 var (
+	// tick is the backtick, built rather than typed: this file's own text is
+	// read by the guard in the hook test below, and a literal one here would be
+	// the very thing literaltick refuses.
+	tick     = "`"
 	ghp      = "gh" + "p_0123456789abcdefghijklmnopqrstuvwxyz"
 	glpat    = "glpat-" + "0123456789abcdefghij"
 	bare     = "AABF3JGZDX3P5PMEXLND6TS6FCWO6"

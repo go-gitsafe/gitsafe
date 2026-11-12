@@ -37,6 +37,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/ghbyhand"
+	"github.com/go-gitsafe/gitsafe/literaltick"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
@@ -236,6 +237,27 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			f.Why(), f.String(), f.Instead, chainedgate.Advice))
 	}
 
+	// ⛔ A backtick is a code fence to every reader and a command substitution
+	// to the shell, and the collision is silent: the words are gone, the
+	// substituted command RAN, and the tool that received the text answered
+	// success. An `agentsync tell` whose message quoted two command names in
+	// backticks did exactly that three times in one session on 2026-11-07/08 —
+	// the third time inside a message explaining the first two. The lesson was
+	// written down after the first and recurred twice, which is this fleet's
+	// test for when a note has to become a refusal. See [literaltick].
+	//
+	// ⛔ NO os.Getenv WRAPPER, for the reason [ghbyhand] records above: this
+	// hook runs BEFORE any shell, so an escape typed in front of the command
+	// has not been assigned to anything when the guard reads it. The first
+	// version of this rule wrapped it in os.Getenv and its corpus row passed
+	// anyway — against an installed binary that did not have the rule at all,
+	// which is a row passing for the wrong reason. The escape is read from the
+	// command's own text, the way [volatile] and [bypass] read theirs.
+	if f := literaltick.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\n%s",
+			f.Why(), f.String(), literaltick.Advice))
+	}
 	// ⛔ THE INSTRUCTION FILE'S SECOND SECTION, which until now lived only
 	// there: "No awk, sed, shell, python or perl — write the tool in Go …
 	// Bash only invokes tools … no pipes, loops".

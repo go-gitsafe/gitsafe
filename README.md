@@ -1439,6 +1439,62 @@ heredoc whose tag is quoted is never expanded, so a commit message or a note tha
 quotes it goes through. `GITSAFE_ALLOW_DISCARD=1` in front of one command is the
 deliberate way past.
 
+## A backtick the shell evaluates where prose was meant
+
+`guard-bash` refuses a backtick the shell would run, and the reason is that a
+backtick means two different things to two different readers. To anybody reading
+a sentence it is a code fence. To the shell it is a command substitution. The two
+collide in exactly one place — prose typed into a command — and the collision is
+**silent**: the text is sent, the tool answers success, and the words are gone.
+
+Measured on this fleet, in one session, three times:
+
+```
+agentsync tell peer "the eighth was `brandcheck -org` in brand-complete.yml"
+```
+
+The shell ran `brandcheck -org`, spliced its usage error into the message, and
+`agentsync` answered `told … 0` — because storing a string always succeeds. Two
+handovers reached their peers mangled and two commands that were never meant to
+run, ran. **The third occurrence was inside a message explaining the first two.**
+
+⛔ The lesson was written down after the first one and recurred twice, which is
+this fleet's own test for when a note has to become a refusal: before the spend,
+not after it.
+
+The rule is narrow because the question is decidable. A backtick inside **single**
+quotes is literal and allowed; a backtick anywhere else — bare, or inside
+**double** quotes — is a substitution and refused. Double quotes do not stop one,
+which is the half that surprises people, and `shellcmd.InsideQuotes` already knew
+it.
+
+⛔ And a single quote inside double quotes is an **apostrophe**, not quoting, so
+`"see '`+"`x`"+`'"` still substitutes. That one was in the allow table until `sh`
+was asked:
+
+```
+$ sh -c 'echo "see '"'"'`echo RAN`'"'"'"'
+see 'RAN'
+```
+
+The rule was right and the test case was wrong, which is the only way round that
+costs nothing to find.
+
+What it allows, which is the half that keeps a guard from being worked around:
+single quotes (`'…`x`…'`), prose in a file (`git commit -F msg.txt`,
+`gh pr create --body-file b.md`), the modern `$(…)` form, an escaped `` \` ``, and
+a quoted heredoc. `GITSAFE_ALLOW_BACKTICK=1` in front of one command is the
+escape, for a deliberate substitution typed in the old form — though `$(…)` is
+the one-character answer to almost all of that, and it cannot be mistaken for a
+code fence by a reader, which is the whole reason the old form is a trap.
+
+It does **not** try to know intent. "Code fence or substitution?" is not
+answerable from the text, so it refuses every backtick the shell would evaluate,
+including a deliberate one. The trade is cheap in the direction that matters: a
+deliberate substitution rewrites to `$(…)` and is better for it, while a code
+fence that slipped through is a message whose words are gone and whose tool said
+success.
+
 ## Working trees in directories that are emptied
 
 `guard-bash` refuses a command that would make a git working tree, or commit to

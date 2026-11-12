@@ -29,6 +29,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/ghbyhand"
+	"github.com/go-gitsafe/gitsafe/literaltick"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/redact"
 	"github.com/go-gitsafe/gitsafe/secretarg"
@@ -83,7 +84,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, ghbyhand, testrun, chainedgate, shellwork, stalebase, volatile)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, ghbyhand, testrun, chainedgate, shellwork, stalebase, volatile)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -135,6 +136,12 @@ func rules(cwd, home, tmpdir string) map[string]func(string) (string, bool) {
 		"ghbyhand": func(c string) (string, bool) {
 			f := ghbyhand.Check(c)
 			return kind(f.Found(), f.Act)
+		},
+		// Same gate, same reason — and this one's false refusals are the ones
+		// to count, since it refuses a character rather than a command shape.
+		"literaltick": func(c string) (string, bool) {
+			f := literaltick.Check(c)
+			return kind(f.Found(), "a backtick the shell would evaluate")
 		},
 		"shellwork": func(c string) (string, bool) {
 			f := shellwork.Check(c)
