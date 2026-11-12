@@ -52,7 +52,8 @@ type payload struct {
 	// every event.
 	Cwd       string `json:"cwd"`
 	ToolInput struct {
-		Command string `json:"command"`
+		Command         string `json:"command"`
+		RunInBackground bool   `json:"run_in_background"`
 	} `json:"tool_input"`
 }
 
@@ -116,6 +117,14 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s — %s.\n\nIt matched %s\n\n%s",
 				f.Dir, f.Why, f.Match, volatile.Advice))
+		}
+		// ⛔ A BACKGROUND COMMAND'S OUTPUT, the sixth scratchpad loss: on
+		// 2026-11-11 a 64-minute `gotest … > <scratchpad>/probe.txt 2>&1` lost
+		// its log when the session restarted. Foreground files stay allowed.
+		if f := volatile.CheckRedirect(p.ToolInput.Command, p.Cwd, os.Getenv("HOME"), os.Getenv("TMPDIR"), p.ToolInput.RunInBackground); f.Found() {
+			return deny(stdout, fmt.Sprintf(
+				"Refused (volatile redirect): %s — %s.\n\nIt matched %s\n\n%s",
+				f.Dir, f.Why, f.Match, volatile.RedirectAdvice))
 		}
 	}
 	// ⛔ A pipeline's status is its LAST stage's. On 2026-10-11 this shape was

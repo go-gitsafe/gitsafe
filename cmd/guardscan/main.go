@@ -154,7 +154,15 @@ func rules(cwd, home, tmpdir string) map[string]func(string) (string, bool) {
 		},
 		"volatile": func(c string) (string, bool) {
 			f := volatile.Check(c, cwd, home, tmpdir)
-			return kind(f.Found(), f.Rule)
+			if f.Found() {
+				return kind(true, f.Rule)
+			}
+			// The transcripts do not record run_in_background, so this counts
+			// the commands the redirect half WOULD refuse if they had been
+			// started in the background: an upper bound, which is what a
+			// false-refusal hunt wants.
+			g := volatile.CheckRedirect(c, cwd, home, tmpdir, true)
+			return kind(g.Found(), "output redirected to a volatile directory (if backgrounded)")
 		},
 	}
 }

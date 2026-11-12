@@ -1466,6 +1466,29 @@ in a tree that is already there, and `/var/tmp`, which survives a reboot.
 `GITSAFE_ALLOW_VOLATILE=1` in front of one command is the way past for a
 throwaway repository meant to be thrown away.
 
+### A background command's output
+
+A redirected log is fine in the foreground, and not in the background: a command
+started with `run_in_background` is long by definition, and its result has to
+survive the turn. On 2026-11-11 `gotest ./interp … >
+<scratchpad>/probe.txt 2>&1` ran for 64 minutes that way and its log was lost
+when the session restarted, the sixth recorded loss to the scratchpad.
+
+```
+cmd > f   cmd >> f   cmd 2> f   cmd 1> f   cmd &> f   refused when f is volatile
+cmd | tee f                                            likewise
+-o f   -coverprofile f   -cpuprofile f   -memprofile f likewise (also -flag=f)
+2>&1   > /dev/null   a durable f                       allowed
+```
+
+It uses the same directory list, the same `~`/`$HOME`/`$TMPDIR` expansion and the
+same `cd` tracking as the rule above, and only fires when the hook payload says
+`run_in_background` is true. The refusal names the path and suggests the
+repository's own directory or `~/Library/Application Support/<tool>/`.
+`GITSAFE_ALLOW_VOLATILE=1` in front of one command is the way past. `hookcheck`
+asks it four extra questions with the flag set, and `guardscan` counts the
+commands it would refuse if they had been backgrounded.
+
 ### The newest rule was the one `hookcheck` never asked about
 
 On 2026-10-31, `grep -c volatile cmd/hookcheck/main.go` printed **0**. The rule

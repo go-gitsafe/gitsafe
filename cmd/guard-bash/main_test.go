@@ -53,6 +53,34 @@ func TestVolatileReadsCwd(t *testing.T) {
 	}
 }
 
+// A background command's output must not land where a reboot empties it; the
+// same command in the foreground, or into a durable file, passes silently.
+func TestVolatileRedirectNeedsTheBackgroundFlag(t *testing.T) {
+	const cmd = `gotest ./interp > /private/tmp/claude-501/s/scratchpad/probe.txt 2>&1`
+	in := func(bg string) string {
+		return `{"cwd":"/Users/me/src/r","tool_input":{"command":"` + cmd + `"` + bg + `}}`
+	}
+	out, _ := drive(t, in(`,"run_in_background":true`))
+	for _, want := range []string{`"deny"`, "volatile redirect", "/private/tmp/claude-501/s/scratchpad/probe.txt", "Application Support", "GITSAFE_ALLOW_VOLATILE=1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, out)
+		}
+	}
+	for name, input := range map[string]string{
+		"foreground":     in(``),
+		"explicit false": in(`,"run_in_background":false`),
+		"durable target": `{"cwd":"/Users/me/src/r","tool_input":{"run_in_background":true,"command":"gotest ./interp > /Users/me/src/r/probe.txt 2>&1"}}`,
+	} {
+		if out, _ := drive(t, input); out != "" {
+			t.Errorf("%s was refused:\n%s", name, out)
+		}
+	}
+	t.Setenv("GITSAFE_ALLOW_VOLATILE", "1")
+	if out, _ := drive(t, in(`,"run_in_background":true`)); out != "" {
+		t.Errorf("the environment escape did not open it:\n%s", out)
+	}
+}
+
 // A GitHub write by hand is refused in two voices: naming the program when one
 // does the act, and asking for one when none does — never letting it through.
 func TestGHByHandNamesTheProgramOrAsksForOne(t *testing.T) {
