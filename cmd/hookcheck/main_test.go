@@ -271,7 +271,7 @@ func TestRunFlags(t *testing.T) {
 // ask reads a hook's answer the way the harness does, and a hook that cannot
 // even be run is an allow rather than a crash of this command.
 func TestAskOnAHookThatIsNotThere(t *testing.T) {
-	if got := ask("/definitely/not/here/guard", "git status"); got != "allow" {
+	if got := ask("/definitely/not/here/guard", "git status", false); got != "allow" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -391,6 +391,29 @@ func TestEveryRuleGuardBashRunsFiresOnThisCorpus(t *testing.T) {
 		if !imported(rules, name) {
 			t.Errorf("this test asks %q, which cmd/guard-bash/main.go does not import", name)
 		}
+	}
+}
+
+// The background table asks the redirect half of `volatile`, which the
+// foreground table cannot: its refusals must come from CheckRedirect, and its
+// allows must not.
+func TestTheBackgroundCorpusAsksTheRedirectRule(t *testing.T) {
+	const cwd, home, tmpdir = "/Users/someone/src/r", "/Users/someone", "/var/folders/zz/t"
+	var refuse int
+	for _, c := range allCases() {
+		if !c.bg {
+			continue
+		}
+		got := volatile.CheckRedirect(c.cmd, cwd, home, tmpdir, true).Found()
+		if got != (c.want == "refuse") {
+			t.Errorf("%q: CheckRedirect = %v, the table wants %q", c.name, got, c.want)
+		}
+		if got {
+			refuse++
+		}
+	}
+	if refuse == 0 {
+		t.Fatal("no background row makes the redirect rule refuse: the table does not ask about it")
 	}
 }
 

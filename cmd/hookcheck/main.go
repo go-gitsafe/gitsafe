@@ -258,6 +258,39 @@ var corpus = []struct {
 	{"asking a filtered run what it does", "go test -run TestFoo --help", "allow"},
 }
 
+// backgroundCorpus is asked with run_in_background set, because the
+// `volatile` rule's redirect half turns on that flag and the table above never
+// sets it. ⛔ The sixth scratchpad loss: on 2026-11-11 a 64-minute background
+// `gotest … > <scratchpad>/probe.txt 2>&1` lost its log with the session.
+var backgroundCorpus = []struct {
+	name string
+	cmd  string
+	want string
+}{
+	{"a background log in the scratchpad", "gotest ./interp > /private/tmp/claude-501/s/scratchpad/probe.txt 2>&1", "refuse"},
+	{"a background coverage profile in /tmp", "go test -coverprofile=/tmp/c.out ./...", "refuse"},
+	{"a background log in a durable directory", "gotest ./interp > ~/Library/Application\\ Support/x/probe.txt 2>&1", "allow"},
+	{"the escape, which is an act", "GITSAFE_ALLOW_VOLATILE=1 gotest ./interp > /tmp/probe.txt 2>&1", "allow"},
+}
+
+// testCase is one row of either table, with how the command is started.
+type testCase struct {
+	name, cmd, want string
+	bg              bool
+}
+
+// allCases is the foreground table, then the background one.
+func allCases() []testCase {
+	var out []testCase
+	for _, c := range corpus {
+		out = append(out, testCase{c.name, c.cmd, c.want, false})
+	}
+	for _, c := range backgroundCorpus {
+		out = append(out, testCase{c.name, c.cmd, c.want, true})
+	}
+	return out
+}
+
 // Split so that writing this file is not itself a forbidden command — the
 // guard reads the text of what runs, and a literal here would be one.
 var (
@@ -340,10 +373,11 @@ func report(hooks []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, " %-14s", short(h))
 	}
 	fmt.Fprintln(stdout)
-	for _, c := range corpus {
+	cases := allCases()
+	for _, c := range cases {
 		fmt.Fprintf(stdout, "%-32s %-8s", c.name, c.want)
 		for _, h := range hooks {
-			got := ask(h, c.cmd)
+			got := ask(h, c.cmd, c.bg)
 			mark := ""
 			if got != c.want {
 				wrong[h]++
@@ -357,11 +391,11 @@ func report(hooks []string, stdout, stderr io.Writer) int {
 	code := 0
 	for _, h := range hooks {
 		if n := wrong[h]; n > 0 {
-			fmt.Fprintf(stderr, "%s is wrong on %d of %d\n", h, n, len(corpus))
+			fmt.Fprintf(stderr, "%s is wrong on %d of %d\n", h, n, len(cases))
 			code = 1
 			continue
 		}
-		fmt.Fprintf(stdout, "%s is right on all %d\n", h, len(corpus))
+		fmt.Fprintf(stdout, "%s is right on all %d\n", h, len(cases))
 	}
 	return code
 }
@@ -372,10 +406,10 @@ func report(hooks []string, stdout, stderr io.Writer) int {
 // hook which crashes therefore reads as "allow" here exactly as it would in
 // production. Reporting it as anything else would describe a machine other
 // than this one.
-func ask(hook, cmd string) string {
+func ask(hook, cmd string, background bool) string {
 	payload, err := json.Marshal(map[string]any{
 		"tool_name":  "Bash",
-		"tool_input": map[string]string{"command": cmd},
+		"tool_input": map[string]any{"command": cmd, "run_in_background": background},
 	})
 	if err != nil {
 		return "?"

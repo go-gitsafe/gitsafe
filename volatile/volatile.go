@@ -77,8 +77,17 @@ func Volatile(dir, tmpdir string) bool {
 // under a volatile directory. home and tmpdir are $HOME and $TMPDIR. A `cd` in
 // the command moves the directory the later commands are judged in.
 func Check(cmd, cwd, home, tmpdir string) Finding {
+	return scan(cmd, cwd, home, segments, func(fields []string, dir string) Finding {
+		return checkOne(base(fields[0]), fields[1:], dir, home, tmpdir)
+	})
+}
+
+// scan walks the commands of cmd in order, tracking the directory a `cd` moves
+// to, and hands each command (its words after any NAME=value prefix) and the
+// directory it runs in to one. The escape prefix ends the walk with nothing.
+func scan(cmd, cwd, home string, split func(string) []string, one func(fields []string, dir string) Finding) Finding {
 	dir := cwd
-	for _, part := range segments(shellcmd.StripQuotedHeredocs(cmd)) {
+	for _, part := range split(shellcmd.StripQuotedHeredocs(cmd)) {
 		fields := strings.Fields(part)
 		i := 0
 		for i < len(fields) && strings.Contains(fields[i], "=") && !strings.HasPrefix(fields[i], "-") {
@@ -90,16 +99,16 @@ func Check(cmd, cwd, home, tmpdir string) Finding {
 		if i >= len(fields) {
 			continue
 		}
-		name, args := base(fields[i]), fields[i+1:]
-		if name == "cd" {
-			if len(args) == 0 {
+		fields = fields[i:]
+		if base(fields[0]) == "cd" {
+			if len(fields) == 1 {
 				dir = home
 			} else {
-				dir = resolve(dir, home, args[0])
+				dir = resolve(dir, home, fields[1])
 			}
 			continue
 		}
-		if f := checkOne(name, args, dir, home, tmpdir); f.Found() {
+		if f := one(fields, dir); f.Found() {
 			return f
 		}
 	}
