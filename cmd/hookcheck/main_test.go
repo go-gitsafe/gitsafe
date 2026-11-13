@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-gitsafe/gitsafe/bypass"
+	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
@@ -340,6 +341,9 @@ func TestEveryRuleGuardBashRunsFiresOnThisCorpus(t *testing.T) {
 		"sigpipe":    func(c string) bool { return sigpipe.Check(c).Found() },
 		"shellwork":  func(c string) bool { return shellwork.Check(c).Found() },
 		"volatile":   func(c string) bool { return volatile.Check(c, cwd, home, tmpdir).Found() },
+		"chainedgate": func(c string) bool {
+			return chainedgate.Check(c).Found() || chainedgate.Require(c).Found()
+		},
 	}
 
 	src, err := os.ReadFile(filepath.Join("..", "guard-bash", "main.go"))

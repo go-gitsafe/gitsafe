@@ -201,7 +201,56 @@ var corpus = []struct {
 	{"the WAITING form, which answers before there is anything to judge",
 		"gh pr checks 443 --watch", "refuse"},
 	{"the one-shot, which claims nothing about the future", "gh pr checks 443", "allow"},
-	{"opening a pull request, the documented form", "gh pr create --title t --body-file /tmp/b.md", "allow"},
+	// ⛔ THESE FOUR ROWS SAID "allow" (the first) UNTIL 2026-11-12: `gh pr create`
+	// was the one write left as plain gh, and nothing made the checks on its body
+	// run. Five agent-written pull requests were refused by ghmerge for a bare
+	// issue reference, each fixed by hand at the last step (gitsafe#113). It is
+	// allowed only behind prbody AND paritycheck text on the SAME file, joined
+	// by `&&`.
+	{"opening a pull request behind both checks",
+		"prbody /tmp/b.md --repo go-zpkg/zbk && paritycheck text /tmp/b.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "allow"},
+	{"opening a pull request with neither check",
+		"gh pr create --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request with only prbody",
+		"prbody /tmp/b.md --repo go-zpkg/zbk && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request with only paritycheck",
+		"paritycheck text /tmp/b.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	// ⛔ The review of gitsafe#114 found each of these forms passing: a body
+	// given any other way, a different spelling of the same command, and a file
+	// swapped between the check and the create.
+	{"opening a pull request with --body, which gives the checks nothing to run on",
+		`gh pr create --repo go-zpkg/zbk --title t --body "it fixes #3"`, "refuse"},
+	{"opening a pull request with --fill",
+		"gh pr create --repo go-zpkg/zbk --fill", "refuse"},
+	{"opening a pull request through env",
+		"env gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request through command",
+		"command gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request with the name quoted apart",
+		`g"h" pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md`, "refuse"},
+	{"opening a pull request inside bash -c",
+		`bash -c "gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md"`, "refuse"},
+	{"opening a pull request with the repo flag before the subcommand",
+		"gh -R go-zpkg/zbk pr create --title t --body-file /tmp/b.md", "refuse"},
+	// ⛔ The re-review found a wrapper no list had: gh is found wherever it sits.
+	{"opening a pull request behind nice",
+		"nice -n 5 gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request behind timeout",
+		"timeout 30 gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request behind sudo",
+		"sudo gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request from find -exec",
+		`find . -maxdepth 0 -exec gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md \;`, "refuse"},
+	{"opening a pull request from xargs",
+		"xargs -a /tmp/list gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request through eval, quoted",
+		`eval "gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md"`, "refuse"},
+	{"opening a pull request through eval, unquoted",
+		"eval gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request after swapping the file between check and create",
+		"prbody /tmp/b.md --repo go-zpkg/zbk && paritycheck text /tmp/b.md && cp /tmp/evil.md /tmp/b.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request, the checks run on ANOTHER file",
+		"prbody /tmp/a.md --repo go-zpkg/zbk && paritycheck text /tmp/a.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
 	{"reading the budget", "gh api rate_limit --jq .resources.core", "allow"},
 	// ⭐ A GET of the same path is a read. The rule turns on the METHOD, not on
 	// the endpoint, and a row for it is how that stays a decision.

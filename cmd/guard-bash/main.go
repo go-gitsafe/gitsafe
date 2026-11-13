@@ -236,6 +236,18 @@ func run(stdin io.Reader, stdout io.Writer) int {
 			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
 			f.Why(), f.String(), f.Instead, chainedgate.Advice))
 	}
+	// ⛔⛔ THE WRITE WITH NO GATE AT ALL. The rule above refuses a check and its
+	// write joined by `;`; it cannot see a `gh pr create` that ran no check.
+	// Five pull requests written by agents on 2026-11-12 were refused by ghmerge
+	// at merge time for a bare issue reference, each rewritten by hand at the last
+	// step, with prbody installed throughout and nothing running it. A pull
+	// request from a body file now needs prbody AND paritycheck text on that
+	// file, `&&`-joined before it — and the refusal gives the line to type.
+	if m := chainedgate.Require(p.ToolInput.Command); m.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\nType this instead: %s\n\n%s",
+			m.Why(), m.String(), m.Instead(), chainedgate.RequiredAdvice))
+	}
 
 	// ⛔ A backtick is a code fence to every reader and a command substitution
 	// to the shell, and the collision is silent: the words are gone, the
