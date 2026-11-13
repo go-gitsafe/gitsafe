@@ -161,10 +161,18 @@ told. `ghmerge` therefore reads the pull request body **before any write**:
        it stays open on purpose; or merge anyway with --issues-waiver
        "<reason>", which is recorded as a comment
 
-4. `--issues-waiver "<reason>"` merges anyway and posts `issues gate waived:
+4. ⛔ **A closing keyword under a negation still closes, so it is refused.**
+   "It does not fix #17" closed issue 17 on merge: GitHub matches the keyword
+   and the number, never the sentence they sit in, and the author who read
+   their own sentence back saw the opposite of what the forge would do. The
+   gate names the contradiction and asks for `Refs #17` with the rest in prose
+   — the safe phrasing never puts a closing verb next to the number. (Note that
+   GitHub's list carries no gerunds: "without closing #9" is not a reference
+   with a keyword at all, it is a bare one.)
+5. `--issues-waiver "<reason>"` merges anyway and posts `issues gate waived:
    <reason>` on the pull request BEFORE the merge. There is no default; an empty
    reason is refused (exit 2); a stamp that cannot be posted refuses the merge.
-5. After the merge every issue closed by keyword is read back. If GitHub did not
+6. After the merge every issue closed by keyword is read back. If GitHub did not
    close it (another repository, a base branch that is not the default, a missing
    permission) `ghmerge` comments `Closed by <owner/repo>#<PR> (merge <sha12>)`
    and closes it, and says so. If it cannot, it exits **3** naming the issue: the
