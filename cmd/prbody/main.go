@@ -157,14 +157,32 @@ func check(stdout, stderr io.Writer, path, repo string) int {
 		fmt.Fprintf(stdout, "%s mentions no issue\n", path)
 		return 0
 	}
-	var bare []issuegate.Ref
+	var bare, contradicted []issuegate.Ref
 	for _, r := range refs {
-		fmt.Fprintf(stdout, "  %-7s %s\n", r.Kind, r)
+		note := ""
+		if r.Negated {
+			note = "  ⛔ under a negation, and GitHub closes it anyway"
+			contradicted = append(contradicted, r)
+		}
+		fmt.Fprintf(stdout, "  %-7s %s%s\n", r.Kind, r, note)
 		if r.Kind == issuegate.Bare {
 			bare = append(bare, r)
 		}
 	}
 	fmt.Fprintf(stdout, "%d reference(s)\n", len(refs))
+	// ⛔ Reported before the bare ones, and on its own: a bare reference is a
+	// question the author has not answered, while this one is an answer the
+	// forge will not read. "It does not fix #17" closed issue 17 on merge.
+	if len(contradicted) > 0 {
+		fmt.Fprintf(stderr, "\nprbody: %d reference(s) carry a closing keyword under a negation. "+
+			"GitHub matches the keyword and the number, never the sentence, so the merge CLOSES each of them:\n", len(contradicted))
+		for _, r := range contradicted {
+			fmt.Fprintf(stderr, "  %s\n", r)
+		}
+		fmt.Fprintln(stderr, "\nWrite `Refs <ref>` and say the rest in prose: `Refs #17, which this does not finish`. "+
+			"The safe phrasing never puts a closing verb next to the number.")
+		return 1
+	}
 	if len(bare) == 0 {
 		return 0
 	}
