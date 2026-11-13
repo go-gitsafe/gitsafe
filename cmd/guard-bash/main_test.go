@@ -153,6 +153,9 @@ func TestPRCreateNeedsBothChecks(t *testing.T) {
 		"neither":          {create, true},
 		"only prbody":      {`prbody /tmp/b.md --repo o/r && ` + create, true},
 		"only paritycheck": {`paritycheck text /tmp/b.md && ` + create, true},
+		"a swapped file":   {`prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && cp /tmp/e.md /tmp/b.md && ` + create, true},
+		"env gh":           {`env ` + create, true},
+		"bash -c":          {`bash -c "` + create + `"`, true},
 	} {
 		out, code := drive(t, `{"tool_input":{"command":`+jsonString(tc.cmd)+`}}`)
 		if code != 0 {
@@ -169,8 +172,11 @@ func TestPRCreateNeedsBothChecks(t *testing.T) {
 			t.Fatalf("%s: not a decision: %v\n%s", name, err, out)
 		}
 		reason := d.HookSpecificOutput.PermissionDecisionReason
-		want := `prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && ` + create
-		if d.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(reason, "Type this instead: "+want) {
+		// The line to type starts with the two checks and ends with the create
+		// as written (a disguised spelling keeps its spelling).
+		want := `prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && `
+		if d.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(reason, "Type this instead: "+want) ||
+			!strings.Contains(reason, create) {
 			t.Errorf("%s: decision %q, reason:\n%s", name, d.HookSpecificOutput.PermissionDecision, reason)
 		}
 	}
