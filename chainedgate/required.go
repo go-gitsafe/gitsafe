@@ -53,6 +53,8 @@ type Missing struct {
 	File string
 	// NoBody is a `gh pr create` with no --body-file at all.
 	NoBody bool
+	// Eval is a `gh pr create` hidden inside eval.
+	Eval bool
 	// Repo is the repository the command names, or a placeholder.
 	Repo string
 	// Checks are what was not chained immediately before it.
@@ -62,10 +64,13 @@ type Missing struct {
 }
 
 // Found reports whether this is a refusal.
-func (m Missing) Found() bool { return m.File != "" || m.NoBody }
+func (m Missing) Found() bool { return m.File != "" || m.NoBody || m.Eval }
 
 // Why names the act.
 func (m Missing) Why() string {
+	if m.Eval {
+		return "it opens a pull request through `eval`, which builds the command at run time where no check can see which body file it names"
+	}
 	if m.NoBody {
 		return "it opens a pull request with no `--body-file`: `--body`, `--fill` and a missing body flag give the checks nothing to run on"
 	}
@@ -75,6 +80,8 @@ func (m Missing) Why() string {
 
 func (m Missing) String() string {
 	switch {
+	case m.Eval:
+		return "it matched `" + firstWords(m.Write) + "` containing `gh pr create`"
 	case m.NoBody:
 		return "it matched `" + firstWords(m.Write) + "` with no `--body-file`"
 	case m.Found():
@@ -87,6 +94,9 @@ func (m Missing) String() string {
 func (m Missing) Instead() string {
 	file := m.File
 	write := strings.TrimSpace(m.Write)
+	if m.Eval {
+		return "prbody <body-file> --repo " + m.Repo + " && paritycheck text <body-file> && gh pr create --repo " + m.Repo + " --title <title> --body-file <body-file>   (spelled out, with no eval)"
+	}
 	if m.NoBody {
 		file = "<body-file>"
 		write += " --body-file " + file
@@ -117,6 +127,15 @@ func require(cmd string, depth int) Missing {
 					if m := require(script, depth+1); m.Found() {
 						return m
 					}
+				}
+				continue
+			}
+			// ⛔ eval builds its command at run time from its words; whatever
+			// the checks saw, they did not see what eval runs. Refused whether
+			// the words are quoted or not.
+			if len(argv) > 0 && argv[0] == "eval" {
+				if _, repo, isCreate := prCreate(splitWords(strings.Join(argv[1:], " "))); isCreate {
+					return Missing{Eval: true, Repo: repo, Write: st.text}
 				}
 				continue
 			}
@@ -248,8 +267,28 @@ func shellScript(argv []string) (string, bool) {
 // prCreate reports whether argv is `gh pr create` (global flags before the
 // subcommand skipped) and returns its body file and repository. `--help` is a
 // read and is not a creation.
+//
+// ⛔ `gh` IS FOUND WHEREVER IT SITS in the words, not only first: `nice -n 5 gh
+// pr create`, `timeout 30 gh …`, `sudo gh …`, `find . -exec gh pr create … \;`
+// and `xargs -a F gh pr create …` all create a pull request, and a list of the
+// wrappers would be one short the day somebody finds another. Any argv in which
+// `gh` is a word followed (past its global flags) by `pr create` is a creation.
+// The price is that `echo gh pr create` reads as one: refused, conservatively.
 func prCreate(argv []string) (file, repo string, ok bool) {
-	if len(argv) < 3 || base(argv[0]) != "gh" {
+	for s := range argv {
+		if base(argv[s]) != "gh" {
+			continue
+		}
+		if f, r, ok := prCreateAt(argv[s:]); ok {
+			return f, r, true
+		}
+	}
+	return "", "", false
+}
+
+// prCreateAt reads argv with `gh` as its first word.
+func prCreateAt(argv []string) (file, repo string, ok bool) {
+	if len(argv) < 3 {
 		return "", "", false
 	}
 	i := 1

@@ -18,7 +18,6 @@ func TestRequireAllowsTheFullChain(t *testing.T) {
 		`gh pr view 42`,
 		`gh pr create --help`,
 		`gh pr create -h`,
-		`echo gh pr create --body-file b.md`,
 		`ghissue o/r --new --body-file b.md`,
 	} {
 		if m := Require(cmd); m.Found() {
@@ -239,5 +238,67 @@ func TestWordSplittingAndNormalisation(t *testing.T) {
 	}
 	if s, ok := shellScript(normalise(`bash --norc -c "x y"`)); !ok || s != "x y" {
 		t.Errorf("%q %v", s, ok)
+	}
+}
+
+// ⛔ `gh` IS FOUND WHEREVER IT SITS: a wrapper this rule has never heard of is
+// still a wrapper. The checks in front of it make it legitimate.
+func TestRequireFindsGhBehindAnyWrapper(t *testing.T) {
+	const create = `gh pr create --repo o/r --title t --body-file b.md`
+	for name, cmd := range map[string]string{
+		"nice":      `nice -n 5 ` + create,
+		"timeout":   `timeout 30 ` + create,
+		"sudo":      `sudo ` + create,
+		"find":      `find . -maxdepth 0 -exec ` + create + ` \;`,
+		"xargs":     `xargs -a list.txt ` + create,
+		"xargs -I":  `echo x | xargs -I{} ` + create,
+		"time -p":   `time -p ` + create,
+		"ionice":    `ionice -c3 ` + create,
+		"a wrapper": `anything-at-all --flag ` + create,
+		"echo":      `echo ` + create,
+	} {
+		m := Require(cmd)
+		if !m.Found() || m.File != "b.md" {
+			t.Errorf("%s: allowed %q (%+v)", name, cmd, m)
+		}
+		checked := `prbody b.md --repo o/r && paritycheck text b.md && ` + cmd
+		if name != "xargs -I" && Require(checked).Found() {
+			t.Errorf("%s: refused behind the full chain: %q", name, checked)
+		}
+	}
+	// A different gh subcommand, and a path that merely contains "gh", are not it.
+	for _, cmd := range []string{`nice gh pr view 4`, `timeout 5 gh issue create --title t`, `ls high/gh.txt`, `sudo apt install ghc`} {
+		if m := Require(cmd); m.Found() {
+			t.Errorf("refused %q: %s", cmd, m.Why())
+		}
+	}
+}
+
+// ⛔ eval builds its command at run time: refused, quoted or not, even behind
+// the checks, because they cannot have seen what it will run.
+func TestRequireRefusesEval(t *testing.T) {
+	for name, cmd := range map[string]string{
+		"quoted":    `eval "gh pr create --repo o/r --title t --body-file b.md"`,
+		"unquoted":  `eval gh pr create --repo o/r --title t --body-file b.md`,
+		"single":    `eval 'gh pr create --repo o/r --body-file b.md'`,
+		"behind":    `prbody b.md --repo o/r && paritycheck text b.md && eval "gh pr create --repo o/r --body-file b.md"`,
+		"with env":  `GH_TOKEN=x eval "gh pr create --repo o/r --body-file b.md"`,
+		"a prefix":  `env eval gh -R o/r pr create --body-file b.md`,
+		"in a bash": `bash -c 'eval "gh pr create --repo o/r --body-file b.md"'`,
+	} {
+		m := Require(cmd)
+		if !m.Found() || !m.Eval {
+			t.Errorf("%s: %q gave %+v", name, cmd, m)
+			continue
+		}
+		if !strings.Contains(m.Why(), "eval") || !strings.Contains(m.String(), "gh pr create") || !strings.Contains(m.Instead(), "no eval") {
+			t.Errorf("%s: %q %q %q", name, m.Why(), m.String(), m.Instead())
+		}
+	}
+	// eval of something else is not this rule's.
+	for _, cmd := range []string{`eval "$(ssh-agent -s)"`, `eval echo hello`, `eval`} {
+		if m := Require(cmd); m.Found() {
+			t.Errorf("refused %q", cmd)
+		}
 	}
 }
