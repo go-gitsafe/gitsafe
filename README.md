@@ -1571,6 +1571,26 @@ Two more readings came out of fixing it, both measured rather than argued:
   x)` in 44 seconds, where treating that `#` as a comment hid the `)`. bash was
   then asked for the boundary directly: `;#` and `|#` are *not* comments to it,
   while a `#` after a space or a newline is.
+- **`$'…'` honours a backslash and `'…'` does not**, so the two end in
+  different places — and the `$` must not itself be escaped, because `\$` is a
+  literal dollar and the quote after it opens a *plain* span.
+
+⛔ **Four false allows in one reading, and only one of them came from the
+fuzzer** — because `FuzzOracle` mutates a whole command, so almost every input
+is spent building the frame (`"`, `$(`, the heredoc opener) before a single body
+byte can matter. So the witness changed rather than the design: `FuzzBody` fixes
+the frame and fuzzes **only** the body, seeded with the rows the review and the
+shells produced. It found the fourth defect — `\$'\')` — in 71 seconds, and then
+ran 638 000 executions clean.
+
+⛔ **What that scan models, named so it can be diffed:** bash's character search
+for the `)` that closes a `$( … )`, which runs *before* the command inside is
+parsed. Deriving it from `Classify` was tried and is wrong — `Classify` models
+the **parser**, so it knows about heredocs, and a PR body that merely *talks*
+about a heredoc has its `)` classed as body text while bash's scan ends the
+substitution there. bash 5 replaced that scan with the real parser, which is why
+bash 5 reproduces none of this and CI cannot judge it: the authority is the
+shells on the machine, asked per syntax variant, in both directions.
 
 ⛔ **And the bash that answers depends on which bash you have.** The three
 unbalanced cases are evaluated by **bash 3.2.57**, the one Apple ships and the

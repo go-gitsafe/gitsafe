@@ -325,6 +325,22 @@ func Classify(cmd string) []byte {
 // inside it, and the ) after "s wrong" ends the substitution. Found by review,
 // not by this package's own tests, whose rows all happened to be quote-free.
 //
+// ⛔ WHAT THIS MODELS, NAMED SO THE NEXT READER CAN DIFF AGAINST IT: bash's
+// character scan for the ) that closes a $( … ), which runs BEFORE the command
+// inside is parsed. That is a different routine from the parser, and therefore
+// from [Classify], which models what a byte MEANS once parsed. Deriving this
+// function from Classify was tried and is wrong in two witnessed ways: Classify
+// uses a wider word-start set for a #, and it knows about heredocs, so a PR
+// body that merely TALKS about a heredoc has its ) classed as body text while
+// bash's scan — which has no notion of heredocs — ends the substitution there.
+// See TestAHeredocInTheProseIsNotAHeredoc.
+//
+// In bash 3.2 that scan is reported to be subst.c's extract_delimited_string
+// (named from an independent review, not read here); bash 5 replaced it with
+// the real parser, which is why bash 5 does not reproduce any of this and why
+// CI cannot judge these cases. The authority is therefore the shells on the
+// machine, asked per syntax variant, in both directions.
+//
 // ⛔ AN UNTERMINATED SPAN ENDS NOTHING, and that is measured rather than
 // assumed. A scan that cannot close a span never reaches a ) either, so it
 // cannot end the substitution early: bash 3.2.57 answers `bash -n` on the real
@@ -358,7 +374,19 @@ func unbalancedClose(body string) bool {
 			// that isolates it: without the $, bash does NOT end it, because
 			// there the backslash is literal and the span really does stop at
 			// the \'. See TestAnsiCQuotingEndsWhereBashEndsIt.
-			ansiC := c == '\'' && i > 0 && body[i-1] == '$'
+			// ⛔ AND THE $ MUST NOT ITSELF BE ESCAPED. A \$ is a literal
+			// dollar, so the quote after it opens a PLAIN span, where a
+			// backslash is literal and the span ends at the next quote. Read
+			// as ANSI-C it swallowed that quote and the rest looked
+			// unterminated — an allow — while bash ended the substitution at
+			// the ) after it. Found by [FuzzBody] in 71 seconds with the body
+			//
+			//	\$'\')`…`
+			//
+			// which is the fourth false allow in this one reading, and the
+			// first that a fuzzer rather than a reviewer found: fixing the
+			// frame is what let the search reach this function at all.
+			ansiC := c == '\'' && i > 0 && body[i-1] == '$' && !oddBackslashes(body, i-1)
 			j := i + 1
 			for ; j < len(body); j++ {
 				if body[j] == '\\' && (c != '\'' || ansiC) {
@@ -407,6 +435,16 @@ func unbalancedClose(body string) bool {
 		}
 	}
 	return false
+}
+
+// oddBackslashes reports whether the byte at k is preceded by an odd number of
+// backslashes, which makes it escaped and therefore literal.
+func oddBackslashes(s string, k int) bool {
+	n := 0
+	for j := k - 1; j >= 0 && s[j] == '\\'; j-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 // wordStart reports whether a # at i begins a comment.
