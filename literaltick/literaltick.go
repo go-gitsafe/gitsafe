@@ -30,7 +30,7 @@
 // inside SINGLE quotes is literal and allowed; a backtick anywhere else —
 // bare, or inside DOUBLE quotes — is a substitution and refused. Double quotes
 // do not stop one, which is the half that surprises people and the half that
-// bit here: [shellcmd.InsideQuotes] already knew it.
+// bit here: [shellcmd.Classify] knows it.
 //
 // # What it does NOT refuse, and that half is the point
 //
@@ -110,36 +110,35 @@ func (f Finding) String() string {
 }
 
 // Check says whether cmd contains a backtick the shell would evaluate.
+//
+// The reading is [shellcmd.Classify]'s: a backtick is literal inside '…' and
+// $'…', in a # comment, in a quoted heredoc and after a backslash; everywhere
+// else — bare, inside "…", inside $(…) — it runs.
 func Check(cmd string) Finding {
-	if escapedByPrefix(cmd) {
-		return Finding{}
-	}
-	// A quoted heredoc is not expanded, so its backticks are literal.
-	scan := shellcmd.StripQuotedHeredocs(cmd)
-	for i := 0; i < len(scan); i++ {
-		if scan[i] != '`' || escaped(scan, i) {
+	cls := shellcmd.Classify(cmd)
+	for i := 0; i < len(cmd); i++ {
+		if cmd[i] != '`' {
 			continue
 		}
-		// ⛔ The character AFTER the backtick is the one to ask about, not the
-		// backtick itself. InsideQuotes answers about the offset it is given,
-		// and at the opening backtick of a substitution inside "…" the
-		// substitution has not been entered yet — so the backtick reads as
-		// quoted while everything after it correctly does not. Asking about
-		// i+1 is asking about the part the shell would run.
-		if shellcmd.InsideQuotes(scan, i+1) {
-			continue // inside single quotes: literal
+		switch cls[i] {
+		case shellcmd.ClassSingle, shellcmd.ClassComment,
+			shellcmd.ClassHeredocQuoted, shellcmd.ClassEscaped:
+			continue
+		}
+		if escapedByPrefix(cmd, cls, i) {
+			continue
 		}
 		return Finding{
 			Off:            i,
-			Context:        window(scan, i),
-			InDoubleQuotes: inDoubleQuotes(scan, i),
+			Context:        window(cmd, i),
+			InDoubleQuotes: cls[i] == shellcmd.ClassDouble,
 		}
 	}
 	return Finding{}
 }
 
-// escapedByPrefix reports whether the command itself carries the escape as an
-// assignment in front of it.
+// escapedByPrefix reports whether the STATEMENT holding the backtick at off
+// carries the escape as an assignment in front of its command.
 //
 // ⛔ IT IS READ FROM THE TEXT, NOT FROM THE ENVIRONMENT, and the first version
 // of this package got that wrong. The hook runs BEFORE any shell, so
@@ -151,8 +150,32 @@ func Check(cmd string) Finding {
 // The corpus row for the escape passed anyway, which is the part worth
 // remembering: it was measured against an installed binary that did not carry
 // this rule at all, so "allow" was true for the wrong reason.
-func escapedByPrefix(cmd string) bool {
-	for _, f := range strings.Fields(cmd) {
+//
+// ⛔ ONE COMMAND, as documented: the prefix covers its own statement, not the
+// ones after a ; & | or newline. The first version read the whole line, so
+// `GITSAFE_ALLOW_BACKTICK=1 true; echo `date“ was allowed.
+func escapedByPrefix(cmd string, cls []byte, off int) bool {
+	end := off
+	if cls[off] == shellcmd.ClassHeredocExpanded {
+		// A heredoc body belongs to the statement that opened it: back up over
+		// the body to the newline before it, then keep reading the opener line.
+		for end > 0 && cls[end] == shellcmd.ClassHeredocExpanded {
+			end--
+		}
+	}
+	start := 0
+	for j := end - 1; j >= 0; j-- {
+		if cls[j] != shellcmd.ClassCode {
+			continue
+		}
+		c := cmd[j]
+		if c == ';' || c == '\n' || c == '|' ||
+			(c == '&' && !(j > 0 && (cmd[j-1] == '>' || cmd[j-1] == '<'))) {
+			start = j + 1
+			break
+		}
+	}
+	for _, f := range strings.Fields(cmd[start:end]) {
 		name, value, ok := strings.Cut(f, "=")
 		if !ok {
 			return false // the first word is the command: no escape in front
@@ -162,41 +185,6 @@ func escapedByPrefix(cmd string) bool {
 		}
 	}
 	return false
-}
-
-// escaped reports whether the byte at i is preceded by an odd number of
-// backslashes, which makes it literal even unquoted.
-func escaped(s string, i int) bool {
-	n := 0
-	for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
-		n++
-	}
-	return n%2 == 1
-}
-
-// inDoubleQuotes reports whether the offset sits inside a double-quoted region,
-// for the message only: the refusal is the same either way.
-func inDoubleQuotes(s string, off int) bool {
-	q := byte(0)
-	for i := 0; i < len(s) && i < off; i++ {
-		switch c := s[i]; {
-		case q == '\'':
-			if c == '\'' {
-				q = 0
-			}
-		case q == '"':
-			if c == '\\' {
-				i++
-			} else if c == '"' {
-				q = 0
-			}
-		case c == '\'' || c == '"':
-			q = c
-		case c == '\\':
-			i++
-		}
-	}
-	return q == '"'
 }
 
 // window is a short excerpt around the offset, for the refusal to point at.

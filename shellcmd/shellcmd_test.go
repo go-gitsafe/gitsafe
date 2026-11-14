@@ -104,3 +104,86 @@ func TestStagesAndInsideQuotesAgreeAboutDoubleQuotes(t *testing.T) {
 		t.Error("InsideQuotes disagrees with Stages about the same pipe")
 	}
 }
+
+// ⛔ #112: an opener INSIDE quotes opens nothing, so the next line is a command
+// and must not be stripped as a heredoc body.
+func TestAFakeHeredocOpenerInsideQuotesStripsNothing(t *testing.T) {
+	for _, cmd := range []string{
+		"echo \"<<'EOF'\"\necho RAN\nEOF\necho after",
+		"echo '<<\"EOF\"'\necho RAN\nEOF\necho after",
+		"echo hi # <<'EOF'\necho RAN\nEOF",
+	} {
+		if got := StripQuotedHeredocs(cmd); got != cmd {
+			t.Errorf("stripped text that opens no heredoc:\n  in:  %q\n  out: %q", cmd, got)
+		}
+	}
+}
+
+// ⛔ #112: a heredoc tag is a shell WORD, not an identifier.
+func TestAHeredocTagMayHoldAHyphenOrADot(t *testing.T) {
+	for _, tc := range []struct{ open, tag string }{
+		{"<<'END-MSG'", "END-MSG"},
+		{`<<"a.b"`, "a.b"},
+		{`<<\END-MSG`, "END-MSG"},
+		{"<<-'x-y'", "x-y"},
+		{"<<'A'\"B\"", "AB"},
+	} {
+		got := StripQuotedHeredocs("cat " + tc.open + "\nforbidden\n" + tc.tag + "\nafter")
+		if strings.Contains(got, "forbidden") || !strings.Contains(got, "after") {
+			t.Errorf("%s: %q", tc.open, got)
+		}
+	}
+}
+
+// Shifts and here-strings are not heredocs, and swallowing the rest of the
+// command for one would hide what follows.
+func TestShiftsAndHereStringsAreNotHeredocs(t *testing.T) {
+	for _, cmd := range []string{
+		"echo $((1<<n))\necho after",
+		"echo $((x << 2))\nn\necho after",
+		"x=$((1<<2))\n2\necho after",
+		"cat <<<'text'\necho after",
+		"echo 1<<2\n2",
+	} {
+		if got := StripQuotedHeredocs(cmd); got != cmd {
+			t.Errorf("changed %q to %q", cmd, got)
+		}
+	}
+}
+
+func TestClassify(t *testing.T) {
+	for _, tc := range []struct {
+		name, cmd, want string // want: one class byte per byte of cmd
+	}{
+		{"code, single, double", `a 'b' "c"`, "ccssscddd"},
+		{"escaped", `a\'b`, "ccec"},
+		{"ansi-c with an escaped quote", `$'a\'b'`, "sssssss"},
+		{"comment", "a #b\nc", "cckkcc"},
+		{"substitution inside double quotes", `"$(a 'b')"`, "dccccssscd"},
+		{"unterminated single quote is code", `'a`, "cc"},
+		{"quoted heredoc body", "<<'E'\nx\nE\ny", "cccccchhhhc"},
+		{"expanded heredoc body", "<<E\n'x\nE\ny", "ccccuuuccc"},
+		{"escape inside double quotes", `"\"`, "dde"},
+	} {
+		if got := string(Classify(tc.cmd)); got != tc.want {
+			t.Errorf("%s: Classify(%q) =\n  %q, want\n  %q", tc.name, tc.cmd, got, tc.want)
+		}
+	}
+}
+
+func FuzzClassify(f *testing.F) {
+	for _, s := range []string{"echo 'a'", "\"$(a 'b')\"", "$'a\\'b'", "cat <<'E'\nx\nE", "cat <<E\n`x`\nE", "# c", "<<", "$((1<<2))", "\\"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, cmd string) {
+		if cls := Classify(cmd); len(cls) != len(cmd) {
+			t.Fatalf("%d classes for %d bytes of %q", len(cls), len(cmd), cmd)
+		}
+		if got := StripQuotedHeredocs(cmd); len(got) > len(cmd) {
+			t.Fatalf("stripping grew %q into %q", cmd, got)
+		}
+		if StripQuotedHeredocs(cmd) != StripQuotedHeredocs(cmd) {
+			t.Fatalf("not deterministic: %q", cmd)
+		}
+	})
+}

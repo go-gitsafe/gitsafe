@@ -13,13 +13,7 @@
 // thing that must be got right once, not twice.
 package shellcmd
 
-import (
-	"regexp"
-	"strings"
-)
-
-// A quoted heredoc tag: <<'EOF', <<"EOF", <<\EOF, with an optional dash.
-var heredocOpen = regexp.MustCompile(`<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|\\([A-Za-z_][A-Za-z0-9_]*))`)
+import "strings"
 
 // StripQuotedHeredocs removes the body of every heredoc whose tag is quoted.
 //
@@ -27,28 +21,24 @@ var heredocOpen = regexp.MustCompile(`<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-
 // QUOTES a forbidden form is not the forbidden form. Documentation, a commit
 // message and a note all need to say what not to do. An unquoted `<<EOF` does
 // expand, and its body is left in place to be scanned.
+//
+// The opener is found by [Classify], so one that sits inside quotes
+// (`echo "<<'EOF'"`) opens nothing and strips nothing, and a tag is a shell
+// word (`<<'END-MSG'`), not an identifier.
 func StripQuotedHeredocs(cmd string) string {
-	lines := strings.Split(cmd, "\n")
+	cls := Classify(cmd)
 	var out []string
-	tag := ""
-	for _, line := range lines {
-		if tag != "" {
-			if strings.TrimSpace(line) == tag {
-				tag = ""
-			}
-			continue
+	for pos := 0; pos <= len(cmd); {
+		end := strings.IndexByte(cmd[pos:], '\n')
+		next := len(cmd) + 1
+		line := cmd[pos:]
+		if end >= 0 {
+			line, next = cmd[pos:pos+end], pos+end+1
 		}
-		if m := heredocOpen.FindStringSubmatch(line); m != nil {
-			for _, g := range m[1:] {
-				if g != "" {
-					tag = g
-					break
-				}
-			}
-			// The opening line itself is kept: a command may both open a heredoc
-			// and carry a substitution of its own.
+		if pos >= len(cmd) || cls[pos] != ClassHeredocQuoted {
+			out = append(out, line)
 		}
-		out = append(out, line)
+		pos = next
 	}
 	return strings.Join(out, "\n")
 }

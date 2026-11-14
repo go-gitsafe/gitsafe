@@ -12,6 +12,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/discard"
+	"github.com/go-gitsafe/gitsafe/literaltick"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
@@ -334,13 +335,14 @@ func TestEveryRuleGuardBashRunsFiresOnThisCorpus(t *testing.T) {
 		tmpdir = "/var/folders/zz/t"
 	)
 	fires := map[string]func(string) bool{
-		"bypass":     func(c string) bool { return bypass.Check(c).Found() },
-		"secretarg":  func(c string) bool { return secretarg.Check(c).Found() },
-		"discard":    func(c string) bool { return discard.Check(c).Found() },
-		"pipestatus": func(c string) bool { return pipestatus.Check(c).Found() },
-		"sigpipe":    func(c string) bool { return sigpipe.Check(c).Found() },
-		"shellwork":  func(c string) bool { return shellwork.Check(c).Found() },
-		"volatile":   func(c string) bool { return volatile.Check(c, cwd, home, tmpdir).Found() },
+		"bypass":      func(c string) bool { return bypass.Check(c).Found() },
+		"secretarg":   func(c string) bool { return secretarg.Check(c).Found() },
+		"discard":     func(c string) bool { return discard.Check(c).Found() },
+		"pipestatus":  func(c string) bool { return pipestatus.Check(c).Found() },
+		"sigpipe":     func(c string) bool { return sigpipe.Check(c).Found() },
+		"shellwork":   func(c string) bool { return shellwork.Check(c).Found() },
+		"volatile":    func(c string) bool { return volatile.Check(c, cwd, home, tmpdir).Found() },
+		"literaltick": func(c string) bool { return literaltick.Check(c).Found() },
 		"chainedgate": func(c string) bool {
 			return chainedgate.Check(c).Found() || chainedgate.Require(c).Found()
 		},

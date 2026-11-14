@@ -113,3 +113,21 @@ func TestZeroFindingIsNotFound(t *testing.T) {
 		t.Error("the zero Finding reads as found")
 	}
 }
+
+// ⛔ #112: a heredoc opener inside quotes opens nothing, so the destructive
+// command on the next line is a command, not a body — and the escape belongs to
+// its own statement.
+func TestAFakeHeredocOpenerHidesNothing(t *testing.T) {
+	for _, cmd := range []string{
+		"echo \"<<'EOF'\"\ngit reset --hard",
+		"echo '<<\"EOF\"'\ngit reset --hard\nEOF",
+		"GITSAFE_ALLOW_DISCARD=1 git status\ngit reset --hard",
+	} {
+		if !Check(cmd).Found() {
+			t.Errorf("allowed %q", cmd)
+		}
+	}
+	if Check("cat <<'END-MSG'\ngit reset --hard\nEND-MSG").Found() {
+		t.Error("a quoted heredoc with a hyphenated tag is literal text")
+	}
+}
