@@ -1465,8 +1465,7 @@ not after it.
 The rule is narrow because the question is decidable. A backtick inside **single**
 quotes is literal and allowed; a backtick anywhere else — bare, or inside
 **double** quotes — is a substitution and refused. Double quotes do not stop one,
-which is the half that surprises people, and `shellcmd.InsideQuotes` already knew
-it.
+which is the half that surprises people, and `shellcmd.Classify` knows it.
 
 ⛔ And a single quote inside double quotes is an **apostrophe**, not quoting, so
 `"see '`+"`x`"+`'"` still substitutes. That one was in the allow table until `sh`
@@ -1482,9 +1481,10 @@ costs nothing to find.
 
 What it allows, which is the half that keeps a guard from being worked around:
 single quotes (`'…`x`…'`), prose in a file (`git commit -F msg.txt`,
-`gh pr create --body-file b.md`), the modern `$(…)` form, an escaped `` \` ``, and
-a quoted heredoc. `GITSAFE_ALLOW_BACKTICK=1` in front of one command is the
-escape, for a deliberate substitution typed in the old form — though `$(…)` is
+`gh pr create --body-file b.md`), the modern `$(…)` form, an escaped `` \` ``, a `#` comment, `$'…'`, a backtick inside single quotes inside
+`$(…)`, and a quoted heredoc (its tag may hold a hyphen). `GITSAFE_ALLOW_BACKTICK=1`
+in front of one command is the escape — for that statement only, not the ones
+after a `;`, `&&`, `|` or newline — for a deliberate substitution typed in the old form — though `$(…)` is
 the one-character answer to almost all of that, and it cannot be mistaken for a
 code fence by a reader, which is the whole reason the old form is a trap.
 
