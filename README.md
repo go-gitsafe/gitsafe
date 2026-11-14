@@ -1535,6 +1535,16 @@ reasoned with.** A `)` the body itself opens with a `(` ends nothing in zsh,
 bash or dash; a `)` with no `(` of its own can. The doubt now covers exactly the
 unbalanced case, plus every *expanded* body.
 
+⛔ **And the bash that answers depends on which bash you have.** The three
+unbalanced cases are evaluated by **bash 3.2.57**, the one Apple ships and the
+one on this machine, and are *not* evaluated by the bash on `ubuntu-latest`.
+CI said so three minutes after the first push, because the first version of the
+new test inferred its expectation from the shells it found — "nothing ran it
+here, so the rule must allow". An absence on the shells that happen to be
+installed is not evidence that no shell evaluates it, and a guard must refuse
+what **any** shell would run. The table now states what the rule must do, and
+the shells check that statement instead of making it.
+
 ⭐ **The fix moved four other rules, and three of those moves are recovered
 misses.** Every rule strips quoted heredoc bodies through the same classifier,
 so a body that was not recognised stayed in the command text and blinded them.

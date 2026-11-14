@@ -272,8 +272,15 @@ func Classify(cmd string) []byte {
 				// now covers exactly the unbalanced case, plus every expanded
 				// body, where the shell also substitutes what it reads and this
 				// lexer's model of it is weaker.
+				//
+				// ⛔ WHICH BASH ANSWERS MATTERS, so neither half may be inferred
+				// from the shells that happen to be installed: the unbalanced
+				// cases are evaluated by bash 3.2.57, the one Apple ships, and
+				// NOT by the bash on ubuntu-latest. A guard refuses what ANY
+				// shell would run, so an absence here is not a verdict.
 				// See TestTheRuleAllowsWhatNoRealShellRuns in literaltick, which
-				// puts both readings to zsh, bash and dash.
+				// states each case's expectation and puts it to zsh, bash and
+				// dash rather than reading the expectation off them.
 				if len(stack) > 0 && (expanded && strings.Contains(s[from:i], ")") ||
 					unbalancedClose(s[from:i])) {
 					for k := from; k < len(s); k++ {
