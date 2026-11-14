@@ -163,7 +163,8 @@ func TestClassify(t *testing.T) {
 		{"unterminated single quote is code", `'a`, "cc"},
 		{"quoted heredoc body", "<<'E'\nx\nE\ny", "cccccchhhhc"},
 		{"expanded heredoc body", "<<E\n'x\nE\ny", "ccccuuuccc"},
-		{"escape inside double quotes", `"\"`, "dde"},
+		{"escape inside double quotes", `"\""`, "dded"},
+		{"an unclosed frame is all code", `"a 'b'`, "cccccc"},
 	} {
 		if got := string(Classify(tc.cmd)); got != tc.want {
 			t.Errorf("%s: Classify(%q) =\n  %q, want\n  %q", tc.name, tc.cmd, got, tc.want)

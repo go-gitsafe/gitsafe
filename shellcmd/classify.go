@@ -5,7 +5,9 @@ import (
 	"strings"
 )
 
-var caseWord = regexp.MustCompile(`\bcase\b`)
+// caseWord finds `case` as a word the shell may take for the keyword. It is
+// deliberately broad: a false hit only makes the classifier unsure.
+var caseWord = regexp.MustCompile(`(^|[\s;&|(])case(\s|$)`)
 
 // The class of one byte of a command line, as [Classify] reports it.
 const (
@@ -61,6 +63,10 @@ func Classify(cmd string) []byte {
 	// In "${x:-'…'}" the single quotes are NOT quoting, so a backtick between
 	// them runs: the classifier leaves them as code, and the rule refuses.
 	plainSingle := func() bool {
+		// Arithmetic does not quote with ' either: $(('`x`')) runs the backtick.
+		if len(stack) > 0 && stack[len(stack)-1].kind == 'A' {
+			return true
+		}
 		return len(stack) > 0 && stack[len(stack)-1].kind == 'B' && stack[len(stack)-1].dq
 	}
 	fill := func(from, to int, c byte) {
@@ -168,11 +174,23 @@ func Classify(cmd string) []byte {
 		case c == ')' && (top() == 'P' || top() == 'A'):
 			f := &stack[len(stack)-1]
 			f.depth--
-			// ⛔ A `case` pattern ends in a ) that closes nothing, so a $( … ) that
-			// holds one cannot be followed: stay inside it, which leaves the rest
-			// of the line as code and the rule refusing, never allowing.
+			// ⛔ $(( … ) that is not closed by )) is a command substitution holding
+			// a subshell, which is not arithmetic at all. Unsure refuses.
+			if f.kind == 'A' && f.depth == 1 && next != ')' {
+				for k := i; k < len(s); k++ {
+					cls[k] = ClassCode
+				}
+				return cls
+			}
+			// ⛔ A `case` pattern ends in a ) that closes nothing, so which ) ends a
+			// $( … ) holding one cannot be known. UNSURE ALWAYS RESOLVES TO
+			// REFUSING: the rest of the command is code that no quote can change,
+			// never a frame in which a ' still quotes.
 			if f.depth == 0 && f.kind == 'P' && caseWord.MatchString(s[f.start:i]) {
-				f.depth = 1
+				for k := i; k < len(s); k++ {
+					cls[k] = ClassCode
+				}
+				return cls
 			} else if f.depth == 0 {
 				stack = stack[:len(stack)-1]
 			}
@@ -182,6 +200,14 @@ func Classify(cmd string) []byte {
 			fill(i, i+2, ClassCode)
 			stack = append(stack, frame{kind: 'A', depth: 2})
 			i += 2
+		case c == '#' && wordStart(s, cls, i) && top() != 'C':
+			// ⛔ A comment inside $( … ) or ${ … }: bash finds the closing ) before
+			// it reads the comment, so what a comment hides there is not what it
+			// hides on its own line. Unsure refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
 		case c == '#' && wordStart(s, cls, i):
 			end := strings.IndexByte(s[i:], '\n')
 			if end < 0 {
@@ -208,12 +234,41 @@ func Classify(cmd string) []byte {
 			cls[i] = ClassCode
 			i++
 			if len(pending) > 0 {
+				from := i
+				expanded := false
+				for _, h := range pending {
+					expanded = expanded || !h.quoted
+				}
 				i = heredocBodies(s, cls, i, pending)
 				pending = nil
+				// ⛔ An UNQUOTED body expands, and a $( in it can run past the
+				// terminator line in dash. Unsure refuses.
+				if expanded && strings.Contains(s[from:i], "$(") {
+					for k := from; k < len(s); k++ {
+						cls[k] = ClassCode
+					}
+					return cls
+				}
+				// ⛔ Inside $( … ) bash looks for the closing ) before it reads a
+				// heredoc, so a ) in the body can end the substitution early.
+				// Unsure refuses.
+				if len(stack) > 0 && strings.Contains(s[from:i], ")") {
+					for k := from; k < len(s); k++ {
+						cls[k] = ClassCode
+					}
+					return cls
+				}
 			}
 		default:
 			cls[i] = ClassCode
 			i++
+		}
+	}
+	// ⛔ A frame still open at the end is a command this lexer did not follow to
+	// its close: UNSURE RESOLVES TO REFUSING, so nothing in it is quoted.
+	if len(stack) > 0 {
+		for k := range cls {
+			cls[k] = ClassCode
 		}
 	}
 	return cls
@@ -273,6 +328,7 @@ loop:
 // to and including each terminator line, and returns where the code resumes.
 func heredocBodies(s string, cls []byte, pos int, pending []heredoc) int {
 	for _, h := range pending {
+		start, closed := pos, false
 		for pos < len(s) {
 			end := strings.IndexByte(s[pos:], '\n')
 			lineEnd := len(s)
@@ -308,7 +364,16 @@ func heredocBodies(s string, cls []byte, pos int, pending []heredoc) int {
 			}
 			pos = stop
 			if term {
+				closed = true
 				break
+			}
+		}
+		// ⛔ A body that never ends is a construct the shell reads in ways this
+		// does not follow (inside $( … ) bash runs what the body holds): UNSURE
+		// RESOLVES TO REFUSING, so it is code.
+		if !closed {
+			for k := start; k < len(s); k++ {
+				cls[k] = ClassCode
 			}
 		}
 	}

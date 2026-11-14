@@ -71,6 +71,13 @@ func reviewCases() []string {
 		"echo a;#" + T,
 		"echo a&#" + T,
 		"echo `echo '`'` " + T,
+		`echo "$(echo case)'` + T + `'"`,
+		`echo "$(: case)'` + T + `'"`,
+		`echo "$(echo 'case')'` + T + `'"`,
+		`echo "$(echo x.case)'` + T + `'"`,
+		`echo "$(case x in x) :;; esac)'` + T + `'"`,
+		`echo "$(echo "$(case x in x) :;; esac)")'` + T + `'"`,
+		`echo "$(case x in (x) :;; esac)'` + T + `'"`,
 	}
 }
 
@@ -103,6 +110,13 @@ var span = regexp.MustCompile("`[^`'\"\\\\$]*`")
 // substitution creates. Each command gets its own directory and a timeout.
 func runs(t *testing.T, shell, cmd string) bool {
 	t.Helper()
+	// ⛔ dash has no $'…': it reads the $ as a character and the quote as an
+	// ordinary one, so it and bash cannot both be right about `$'a\'T'`. The
+	// rule follows bash (and zsh), the shells this guard protects; asking dash
+	// about ANSI-C quoting would contradict the issue's own false refusal.
+	if strings.HasSuffix(shell, "dash") && strings.Contains(cmd, "$'") {
+		return false
+	}
 	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -163,4 +177,85 @@ func TestTheRuleRefusesWhateverARealShellRuns(t *testing.T) {
 	if ran == 0 {
 		t.Fatal("no shell ran any backtick of any case: the oracle cannot see what it is for")
 	}
+}
+
+// oracleTokens is the SAFE grammar of FuzzOracle: no command but echo, : and
+// true, no file but ran. One input byte picks one token, so the fuzzer's
+// mutations are edits to a token sequence, and every program it builds can do
+// nothing worse than create ./ran in its own directory.
+var oracleTokens = []string{
+	"echo ", ": ", "true ", "case x in x) ", ";; esac", "$(", ")", "$((", "))",
+	"${x:-", "}", "'", "\"", "$'", "\\", "#", ";", "|", "&&", "\n",
+	"<<'E'\n", "<<E\n", "<<-E\n", "E\n", "\tE\n", " ", "x", "(", "(( ",
+	T, T, T,
+}
+
+func oracleProgram(data []byte) string {
+	var b strings.Builder
+	for _, c := range data {
+		b.WriteString(oracleTokens[int(c)%len(oracleTokens)])
+	}
+	return b.String()
+}
+
+func oracleSeed(toks ...string) []byte {
+	var out []byte
+	for _, tok := range toks {
+		found := false
+		for i, o := range oracleTokens {
+			if o == tok {
+				out = append(out, byte(i))
+				found = true
+				break
+			}
+		}
+		if !found {
+			panic("not a token: " + tok)
+		}
+	}
+	return out
+}
+
+// ⛔ THE DIFFERENTIAL FUZZ. TestTheRuleRefusesWhateverARealShellRuns judges the
+// cases somebody thought of; this one judges the cases nobody did. Each program
+// is built from the safe grammar above and run under bash and dash exactly as
+// the oracle does (own directory, 5 s, stdin closed). It fails when either
+// shell created the marker and the rule allowed the command.
+func FuzzOracle(f *testing.F) {
+	var shells []string
+	for _, s := range []string{"bash", "dash"} {
+		if p, err := exec.LookPath(s); err == nil {
+			shells = append(shells, p)
+		}
+	}
+	for _, seed := range [][]byte{
+		oracleSeed("echo ", "\"", "$(", "echo ", "x", ")", "'", T, "'", "\""),
+		oracleSeed("echo ", "\"", "$(", ": ", "x", ")", "'", T, "'", "\""),
+		oracleSeed("echo ", "\"", "$(", "case x in x) ", ": ", ";; esac", ")", "'", T, "'", "\""),
+		oracleSeed("echo ", "\\", " ", "#", T),
+		oracleSeed("echo ", "$(", "true ", ")", "#", T),
+		oracleSeed("echo ", "$'", "x", "\\", "'", T, "'", "'"),
+		oracleSeed("echo ", "<<'E'\n", " ", "E\n", "'", "\n", "E\n", "echo ", T, ";", ": ", "'", "\n", "'"),
+		oracleSeed("echo ", "\"", "${x:-", "\"", "'", "\"", "}", "\"", " ", T),
+		oracleSeed("(( ", "<<'E'\n", "))", "\n", "echo ", T),
+		oracleSeed("echo ", "\"", "<<'E'\n", "\"", "\n", "echo ", T),
+		oracleSeed("true ", ";", "echo ", T),
+		oracleSeed("<<-E\n", "\tE\n", "echo ", T),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(shells) == 0 || len(data) > 40 {
+			t.Skip()
+		}
+		cmd := oracleProgram(data)
+		if !strings.Contains(cmd, "`") || Check(cmd).Found() {
+			return // nothing to judge, or refused: the safe direction
+		}
+		for _, sh := range shells {
+			if runs(t, sh, cmd) {
+				t.Fatalf("%s RAN a backtick and the rule allowed it:\n  %q", filepath.Base(sh), cmd)
+			}
+		}
+	})
 }
