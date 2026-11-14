@@ -1,6 +1,11 @@
 package shellcmd
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+var caseWord = regexp.MustCompile(`\bcase\b`)
 
 // The class of one byte of a command line, as [Classify] reports it.
 const (
@@ -25,6 +30,7 @@ const (
 type heredoc struct {
 	tag    string
 	quoted bool
+	dash   bool // <<-: leading TABS of the terminator line are ignored
 }
 
 // Classify says, for every byte of cmd, how the shell would read it. It is the
@@ -39,8 +45,10 @@ func Classify(cmd string) []byte {
 	s := cmd
 	cls := make([]byte, len(s))
 	type frame struct {
-		kind  byte // 'D' double quotes, 'P' $( … ), 'A' $(( … ))
+		kind  byte // 'D' double quotes, 'P' $( … ), 'A' $(( … )) or (( … )), 'B' ${ … }
 		depth int
+		dq    bool // 'B' opened inside double quotes
+		start int  // where the frame opened
 	}
 	var stack []frame
 	var pending []heredoc
@@ -49,6 +57,11 @@ func Classify(cmd string) []byte {
 			return 'C'
 		}
 		return stack[len(stack)-1].kind
+	}
+	// In "${x:-'…'}" the single quotes are NOT quoting, so a backtick between
+	// them runs: the classifier leaves them as code, and the rule refuses.
+	plainSingle := func() bool {
+		return len(stack) > 0 && stack[len(stack)-1].kind == 'B' && stack[len(stack)-1].dq
 	}
 	fill := func(from, to int, c byte) {
 		for k := from; k < to && k < len(s); k++ {
@@ -70,14 +83,21 @@ func Classify(cmd string) []byte {
 				cls[i] = ClassDouble
 				stack = stack[:len(stack)-1]
 				i++
+			case c == '$' && next == '$':
+				cls[i], cls[i+1] = ClassDouble, ClassDouble
+				i += 2
+			case c == '$' && next == '{':
+				fill(i, i+2, ClassCode)
+				stack = append(stack, frame{kind: 'B', dq: true})
+				i += 2
 			case c == '$' && next == '(':
 				fill(i, i+2, ClassCode)
 				if i+2 < len(s) && s[i+2] == '(' {
 					cls[i+2] = ClassCode
-					stack = append(stack, frame{'A', 2})
+					stack = append(stack, frame{kind: 'A', depth: 2})
 					i += 3
 				} else {
-					stack = append(stack, frame{'P', 1})
+					stack = append(stack, frame{kind: 'P', depth: 1, start: i})
 					i += 2
 				}
 			default:
@@ -90,6 +110,20 @@ func Classify(cmd string) []byte {
 		case c == '\\' && next != 0:
 			cls[i], cls[i+1] = ClassCode, ClassEscaped
 			i += 2
+		case c == '$' && next == '$':
+			fill(i, i+2, ClassCode)
+			i += 2
+		case c == '$' && next == '{':
+			fill(i, i+2, ClassCode)
+			stack = append(stack, frame{kind: 'B', dq: plainSingle()})
+			i += 2
+		case c == '}' && top() == 'B':
+			stack = stack[:len(stack)-1]
+			cls[i] = ClassCode
+			i++
+		case plainSingle() && (c == '\'' || (c == '$' && next == '\'')):
+			cls[i] = ClassCode
+			i++
 		case c == '$' && next == '\'':
 			j := i + 2
 			for j < len(s) && s[j] != '\'' {
@@ -115,16 +149,16 @@ func Classify(cmd string) []byte {
 			}
 		case c == '"':
 			cls[i] = ClassDouble
-			stack = append(stack, frame{'D', 0})
+			stack = append(stack, frame{kind: 'D'})
 			i++
 		case c == '$' && next == '(':
 			fill(i, i+2, ClassCode)
 			if i+2 < len(s) && s[i+2] == '(' {
 				cls[i+2] = ClassCode
-				stack = append(stack, frame{'A', 2})
+				stack = append(stack, frame{kind: 'A', depth: 2})
 				i += 3
 			} else {
-				stack = append(stack, frame{'P', 1})
+				stack = append(stack, frame{kind: 'P', depth: 1, start: i})
 				i += 2
 			}
 		case c == '(' && (top() == 'P' || top() == 'A'):
@@ -132,13 +166,23 @@ func Classify(cmd string) []byte {
 			cls[i] = ClassCode
 			i++
 		case c == ')' && (top() == 'P' || top() == 'A'):
-			stack[len(stack)-1].depth--
-			if stack[len(stack)-1].depth == 0 {
+			f := &stack[len(stack)-1]
+			f.depth--
+			// ⛔ A `case` pattern ends in a ) that closes nothing, so a $( … ) that
+			// holds one cannot be followed: stay inside it, which leaves the rest
+			// of the line as code and the rule refusing, never allowing.
+			if f.depth == 0 && f.kind == 'P' && caseWord.MatchString(s[f.start:i]) {
+				f.depth = 1
+			} else if f.depth == 0 {
 				stack = stack[:len(stack)-1]
 			}
 			cls[i] = ClassCode
 			i++
-		case c == '#' && wordStart(s, i):
+		case c == '(' && next == '(':
+			fill(i, i+2, ClassCode)
+			stack = append(stack, frame{kind: 'A', depth: 2})
+			i += 2
+		case c == '#' && wordStart(s, cls, i):
 			end := strings.IndexByte(s[i:], '\n')
 			if end < 0 {
 				end = len(s) - i
@@ -152,7 +196,7 @@ func Classify(cmd string) []byte {
 				continue
 			}
 			h, end, ok := parseHeredoc(s, i+2)
-			if !ok || top() == 'A' {
+			if !ok || top() == 'A' || top() == 'B' {
 				fill(i, i+2, ClassCode)
 				i += 2
 				continue
@@ -176,8 +220,11 @@ func Classify(cmd string) []byte {
 }
 
 // wordStart reports whether a # at i begins a comment.
-func wordStart(s string, i int) bool {
-	return i == 0 || strings.IndexByte(" \t\n;&|()", s[i-1]) >= 0
+//
+// The byte before must be UNESCAPED code and a separator: `a\ #x` and `$(a)#x`
+// are mid-word, and `)` is not a boundary.
+func wordStart(s string, cls []byte, i int) bool {
+	return i == 0 || (cls[i-1] == ClassCode && strings.IndexByte(" \t\n;&|(", s[i-1]) >= 0)
 }
 
 // parseHeredoc reads the tag after `<<` at j. The tag is a shell WORD, so it may
@@ -185,6 +232,7 @@ func wordStart(s string, i int) bool {
 // literal. A tag that starts with a digit is a shift (`1<<2`), not a heredoc.
 func parseHeredoc(s string, j int) (h heredoc, end int, ok bool) {
 	if j < len(s) && s[j] == '-' {
+		h.dash = true
 		j++
 	}
 	for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
@@ -231,7 +279,11 @@ func heredocBodies(s string, cls []byte, pos int, pending []heredoc) int {
 			if end >= 0 {
 				lineEnd = pos + end
 			}
-			term := strings.TrimSpace(s[pos:lineEnd]) == h.tag
+			text := s[pos:lineEnd]
+			if h.dash {
+				text = strings.TrimLeft(text, "\t")
+			}
+			term := text == h.tag
 			stop := lineEnd + 1
 			if stop > len(s) {
 				stop = len(s)

@@ -45,7 +45,7 @@ func TestRefused(t *testing.T) {
 		{"single quotes inside double quotes are apostrophes, not quoting",
 			"foo --note \"see '`x`'\"", true},
 	} {
-		f := Check(tc.cmd)
+		f := check(tc.cmd)
 		if !f.Found() {
 			t.Errorf("%s: allowed\n  %s", tc.name, tc.cmd)
 			continue
@@ -85,7 +85,7 @@ func TestAllowed(t *testing.T) {
 		{"a quoted heredoc is not expanded",
 			"cat <<'EOF'\nuse `x` here\nEOF"},
 	} {
-		if f := Check(tc.cmd); f.Found() {
+		if f := check(tc.cmd); f.Found() {
 			t.Errorf("%s: refused at %d (%s)\n  %s", tc.name, f.Off, f.Context, tc.cmd)
 		}
 	}
@@ -95,7 +95,7 @@ func TestAllowed(t *testing.T) {
 // ever stops finding the live case, every table above goes quietly green.
 func TestTheDetectorCanFire(t *testing.T) {
 	const live = "agentsync tell peer \"and `vulnscan -selftest` twice\""
-	f := Check(live)
+	f := check(live)
 	if !f.Found() {
 		t.Fatal("the detector no longer sees the command that caused this package")
 	}
@@ -127,7 +127,7 @@ func TestTheDetectorCanFire(t *testing.T) {
 // subject is absent.
 func TestTheEscapeIsReadFromTheCommandText(t *testing.T) {
 	const bad = "echo `date`"
-	if !Check(bad).Found() {
+	if !check(bad).Found() {
 		t.Fatal("the unescaped form must be refused, or this test proves nothing")
 	}
 	for _, c := range []struct {
@@ -144,14 +144,14 @@ func TestTheEscapeIsReadFromTheCommandText(t *testing.T) {
 		{"after the command, it is an argument", "echo GITSAFE_ALLOW_BACKTICK=1 " + "`date`", true},
 		{"another rule's escape is not this one", "GITSAFE_ALLOW_VOLATILE=1 " + bad, true},
 	} {
-		if got := Check(c.cmd).Found(); got != c.want {
+		if got := check(c.cmd).Found(); got != c.want {
 			t.Errorf("%s: refused = %v, want %v\n  %s", c.name, got, c.want, c.cmd)
 		}
 	}
 
 	// And the environment has no say, in either direction.
 	t.Setenv(Escape, "1")
-	if !Check(bad).Found() {
+	if !check(bad).Found() {
 		t.Error("an environment variable disarmed a rule that runs before any shell")
 	}
 }
@@ -183,7 +183,7 @@ func TestReview112FalseRefusals(t *testing.T) {
 		{"an escaped backtick in an unquoted heredoc body", "cat <<EOF\nuse \\`x\\`\nEOF"},
 		{"a # inside a word is not a comment", "echo a#b '`x`'"},
 	} {
-		if f := Check(tc.cmd); f.Found() {
+		if f := check(tc.cmd); f.Found() {
 			t.Errorf("%s: refused at %d (%s)\n  %s", tc.name, f.Off, f.Context, tc.cmd)
 		}
 	}
@@ -214,7 +214,7 @@ func TestReview112Misses(t *testing.T) {
 		{"an expanded heredoc body runs",
 			"cat <<EOF\nit's `date`\nEOF"},
 	} {
-		if !Check(tc.cmd).Found() {
+		if !check(tc.cmd).Found() {
 			t.Errorf("%s: allowed\n  %s", tc.name, tc.cmd)
 		}
 	}
@@ -225,7 +225,7 @@ func TestReview112Misses(t *testing.T) {
 		"GITSAFE_ALLOW_BACKTICK=1 cat <<EOF\nuse `x`\nEOF",
 		"GITSAFE_ALLOW_BACKTICK=1 echo 2>&1 `date`",
 	} {
-		if f := Check(cmd); f.Found() {
+		if f := check(cmd); f.Found() {
 			t.Errorf("the escape did not cover its own statement (%s)\n  %s", f.Context, cmd)
 		}
 	}

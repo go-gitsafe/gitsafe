@@ -179,6 +179,11 @@ func FuzzClassify(f *testing.F) {
 		if cls := Classify(cmd); len(cls) != len(cmd) {
 			t.Fatalf("%d classes for %d bytes of %q", len(cls), len(cmd), cmd)
 		}
+		for i, c := range Classify(cmd) {
+			if !strings.ContainsRune("cdskhue", rune(c)) {
+				t.Fatalf("byte %d of %q has no class (%q)", i, cmd, c)
+			}
+		}
 		if got := StripQuotedHeredocs(cmd); len(got) > len(cmd) {
 			t.Fatalf("stripping grew %q into %q", cmd, got)
 		}

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("cat <<'E'\n E\n'\nE\necho `:>ran`; : '\n'")
