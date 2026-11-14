@@ -1516,7 +1516,7 @@ for, and what was not done before merging it. Over **4 346 transcripts and
 | the rule | refused |
 | --- | --- |
 | as released | **5 050** |
-| after this fix | **235** |
+| after this fix | **539** |
 
 The whole of that difference was one reading, and not in this rule at all.
 `shellcmd.Classify` carried a doubt about a `)` inside a heredoc body within
@@ -1535,6 +1535,43 @@ reasoned with.** A `)` the body itself opens with a `(` ends nothing in zsh,
 bash or dash; a `)` with no `(` of its own can. The doubt now covers exactly the
 unbalanced case, plus every *expanded* body.
 
+### ⛔ And a `(` bash never sees must not be counted
+
+The first version of that balance test counted a `(` wherever it appeared, and
+an independent review of the pull request broke it in one move. bash finds the
+closing `)` by scanning the characters, and that scan **skips quoted spans and
+comments**. A `(` inside one is a `(` bash never sees, so the `)` after it looks
+matched here and ends the substitution there — and everything past it, which
+this package had just declared a quoted heredoc body, is live code. A **false
+allow**, the dangerous direction, and the inputs are ordinary English:
+
+```
+--body "$(cat <<'EOF'
+don't do this (it's wrong) and run `…` instead
+EOF
+)"
+```
+
+`don'` … `(it'` is one span to bash, the `(` is hidden inside it, and the `)`
+after `s wrong` ends the substitution. bash 3.2.57 runs that backtick. Four such
+classes were found — an apostrophe, a single-quoted `(`, a double-quoted `(`, a
+`(` in a `#` comment — and none of this package's own rows could have caught
+them, because every row happened to be quote-free. A table is only as honest as
+its own variety.
+
+Two more readings came out of fixing it, both measured rather than argued:
+
+- **An unterminated span ends nothing.** A scan that cannot close a span never
+  reaches a `)` either. `bash -n` on the real PR body answers *"unexpected EOF
+  while looking for matching `'`"* — a syntax error, in which nothing runs —
+  while `zsh -n` accepts the same file. So an unterminated span is an allow,
+  not the unsure case; prose has an odd apostrophe more often than not.
+- **A `#` opens a comment only after whitespace or a newline** — narrower than
+  the lexer's own word-start set. A fuzz run found a body beginning `;#case x in
+  x)` in 44 seconds, where treating that `#` as a comment hid the `)`. bash was
+  then asked for the boundary directly: `;#` and `|#` are *not* comments to it,
+  while a `#` after a space or a newline is.
+
 ⛔ **And the bash that answers depends on which bash you have.** The three
 unbalanced cases are evaluated by **bash 3.2.57**, the one Apple ships and the
 one on this machine, and are *not* evaluated by the bash on `ubuntu-latest`.
@@ -1548,8 +1585,8 @@ the shells check that statement instead of making it.
 ⭐ **The fix moved four other rules, and three of those moves are recovered
 misses.** Every rule strips quoted heredoc bodies through the same classifier,
 so a body that was not recognised stayed in the command text and blinded them.
-Measured against a drift control (the same binary twice over six minutes moved
-by **1**), `ghbyhand` went **up** by 34 — and `--why` says what it now matches:
+Measured against a drift control (the same binary twice over six minutes),
+`ghbyhand` went **up** by 30 — and `--why` says what it now matches:
 
 ```
 gh api repos/go-ansible/modules/pulls/9 -X PATCH -f body="$BODY"

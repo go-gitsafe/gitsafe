@@ -307,15 +307,84 @@ func Classify(cmd string) []byte {
 // unbalancedClose reports whether body holds a ) that body itself does not
 // open — the one a command substitution around it can end on.
 //
-// It counts nothing else: a ) inside '…' or "…" in the body is still a ) to the
-// scan bash runs over the characters, and treating it as quoted would be a
-// second model of the same text. Unsure refuses, so a doubtful ) counts.
+// ⛔ IT MUST COUNT A ( ONLY WHERE BASH COUNTS ONE, and the first version of
+// this function did not. bash finds the ) that closes a $( … ) by scanning the
+// characters, and that scan SKIPS quoted spans — '…', "…", `…`, $'…' — and a #
+// comment. A ( inside one of those is a ( bash never sees, so counting it here
+// made the following ) look matched while bash treated it as the end of the
+// substitution. Everything after it was then live code that this package
+// called a quoted heredoc body: a FALSE ALLOW, and the inputs were ordinary
+// English prose, because an apostrophe opens a span:
+//
+//	--body "$(cat <<'EOF'
+//	don't do this (it's wrong) and run `…` instead
+//	EOF
+//	)"
+//
+// bash 3.2.57 runs that backtick. "don'" … "(it'" is one span, the ( is hidden
+// inside it, and the ) after "s wrong" ends the substitution. Found by review,
+// not by this package's own tests, whose rows all happened to be quote-free.
+//
+// ⛔ AN UNTERMINATED SPAN ENDS NOTHING, and that is measured rather than
+// assumed. A scan that cannot close a span never reaches a ) either, so it
+// cannot end the substitution early: bash 3.2.57 answers `bash -n` on the real
+// PR body of this package's testdata with
+//
+//	unexpected EOF while looking for matching `''
+//
+// — a syntax error, in which nothing runs at all — while zsh -n accepts the
+// same file, because zsh does not scan a quoted heredoc body for quotes. So an
+// unterminated span is an allow here, not the unsure case. Ordinary prose has
+// an odd apostrophe more often than not, and refusing on it would put back
+// most of the 5 050.
 func unbalancedClose(body string) bool {
 	depth := 0
 	for i := 0; i < len(body); i++ {
-		switch body[i] {
+		switch c := body[i]; c {
 		case '\\':
 			i++ // a \) is not a ) to anyone
+		case '\'', '"', '`':
+			// Skip the span, the way bash's scan does. A backtick span counts
+			// too: it is what keeps the apostrophes of ordinary prose from
+			// pairing across a code fence.
+			j := i + 1
+			for ; j < len(body); j++ {
+				if body[j] == '\\' && c != '\'' {
+					j++
+					continue
+				}
+				if body[j] == c {
+					break
+				}
+			}
+			if j >= len(body) {
+				return false // unterminated: the scan never reaches a )
+			}
+			i = j
+		case '#':
+			// ⛔ WHITESPACE OR A NEWLINE, AND NOTHING ELSE — which is NARROWER
+			// than [wordStart]'s set and was measured, not reasoned. bash was
+			// asked where a # hides a ( from its own scan
+			// (TestWhereACommentHidesAParenFromBash):
+			//
+			//	"# a ( note"   after \n   comment      bash ended the $( … )
+			//	"; #a ( note"  after ' '  comment      ended it
+			//	"x #a ( note"  after ' '  comment      ended it
+			//	";#a ( note"   after ;    NOT a comment   did not end it
+			//	"|#a ( note"   after |    NOT a comment   did not end it
+			//	"x#a ( note"   mid-word  NOT a comment   did not end it
+			//
+			// The ; and | rows are why this is not wordStart: a fuzz run found
+			// ";#case x in x) `…`" in 44 seconds, where treating that # as a
+			// comment hid the ) and allowed what bash runs.
+			if i > 0 && strings.IndexByte(" \t\n", body[i-1]) < 0 {
+				continue
+			}
+			j := strings.IndexByte(body[i:], '\n')
+			if j < 0 {
+				return false // the comment runs to the end: no ) can be seen
+			}
+			i += j
 		case '(':
 			depth++
 		case ')':
