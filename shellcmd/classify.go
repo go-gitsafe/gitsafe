@@ -347,9 +347,21 @@ func unbalancedClose(body string) bool {
 			// Skip the span, the way bash's scan does. A backtick span counts
 			// too: it is what keeps the apostrophes of ordinary prose from
 			// pairing across a code fence.
+			//
+			// ⛔ $'…' HONOURS A BACKSLASH AND '…' DOES NOT, so the two end in
+			// different places and a ) can be quoted in one and bare in the
+			// other. Skipping both alike closed $'a\'' early at the \', left
+			// the trailing ' looking unterminated — an allow — and bash 3.2.57
+			// then ended the substitution at the ) after it and ran the rest.
+			// A false allow, and a regression of the hidden-paren fix; found by
+			// the second pass of the review that found the first. The control
+			// that isolates it: without the $, bash does NOT end it, because
+			// there the backslash is literal and the span really does stop at
+			// the \'. See TestAnsiCQuotingEndsWhereBashEndsIt.
+			ansiC := c == '\'' && i > 0 && body[i-1] == '$'
 			j := i + 1
 			for ; j < len(body); j++ {
-				if body[j] == '\\' && c != '\'' {
+				if body[j] == '\\' && (c != '\'' || ansiC) {
 					j++
 					continue
 				}
