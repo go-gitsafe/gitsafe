@@ -63,6 +63,8 @@ func RootCmd() *cobra.Command {
 		rule     string
 		escaped  bool
 		examples int
+		why      bool
+		full     bool
 	)
 	c := &cobra.Command{
 		Use:   "guardscan",
@@ -75,7 +77,7 @@ It runs nothing: every rule is a pure function of the command text. Commands
 are printed through the redactor, the same way the guards print.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if code := report(cmd, dir, rule, escaped, examples); code != 0 {
+			if code := report(cmd, dir, rule, escaped, examples, why, full); code != 0 {
 				return cliflags.Status(code)
 			}
 			return nil
@@ -88,6 +90,12 @@ are printed through the redactor, the same way the guards print.`,
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
+	c.Flags().BoolVar(&why, "why", false,
+		"under each example, what the rule says it matched -- the long command's "+
+			"prefix is not where the match is")
+	c.Flags().BoolVar(&full, "full", false,
+		"print each example command whole, newlines and all, instead of one "+
+			"truncated line -- a reconstruction of a long command is not the command")
 	return c
 }
 
@@ -97,79 +105,102 @@ are printed through the redactor, the same way the guards print.`,
 // a rule nobody adds a line for is a rule this scan stays quiet about. The
 // test TestEveryRuleGuardBashRunsIsScanned reads the import block of
 // cmd/guard-bash/main.go and fails when this map does not name all of them.
-func rules(cwd, home, tmpdir string) map[string]func(string) (string, bool) {
-	kind := func(found bool, k string) (string, bool) {
+// refusal is one rule's answer about one command: the group it belongs to, and
+// what the rule actually matched inside it.
+//
+// ⛔ WHY THE MATCHED TEXT IS CARRIED AT ALL. A count alone is not actionable,
+// and worse, it invites a diagnosis from the command's PREFIX — which is all
+// the example lines can show for a long command. That is not a hypothetical:
+// reading truncated examples of this rule's 5 050 refusals, the first
+// conclusion drawn was that they were dominated by `gh pr create --body
+// "$(cat <<'EOF' …)"`, and a test written against that shape passed. The
+// backtick was elsewhere in the line every time. --why prints what the rule
+// says it matched, so the shape is read from the rule rather than guessed.
+type refusal struct {
+	Kind  string // the group label, one line per kind in the report
+	Why   string // what the rule matched, when the rule can say
+	Found bool
+}
+
+func rules(cwd, home, tmpdir string) map[string]func(string) refusal {
+	// kind takes the finding itself so that any rule with a String method
+	// contributes its own account of the match; the rest report the kind only.
+	kind := func(f any, found bool, k string) refusal {
 		if !found {
-			return "", false
+			return refusal{}
 		}
 		if k == "" {
 			k = "refused"
 		}
-		return k, true
+		r := refusal{Kind: k, Found: true}
+		if s, ok := f.(fmt.Stringer); ok {
+			r.Why = s.String()
+		}
+		return r
 	}
-	return map[string]func(string) (string, bool){
-		"bypass": func(c string) (string, bool) {
+	return map[string]func(string) refusal{
+		"bypass": func(c string) refusal {
 			f := bypass.Check(c)
-			return kind(f.Found(), f.Rule)
+			return kind(f, f.Found(), f.Rule)
 		},
-		"secretarg": func(c string) (string, bool) {
+		"secretarg": func(c string) refusal {
 			f := secretarg.Check(c)
-			return kind(f.Found(), f.Rule)
+			return kind(f, f.Found(), f.Rule)
 		},
-		"discard": func(c string) (string, bool) {
+		"discard": func(c string) refusal {
 			f := discard.Check(c)
-			return kind(f.Found(), f.Rule)
+			return kind(f, f.Found(), f.Rule)
 		},
-		"pipestatus": func(c string) (string, bool) {
+		"pipestatus": func(c string) refusal {
 			f := pipestatus.Check(c)
-			return kind(f.Found(), "a status read from the wrong command")
+			return kind(f, f.Found(), "a status read from the wrong command")
 		},
-		"sigpipe": func(c string) (string, bool) {
+		"sigpipe": func(c string) refusal {
 			f := sigpipe.Check(c)
-			return kind(f.Found(), "a producer killed by its consumer")
+			return kind(f, f.Found(), "a producer killed by its consumer")
 		},
 		// ⛔ IN HERE BECAUSE main_test.go REFUSED THE RULE WITHOUT IT, and that
 		// refusal is the repository working: a rule guard-bash runs and
 		// guardscan cannot scan is a rule whose false refusals nobody would
 		// ever count. The act it names is the fleet program, so the kind is
 		// what to run instead.
-		"ghbyhand": func(c string) (string, bool) {
+		"ghbyhand": func(c string) refusal {
 			f := ghbyhand.Check(c)
-			return kind(f.Found(), f.Act)
+			return kind(f, f.Found(), f.Act)
 		},
 		// Same gate, same reason — and this one's false refusals are the ones
 		// to count, since it refuses a character rather than a command shape.
-		"literaltick": func(c string) (string, bool) {
+		"literaltick": func(c string) refusal {
 			f := literaltick.Check(c)
-			return kind(f.Found(), "a backtick the shell would evaluate")
+			return kind(f, f.Found(), "a backtick the shell would evaluate")
 		},
-		"shellwork": func(c string) (string, bool) {
+		"shellwork": func(c string) refusal {
 			f := shellwork.Check(c)
-			return kind(f.Found(), f.Kind)
+			return kind(f, f.Found(), f.Kind)
 		},
-		"testrun": func(c string) (string, bool) {
+		"testrun": func(c string) refusal {
 			f := testrun.Check(c)
-			return kind(f.Found(), f.Kind)
+			return kind(f, f.Found(), f.Kind)
 		},
-		"chainedgate": func(c string) (string, bool) {
+		"chainedgate": func(c string) refusal {
 			f := chainedgate.Check(c)
-			return kind(f.Found(), f.Gate+" chained with "+f.Write)
+			return kind(f, f.Found(), f.Gate+" chained with "+f.Write)
 		},
-		"stalebase": func(c string) (string, bool) {
+		"stalebase": func(c string) refusal {
 			f := stalebase.Check(c)
-			return kind(f.Found(), "a branch started from an unrefreshed remote ref")
+			return kind(f, f.Found(), "a branch started from an unrefreshed remote ref")
 		},
-		"volatile": func(c string) (string, bool) {
+		"volatile": func(c string) refusal {
 			f := volatile.Check(c, cwd, home, tmpdir)
 			if f.Found() {
-				return kind(true, f.Rule)
+				return kind(f, true, f.Rule)
 			}
 			// The transcripts do not record run_in_background, so this counts
 			// the commands the redirect half WOULD refuse if they had been
 			// started in the background: an upper bound, which is what a
 			// false-refusal hunt wants.
 			g := volatile.CheckRedirect(c, cwd, home, tmpdir, true)
-			return kind(g.Found(), "output redirected to a volatile directory (if backgrounded)")
+			return kind(g, g.Found(), "output redirected to a volatile directory (if backgrounded)")
 		},
 	}
 }
@@ -177,10 +208,11 @@ func rules(cwd, home, tmpdir string) map[string]func(string) (string, bool) {
 type group struct {
 	rule, kind string
 	commands   map[string]int
+	whys       map[string]string // command -> what the rule matched in it
 	total      int
 }
 
-func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int) int {
+func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int, why, full bool) int {
 	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
 	corpus, err := Read(dir, maxLine)
@@ -211,7 +243,7 @@ func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int
 			fmt.Fprintf(stderr, "guardscan: no rule called %q\n", only)
 			return 2
 		}
-		checks = map[string]func(string) (string, bool){only: fn}
+		checks = map[string]func(string) refusal{only: fn}
 	}
 
 	groups := map[string]*group{}
@@ -223,16 +255,17 @@ func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int
 			}
 		}
 		for name, check := range checks {
-			k, found := check(command)
-			if !found {
+			r := check(command)
+			if !r.Found {
 				continue
 			}
-			key := name + "\x00" + k
+			key := name + "\x00" + r.Kind
 			g := groups[key]
 			if g == nil {
-				g = &group{rule: name, kind: k, commands: map[string]int{}}
+				g = &group{rule: name, kind: r.Kind, commands: map[string]int{}, whys: map[string]string{}}
 				groups[key] = g
 			}
+			g.whys[command] = r.Why
 			g.commands[command] += n
 			g.total += n
 			refusedTotal += n
@@ -267,7 +300,19 @@ func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int
 			if i >= examples {
 				break
 			}
-			fmt.Fprintf(stdout, "    %s\n", oneLine(r.String(command)))
+			if full {
+				fmt.Fprintf(stdout, "    ----8<----\n%s\n    ---->8----\n", r.String(command))
+			} else {
+				fmt.Fprintf(stdout, "    %s\n", oneLine(r.String(command)))
+			}
+			if !why {
+				continue
+			}
+			if w := g.whys[command]; w != "" {
+				fmt.Fprintf(stdout, "      ↳ %s\n", oneLine(r.String(w)))
+			} else {
+				fmt.Fprintf(stdout, "      ↳ (this rule does not say what it matched)\n")
+			}
 		}
 	}
 	return 0

@@ -186,7 +186,7 @@ func TestEveryRuleGuardBashRunsIsScanned(t *testing.T) {
 func TestTheRuleGateCanFail(t *testing.T) {
 	full := rules("/cwd", "/home", "/tmpdir")
 	for missing := range full {
-		short := map[string]func(string) (string, bool){}
+		short := map[string]func(string) refusal{}
 		for name, fn := range full {
 			if name != missing {
 				short[name] = fn

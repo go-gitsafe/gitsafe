@@ -249,10 +249,33 @@ func Classify(cmd string) []byte {
 					}
 					return cls
 				}
-				// ⛔ Inside $( … ) bash looks for the closing ) before it reads a
+				// ⛔ Inside $( … ) bash looks for the closing ) before it reads the
 				// heredoc, so a ) in the body can end the substitution early.
-				// Unsure refuses.
-				if len(stack) > 0 && strings.Contains(s[from:i], ")") {
+				// Unsure refuses. It is REAL: the fuzz corpus holds
+				//
+				//	"$(<<'E'\ncase x in x) `:>ran`E\nE\ncase x in x) "
+				//
+				// which bash runs. But the doubt was stated about any ), and so
+				// stated it cost more than every other reading in this file put
+				// together: guardscan over this machine's transcripts put the
+				// literal-backtick rule at 5 050 refusals of 554 998 commands,
+				// and the top of that table was one shape — a PR body or commit
+				// message passed as `--body "$(cat <<'EOF' … EOF\n)"` whose prose
+				// holds an ordinary pair of parentheses, as prose does. From that
+				// ) the whole command read as code, so every backtick after it
+				// read as live, in the very form this guard's own advice
+				// prescribes for prose.
+				//
+				// ⛔ WHAT SEPARATES THEM IS BALANCE, AND THE SHELLS WERE ASKED.
+				// A ) the body itself opens with a ( does not end anything in
+				// zsh, bash or dash; a ) with no ( of its own can. So the doubt
+				// now covers exactly the unbalanced case, plus every expanded
+				// body, where the shell also substitutes what it reads and this
+				// lexer's model of it is weaker.
+				// See TestTheRuleAllowsWhatNoRealShellRuns in literaltick, which
+				// puts both readings to zsh, bash and dash.
+				if len(stack) > 0 && (expanded && strings.Contains(s[from:i], ")") ||
+					unbalancedClose(s[from:i])) {
 					for k := from; k < len(s); k++ {
 						cls[k] = ClassCode
 					}
@@ -272,6 +295,30 @@ func Classify(cmd string) []byte {
 		}
 	}
 	return cls
+}
+
+// unbalancedClose reports whether body holds a ) that body itself does not
+// open — the one a command substitution around it can end on.
+//
+// It counts nothing else: a ) inside '…' or "…" in the body is still a ) to the
+// scan bash runs over the characters, and treating it as quoted would be a
+// second model of the same text. Unsure refuses, so a doubtful ) counts.
+func unbalancedClose(body string) bool {
+	depth := 0
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case '\\':
+			i++ // a \) is not a ) to anyone
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return true
+			}
+			depth--
+		}
+	}
+	return false
 }
 
 // wordStart reports whether a # at i begins a comment.
