@@ -328,6 +328,14 @@ var corpus = []struct {
 	{"the modern substitution form", `vulngate --go "$(go env GOVERSION)" /tmp/vuln.json`, "allow"},
 	{"an escaped backtick is literal", `echo "cost \` + tick + `x\` + tick + ` dollars"`, "allow"},
 	{"the escape, which is an act", "GITSAFE_ALLOW_BACKTICK=1 echo " + tick + "date" + tick, "allow"},
+	// #112: the review of the rule above. The first four were refused for
+	// nothing; the last two were allowed for nothing.
+	{"single quotes inside a substitution inside double quotes", `echo "$(grep '` + tick + `x` + tick + `' f)"`, "allow"},
+	{"a backtick in a comment", "# see " + tick + "x" + tick, "allow"},
+	{"ANSI-C quoting", `echo $'a\'` + tick + `x` + tick + `'`, "allow"},
+	{"a quoted heredoc tag with a hyphen", "cat <<'END-MSG'\nuse " + tick + "x" + tick + "\nEND-MSG", "allow"},
+	{"a fake heredoc opener inside quotes", "echo \"<<'EOF'\"\necho " + tick + "date" + tick, "refuse"},
+	{"the escape covers its own statement only", "GITSAFE_ALLOW_BACKTICK=1 true; echo " + tick + "date" + tick, "refuse"},
 }
 
 // backgroundCorpus is asked with run_in_background set, because the

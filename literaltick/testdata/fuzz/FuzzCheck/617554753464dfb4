@@ -1,0 +1,2 @@
+go test fuzz v1
+string("GITSAFE_ALLOW_BACKTICK=1 true; echo `date`")

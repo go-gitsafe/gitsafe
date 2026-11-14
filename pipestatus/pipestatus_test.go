@@ -104,3 +104,18 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// ⛔ #112: the heredoc strip is shared, so a quoted heredoc tag with a hyphen is
+// literal here too, and an opener inside quotes strips nothing.
+func TestHeredocReadingIsTheSharedOne(t *testing.T) {
+	const bad = "a | b; echo $?"
+	if !Check(bad).Found() {
+		t.Fatal("the plain form must be refused, or this proves nothing")
+	}
+	if Check("cat <<'END-MSG'\n" + bad + "\nEND-MSG").Found() {
+		t.Error("a hyphenated quoted tag was not recognised")
+	}
+	if !Check("echo \"<<'EOF'\"\n" + bad + "\nEOF").Found() {
+		t.Error("a fake opener inside quotes hid a pipeline status")
+	}
+}

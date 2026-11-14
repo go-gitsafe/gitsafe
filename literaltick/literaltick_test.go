@@ -1,6 +1,9 @@
 package literaltick
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The refusals. Each one is a command the shell would run something inside.
 func TestRefused(t *testing.T) {
@@ -42,7 +45,7 @@ func TestRefused(t *testing.T) {
 		{"single quotes inside double quotes are apostrophes, not quoting",
 			"foo --note \"see '`x`'\"", true},
 	} {
-		f := Check(tc.cmd)
+		f := check(tc.cmd)
 		if !f.Found() {
 			t.Errorf("%s: allowed\n  %s", tc.name, tc.cmd)
 			continue
@@ -82,7 +85,7 @@ func TestAllowed(t *testing.T) {
 		{"a quoted heredoc is not expanded",
 			"cat <<'EOF'\nuse `x` here\nEOF"},
 	} {
-		if f := Check(tc.cmd); f.Found() {
+		if f := check(tc.cmd); f.Found() {
 			t.Errorf("%s: refused at %d (%s)\n  %s", tc.name, f.Off, f.Context, tc.cmd)
 		}
 	}
@@ -92,7 +95,7 @@ func TestAllowed(t *testing.T) {
 // ever stops finding the live case, every table above goes quietly green.
 func TestTheDetectorCanFire(t *testing.T) {
 	const live = "agentsync tell peer \"and `vulnscan -selftest` twice\""
-	f := Check(live)
+	f := check(live)
 	if !f.Found() {
 		t.Fatal("the detector no longer sees the command that caused this package")
 	}
@@ -124,7 +127,7 @@ func TestTheDetectorCanFire(t *testing.T) {
 // subject is absent.
 func TestTheEscapeIsReadFromTheCommandText(t *testing.T) {
 	const bad = "echo `date`"
-	if !Check(bad).Found() {
+	if !check(bad).Found() {
 		t.Fatal("the unescaped form must be refused, or this test proves nothing")
 	}
 	for _, c := range []struct {
@@ -141,14 +144,14 @@ func TestTheEscapeIsReadFromTheCommandText(t *testing.T) {
 		{"after the command, it is an argument", "echo GITSAFE_ALLOW_BACKTICK=1 " + "`date`", true},
 		{"another rule's escape is not this one", "GITSAFE_ALLOW_VOLATILE=1 " + bad, true},
 	} {
-		if got := Check(c.cmd).Found(); got != c.want {
+		if got := check(c.cmd).Found(); got != c.want {
 			t.Errorf("%s: refused = %v, want %v\n  %s", c.name, got, c.want, c.cmd)
 		}
 	}
 
 	// And the environment has no say, in either direction.
 	t.Setenv(Escape, "1")
-	if !Check(bad).Found() {
+	if !check(bad).Found() {
 		t.Error("an environment variable disarmed a rule that runs before any shell")
 	}
 }
@@ -160,4 +163,97 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// The false refusals the review of #91 listed (#112). Each is a command the
+// shell does NOT run a substitution in, and each was refused.
+func TestReview112FalseRefusals(t *testing.T) {
+	for _, tc := range []struct{ name, cmd string }{
+		{"single quotes inside $(…) inside double quotes",
+			`echo "$(grep '` + "`x`" + `' f)"`},
+		{"a backtick in a comment", "# see `x`"},
+		{"a comment after a command", "echo hi # see `x`"},
+		{"a comment on a later line", "echo hi\n# see `x`\necho done"},
+		{"ANSI-C quoting with an escaped quote", `echo $'a\'` + "`x`" + `'`},
+		{"ANSI-C quoting", "echo $'a `x` b'"},
+		{"a quoted heredoc tag with a hyphen", "cat <<'END-MSG'\nuse `x` here\nEND-MSG"},
+		{"a double-quoted heredoc tag with a dot", "cat <<\"a.b\"\nuse `x`\na.b"},
+		{"a backslash heredoc tag with a hyphen", "cat <<\\END-MSG\nuse `x`\nEND-MSG"},
+		{"a dashed heredoc", "cat <<-'EOF'\n\tuse `x`\n\tEOF"},
+		{"an escaped backtick in an unquoted heredoc body", "cat <<EOF\nuse \\`x\\`\nEOF"},
+		{"a # inside a word is not a comment", "echo a#b '`x`'"},
+	} {
+		if f := check(tc.cmd); f.Found() {
+			t.Errorf("%s: refused at %d (%s)\n  %s", tc.name, f.Off, f.Context, tc.cmd)
+		}
+	}
+}
+
+// The misses: both were ALLOWED and must be refused.
+func TestReview112Misses(t *testing.T) {
+	for _, tc := range []struct{ name, cmd string }{
+		// A heredoc opener inside quotes opens nothing, so the next line runs.
+		{"a fake heredoc opener inside double quotes",
+			"echo \"<<'EOF'\"\necho `date`"},
+		{"a fake heredoc opener inside single quotes",
+			"echo '<<\"EOF\"'\necho `date`"},
+		{"the escape covers its own statement only",
+			"GITSAFE_ALLOW_BACKTICK=1 true; echo `date`"},
+		{"nor the statement after &&",
+			"GITSAFE_ALLOW_BACKTICK=1 true && echo `date`"},
+		{"nor the next line",
+			"GITSAFE_ALLOW_BACKTICK=1 true\necho `date`"},
+		{"nor the next pipeline stage",
+			"GITSAFE_ALLOW_BACKTICK=1 true | echo `date`"},
+		{"the first statement is not covered by a later escape",
+			"echo `date`; GITSAFE_ALLOW_BACKTICK=1 true"},
+		{"a heredoc shift is not an opener",
+			"echo $((1<<n))\necho `date`"},
+		{"an unterminated single quote is a broken command: refuse",
+			"echo 'a `x`"},
+		{"an expanded heredoc body runs",
+			"cat <<EOF\nit's `date`\nEOF"},
+	} {
+		if !check(tc.cmd).Found() {
+			t.Errorf("%s: allowed\n  %s", tc.name, tc.cmd)
+		}
+	}
+	// And the escape still works where it is written.
+	for _, cmd := range []string{
+		"echo ok; GITSAFE_ALLOW_BACKTICK=1 echo `date`",
+		"GITSAFE_ALLOW_BACKTICK=1 echo `date`; true",
+		"GITSAFE_ALLOW_BACKTICK=1 cat <<EOF\nuse `x`\nEOF",
+		"GITSAFE_ALLOW_BACKTICK=1 echo 2>&1 `date`",
+	} {
+		if f := check(cmd); f.Found() {
+			t.Errorf("the escape did not cover its own statement (%s)\n  %s", f.Context, cmd)
+		}
+	}
+}
+
+func FuzzCheck(f *testing.F) {
+	for _, s := range []string{
+		"echo `date`", "echo \"a `b` c\"", "echo 'a `b`'", "# `x`", "echo $'a\\'`x`'",
+		"cat <<'END-MSG'\n`x`\nEND-MSG", "echo \"<<'EOF'\"\necho `date`",
+		"GITSAFE_ALLOW_BACKTICK=1 true; echo `date`", "echo \"$(grep '`x`' f)\"",
+		"echo $((1<<n))", "cat <<EOF\n`x`\nEOF", "echo '", "echo \"", "$(", "<<", "<<-",
+		"echo \\", "echo \"\\", "cat <<\\", "cat <<'", "a\\\n`b`",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, cmd string) {
+		a, b := Check(cmd), Check(cmd)
+		if a != b {
+			t.Fatalf("not deterministic for %q: %+v vs %+v", cmd, a, b)
+		}
+		if !strings.Contains(cmd, "`") {
+			if a.Found() {
+				t.Fatalf("refused a command with no backtick at all: %q (%+v)", cmd, a)
+			}
+			return
+		}
+		if a.Found() && (a.Off < 0 || a.Off >= len(cmd) || cmd[a.Off] != '`') {
+			t.Fatalf("offset %d does not point at a backtick in %q", a.Off, cmd)
+		}
+	})
 }

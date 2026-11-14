@@ -1,0 +1,2 @@
+go test fuzz v1
+string("echo \"$(case x in x) echo \"'`:>ran`'\";; esac)\"")
