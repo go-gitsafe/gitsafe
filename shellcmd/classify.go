@@ -297,16 +297,27 @@ func Classify(cmd string) []byte {
 	return cls
 }
 
-// wordStart reports whether a # at i begins a comment.
-//
-// The byte before must be UNESCAPED code and a separator: `a\ #x` and `$(a)#x`
-// are mid-word, and `)` is not a boundary.
-// parenIsShell reports whether the ( at i is shell syntax in every shell: a
-// subshell or a group at the start of a command, an array or a process
-// substitution (after =, < or >), or the ( of a case pattern after `in`. A (
-// anywhere else follows an argument.
-func parenIsShell(s string, cls []byte, i int) bool {
-	j := i
+// wordBefore returns the shell word that ENDS at j and where it starts. A word
+// is a run of unquoted, unescaped bytes with no blank or operator in it, and it
+// must begin at a boundary; otherwise ("", j) says there is no word to judge.
+func wordBefore(s string, cls []byte, j int) (string, int) {
+	const boundary = " \t\n;&|()<>"
+	k := j
+	for k > 0 && cls[k-1] == ClassCode && strings.IndexByte(boundary, s[k-1]) < 0 {
+		k--
+	}
+	if k > 0 && (cls[k-1] != ClassCode || strings.IndexByte(boundary, s[k-1]) < 0) {
+		return "", j
+	}
+	return s[k:j], k
+}
+
+// commandPos reports whether a COMMAND may start right after s[:e] in every
+// shell: at the start, after ; | ( or a newline, after && , after one of the
+// keywords that is itself a standalone word in command position, or after the
+// `in` of `case WORD in`. Anything else is an argument. Unsure is false.
+func commandPos(s string, cls []byte, e int) bool {
+	j := e
 	for j > 0 && (s[j-1] == ' ' || s[j-1] == '\t') {
 		j--
 	}
@@ -316,20 +327,63 @@ func parenIsShell(s string, cls []byte, i int) bool {
 	if cls[j-1] != ClassCode {
 		return false
 	}
-	if strings.IndexByte(";&|(\n{)=<>", s[j-1]) >= 0 {
+	switch c := s[j-1]; {
+	case c == ';' || c == '|' || c == '(' || c == '\n':
 		return true
+	case c == '&':
+		return j < 2 || (s[j-2] != '>' && s[j-2] != '<')
 	}
-	k := j
-	for k > 0 && s[k-1] >= 'a' && s[k-1] <= 'z' && cls[k-1] == ClassCode {
-		k--
+	w, k := wordBefore(s, cls, j)
+	if j == e { // the word runs into what follows: `{(`, `if(`
+		return false
 	}
-	switch s[k:j] {
-	case "in", "then", "do", "else", "elif", "if", "while", "until", "time":
-		return k == 0 || strings.IndexByte(" \t\n;&|(){", s[k-1]) >= 0
+	switch w {
+	case "then", "do", "else", "elif", "if", "while", "until", "time", "!", "{", "[[", "coproc":
+		return commandPos(s, cls, k)
+	case "in":
+		// `in` is a keyword only after `case WORD`; `echo in (x)` is an argument.
+		p := skipBlanks(s, k)
+		subject, k2 := wordBefore(s, cls, p)
+		p2 := skipBlanks(s, k2)
+		kw, k3 := wordBefore(s, cls, p2)
+		return subject != "" && p < k && p2 < k2 && kw == "case" && commandPos(s, cls, k3)
 	}
 	return false
 }
 
+// skipBlanks moves j back over spaces and tabs.
+func skipBlanks(s string, j int) int {
+	for j > 0 && (s[j-1] == ' ' || s[j-1] == '\t') {
+		j--
+	}
+	return j
+}
+
+// parenIsShell reports whether the ( at i is shell syntax in every shell: the
+// start of a command (a subshell or a group), an array assignment `name=(` or
+// `name+=(` in command position, or a process substitution `<(` / `>(`. A ( that
+// follows an argument, a `)`, a `}`-less `{`, a keyword that is not a standalone
+// word, or anything else opens a glob group in zsh. Unsure is false.
+func parenIsShell(s string, cls []byte, i int) bool {
+	if i > 0 && cls[i-1] == ClassCode {
+		switch s[i-1] {
+		case '<', '>':
+			return true
+		case '=':
+			w, k := wordBefore(s, cls, i)
+			name := strings.TrimSuffix(strings.TrimSuffix(w, "="), "+")
+			return name != "" && assignName.MatchString(name) && commandPos(s, cls, k)
+		}
+	}
+	return commandPos(s, cls, i)
+}
+
+var assignName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// wordStart reports whether a # at i begins a comment.
+//
+// The byte before must be UNESCAPED code and a separator: `a\ #x` and `$(a)#x`
+// are mid-word, and `)` is not a boundary.
 func wordStart(s string, cls []byte, i int) bool {
 	return i == 0 || (cls[i-1] == ClassCode && strings.IndexByte(" \t\n;&|(", s[i-1]) >= 0)
 }

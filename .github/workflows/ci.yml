@@ -26,6 +26,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    env:
+      # The literaltick oracle FAILS, naming the shell, when one of these is not
+      # installed: a runner without zsh must not read as a pass. macOS has no dash.
+      GITSAFE_ORACLE_SHELLS: ${{ matrix.os == 'ubuntu-latest' && 'bash,dash,zsh' || 'bash,zsh' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -71,11 +75,17 @@ jobs:
           - { target: FuzzLocateMatchesWholeText, pkg: ./redact }
           # A pull request body is untrusted text, parsed before a merge.
           - { target: FuzzParse, pkg: ./issuegate }
+          # The differential oracle: bash, dash and zsh against the rule.
+          - { target: FuzzOracle, pkg: ./literaltick }
+    env:
+      GITSAFE_ORACLE_SHELLS: bash,dash,zsh
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: { go-version: '1.27.4' }
       - run: go version
+      - name: zsh for the literaltick oracle
+        run: sudo apt-get update && sudo apt-get install -y zsh
       - run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 45s ${{ matrix.pkg }}
 
   vulns:
