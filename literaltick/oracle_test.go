@@ -209,6 +209,17 @@ func TestTheRuleRefusesWhateverARealShellRuns(t *testing.T) {
 	if len(shells) == 0 {
 		t.Skip("none of bash, dash, zsh is installed")
 	}
+	// ⛔ THE CONTROL, ALWAYS EVALUATED: a bare backtick is run by every shell. One
+	// that does not run it here is a blind oracle, not a clean one (a shell that
+	// failed to start, a changed argv), and the rule must refuse the same bytes.
+	for _, sh := range shells {
+		if !runs(t, sh, T) {
+			t.Errorf("%s did not run the bare control %q: this oracle cannot see what it is for", filepath.Base(sh), T)
+		}
+	}
+	if !Check(T).Found() {
+		t.Errorf("the rule allowed the bare control %q", T)
+	}
 	seen := map[string]bool{}
 	cases := append(reviewCases(), corpusCases(t)...)
 	recMu.Lock()
