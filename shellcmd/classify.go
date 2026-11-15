@@ -157,6 +157,16 @@ func Classify(cmd string) []byte {
 			cls[i] = ClassDouble
 			stack = append(stack, frame{kind: 'D'})
 			i++
+		case c == '$' && next == '(' && top() == 'A':
+			// ⛔ FOUND BY THE zsh ORACLE IN CI (#121): inside $(( … )) zsh scans
+			// for the closing )) and takes ' as an ordinary byte, so where a $(
+			// or a nested $(( ends is not what bash reads:
+			// `$(($(('$('))`+T+`'))` runs the backtick in zsh only. Unsure
+			// refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
 		case c == '$' && next == '(':
 			fill(i, i+2, ClassCode)
 			if i+2 < len(s) && s[i+2] == '(' {
@@ -200,6 +210,29 @@ func Classify(cmd string) []byte {
 			fill(i, i+2, ClassCode)
 			stack = append(stack, frame{kind: 'A', depth: 2})
 			i += 2
+		case c == '(' && next != ')' && !parenIsShell(s, cls, i):
+			// ⛔ FOUND BY THE zsh ORACLE (#121): a ( that follows an ARGUMENT is a
+			// syntax error in bash and a glob group or qualifier in zsh, which
+			// substitutes the backticks before it complains of the pattern, and
+			// reads what follows (a # after the ( or a |, a newline) by glob
+			// rules: `: (E`+newline+`#`+T creates the file in zsh. No comment or
+			// quote that follows can be trusted. Unsure refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
+		case c == '#' && i > 0 && (s[i-1] == '(' || s[i-1] == '|') && cls[i-1] == ClassCode:
+			// ⛔ FOUND BY THE zsh ORACLE (#121). After a ( or a | bash reads # as a
+			// comment, but zsh reads `(#` as the opening of a glob flag and `a(`…`)`
+			// or `(|#` as a glob pattern, and it substitutes the backticks BEFORE it
+			// complains of the pattern: `echo a(#`+T+` and `: (|#`+T creates the file
+			// in zsh and is a comment in bash. Which shell runs the line is not
+			// knowable here, so the rest is code that no comment can hide. Unsure
+			// refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
 		case c == '#' && wordStart(s, cls, i) && top() != 'C':
 			// ⛔ A comment inside $( … ) or ${ … }: bash finds the closing ) before
 			// it reads the comment, so what a comment hides there is not what it
@@ -222,6 +255,17 @@ func Classify(cmd string) []byte {
 				continue
 			}
 			h, end, ok := parseHeredoc(s, i+2)
+			if top() == 'B' && ok && strings.IndexByte(s[end:], '\n') >= 0 {
+				// ⛔ FOUND BY A LONGER FUZZ RUN (#121, bash, not zsh): in
+				// `$(${x:-case x in x) <<E`+newline+`'`+T+`'}…` bash reads the <<E as a
+				// real heredoc whose UNQUOTED body runs the backtick, where this
+				// classifier saw a ' that quotes it. Whether a ${ … } holds a
+				// heredoc is not knowable here. Unsure refuses.
+				for k := i; k < len(s); k++ {
+					cls[k] = ClassCode
+				}
+				return cls
+			}
 			if !ok || top() == 'A' || top() == 'B' {
 				fill(i, i+2, ClassCode)
 				i += 2
@@ -243,7 +287,13 @@ func Classify(cmd string) []byte {
 				pending = nil
 				// ⛔ An UNQUOTED body expands, and a $( in it can run past the
 				// terminator line in dash. Unsure refuses.
-				if expanded && strings.Contains(s[from:i], "$(") {
+				//
+				// ⛔ FOUND BY THE zsh ORACLE (#121): a backslash-newline in an
+				// UNQUOTED body continues the line in zsh, which then does not see
+				// the terminator and reads the body to the end of the command:
+				// `<<-E`+newline+`\`+newline+tab+`E`+newline+`#`+T runs the backtick.
+				// Where the body ends is not knowable here. Unsure refuses.
+				if expanded && (strings.Contains(s[from:i], "$(") || strings.Contains(s[from:i], "\\\n")) {
 					for k := from; k < len(s); k++ {
 						cls[k] = ClassCode
 					}
@@ -446,6 +496,89 @@ func oddBackslashes(s string, k int) bool {
 	}
 	return n%2 == 1
 }
+
+// wordBefore returns the shell word that ENDS at j and where it starts. A word
+// is a run of unquoted, unescaped bytes with no blank or operator in it, and it
+// must begin at a boundary; otherwise ("", j) says there is no word to judge.
+func wordBefore(s string, cls []byte, j int) (string, int) {
+	const boundary = " \t\n;&|()<>"
+	k := j
+	for k > 0 && cls[k-1] == ClassCode && strings.IndexByte(boundary, s[k-1]) < 0 {
+		k--
+	}
+	if k > 0 && (cls[k-1] != ClassCode || strings.IndexByte(boundary, s[k-1]) < 0) {
+		return "", j
+	}
+	return s[k:j], k
+}
+
+// commandPos reports whether a COMMAND may start right after s[:e] in every
+// shell: at the start, after ; | ( or a newline, after && , after one of the
+// keywords that is itself a standalone word in command position, or after the
+// `in` of `case WORD in`. Anything else is an argument. Unsure is false.
+func commandPos(s string, cls []byte, e int) bool {
+	j := e
+	for j > 0 && (s[j-1] == ' ' || s[j-1] == '\t') {
+		j--
+	}
+	if j == 0 {
+		return true
+	}
+	if cls[j-1] != ClassCode {
+		return false
+	}
+	switch c := s[j-1]; {
+	case c == ';' || c == '|' || c == '(' || c == '\n':
+		return true
+	case c == '&':
+		return j < 2 || (s[j-2] != '>' && s[j-2] != '<')
+	}
+	w, k := wordBefore(s, cls, j)
+	if j == e { // the word runs into what follows: `{(`, `if(`
+		return false
+	}
+	switch w {
+	case "then", "do", "else", "elif", "if", "while", "until", "time", "!", "{", "[[", "coproc":
+		return commandPos(s, cls, k)
+	case "in":
+		// `in` is a keyword only after `case WORD`; `echo in (x)` is an argument.
+		p := skipBlanks(s, k)
+		subject, k2 := wordBefore(s, cls, p)
+		p2 := skipBlanks(s, k2)
+		kw, k3 := wordBefore(s, cls, p2)
+		return subject != "" && p < k && p2 < k2 && kw == "case" && commandPos(s, cls, k3)
+	}
+	return false
+}
+
+// skipBlanks moves j back over spaces and tabs.
+func skipBlanks(s string, j int) int {
+	for j > 0 && (s[j-1] == ' ' || s[j-1] == '\t') {
+		j--
+	}
+	return j
+}
+
+// parenIsShell reports whether the ( at i is shell syntax in every shell: the
+// start of a command (a subshell or a group), an array assignment `name=(` or
+// `name+=(` in command position, or a process substitution `<(` / `>(`. A ( that
+// follows an argument, a `)`, a `}`-less `{`, a keyword that is not a standalone
+// word, or anything else opens a glob group in zsh. Unsure is false.
+func parenIsShell(s string, cls []byte, i int) bool {
+	if i > 0 && cls[i-1] == ClassCode {
+		switch s[i-1] {
+		case '<', '>':
+			return true
+		case '=':
+			w, k := wordBefore(s, cls, i)
+			name := strings.TrimSuffix(strings.TrimSuffix(w, "="), "+")
+			return name != "" && assignName.MatchString(name) && commandPos(s, cls, k)
+		}
+	}
+	return commandPos(s, cls, i)
+}
+
+var assignName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // wordStart reports whether a # at i begins a comment.
 //
