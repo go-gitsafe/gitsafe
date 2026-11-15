@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/go-gitsafe/gitsafe/emptypush"
 	"github.com/go-gitsafe/gitsafe/helparg"
 	"github.com/go-gitsafe/gitsafe/redact"
 )
@@ -50,6 +51,35 @@ func run(args []string, stdout, stderr *os.File) int {
 		fmt.Fprintf(stderr, "gitpush: remote %q has a credential embedded in its URL.\n", remote)
 		fmt.Fprintf(stderr, "  Fix it first:  git remote set-url %s https://github.com/<org>/<repo>.git\n", remote)
 		return 1
+	}
+
+	// ⛔⛔ A PUSH THAT SENDS NOTHING REPORTS SUCCESS. Twice, thirteen days
+	// apart, a branch was published holding none of its author's work — once
+	// because a `;` ran this after a commit zsh had killed on a glob, once
+	// because a PreToolUse hook refused the whole command line and the push
+	// alone was re-issued afterwards. Both times git said `* [new branch]`
+	// and exited 0, because publishing a ref that adds no objects is a
+	// perfectly legitimate push.
+	//
+	// The refusal is here, not on the shape of the command. The first attempt
+	// was a guard-bash rule against committing and pushing in one line;
+	// guardscan measured it over the whole transcript record at 4137 runs and
+	// 3378 distinct commands out of 594 557, against two occurrences of the
+	// defect. That ratio replaces a workflow instead of protecting it. This
+	// asks the one question that is true exactly when the harm is real.
+	//
+	// Every error here FAILS OPEN, the way the rest of this program does: a
+	// check that cannot read the repository has no opinion, and must not
+	// stand between someone and a push.
+	if os.Getenv(emptypush.Escape) == "" {
+		if branch, err := gitOutput("symbolic-ref", "--short", "HEAD"); err == nil && emptypush.Applies(args, branch) {
+			// Every commit of HEAD already reachable from one of this
+			// remote's refs means this push would add no commit at all.
+			if n, err := gitOutput("rev-list", "--count", "HEAD", "--not", "--remotes="+remote); err == nil && n == "0" {
+				fmt.Fprintf(stderr, "gitpush: refusing to push — %s.\n\n%s\n", emptypush.Why(remote), emptypush.Advice)
+				return 1
+			}
+		}
 	}
 
 	full := append([]string{
