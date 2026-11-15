@@ -475,3 +475,117 @@ func TestADryRunThatCannotReadTheRequestSaysSoAndStillWorks(t *testing.T) {
 		t.Errorf("stderr does not say the commit was not named: %q", errb.String())
 	}
 }
+
+// ⛔⛔ A REFUSAL ABOUT A TAG MUST SAY WHAT THE TAG POINTS AT. Written after a
+// false deduction published on 2026-11-15: `go list -m -versions` answered
+// "… v0.124.1 v0.125.0 v0.126.0", and from that list I concluded WHO had taken
+// v0.126.0 and WHY — telling another session its work "ships without a tag of
+// its own". It was that session's own marker, on its own merge commit. A
+// version list says THAT a number is taken, never BY WHAT, and the refusal
+// that named the tag said nothing about it.
+func TestTheRefusalNamesTheCommitTheTagPointsAt(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK,
+			`{"object":{"sha":"0510232aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"commit"}}`),
+		"GET /repos/o/r/commits/0510232aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": reply(http.StatusOK,
+			`{"commit":{"message":"viaonly: the rule broken at an EXIT (#314)\n\nbody"}}`),
+	}}
+	install(t, s)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", withToken(t, "t"), "o/r", "3", "v1.0.0"}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if s.ran != 0 {
+		t.Error("it merged before checking the tag")
+	}
+	for _, want := range []string{"not moved", "0510232", "viaonly: the rule broken at an EXIT (#314)"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errb.String())
+		}
+	}
+	// The SUBJECT only, never the body: a refusal is one screen.
+	if strings.Contains(errb.String(), "body") {
+		t.Errorf("the whole commit message was printed:\n%s", errb.String())
+	}
+}
+
+// An ANNOTATED tag needs one more hop — ref → tag object → commit — and the
+// type is read rather than assumed, because assuming it would print the tag
+// object's own sha as if it were a commit.
+func TestAnAnnotatedTagIsResolvedToItsCommit(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK,
+			`{"object":{"sha":"ffffffffffffffffffffffffffffffffffffffff","type":"tag"}}`),
+		"GET /repos/o/r/git/tags/ffffffffffffffffffffffffffffffffffffffff": reply(http.StatusOK,
+			`{"object":{"sha":"abc1234bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`),
+		"GET /repos/o/r/commits/abc1234bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": reply(http.StatusOK,
+			`{"commit":{"message":"the commit the annotation wraps"}}`),
+	}}
+	install(t, s)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-token-file", withToken(t, "t"), "o/r", "3", "v1.0.0"}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "abc1234") || !strings.Contains(errb.String(), "the commit the annotation wraps") {
+		t.Errorf("the annotated tag was not resolved to its commit:\n%s", errb.String())
+	}
+	if strings.Contains(errb.String(), "fffffff") {
+		t.Errorf("the tag OBJECT's sha was printed as if it were the commit:\n%s", errb.String())
+	}
+}
+
+// ⛔⛔ THE ONE THAT MATTERS MORE THAN THE DESCRIPTION. Everything after the
+// ref's 200 is description, and each read of it may fail. A decoration that
+// fails must leave the REFUSAL intact — a tag that exists is not moved, and a
+// commit that could not be read is not a reason to let the caller through.
+func TestADescriptionThatCannotBeReadDoesNotSoftenTheRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		paths map[string]*http.Response
+	}{
+		{"the ref body does not decode", map[string]*http.Response{
+			"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK, `not json`),
+		}},
+		{"the ref carries no object", map[string]*http.Response{
+			"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK, `{}`),
+		}},
+		{"the commit is not readable", map[string]*http.Response{
+			"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK,
+				`{"object":{"sha":"0510232aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"commit"}}`),
+			"GET /repos/o/r/commits/0510232aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": reply(http.StatusNotFound, `{}`),
+		}},
+		{"an annotated tag whose object is not readable", map[string]*http.Response{
+			"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK,
+				`{"object":{"sha":"ffffffffffffffffffffffffffffffffffffffff","type":"tag"}}`),
+			"GET /repos/o/r/git/tags/ffffffffffffffffffffffffffffffffffffffff": reply(http.StatusForbidden, `{}`),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &stub{byPath: tc.paths}
+			install(t, s)
+			var out, errb bytes.Buffer
+			if code := run([]string{"-token-file", withToken(t, "t"), "o/r", "3", "v1.0.0"}, &out, &errb); code != 1 {
+				t.Fatalf("exit %d, want 1 — a description that failed must not change the verdict", code)
+			}
+			if s.ran != 0 {
+				t.Error("it merged although the tag exists")
+			}
+			if !strings.Contains(errb.String(), "not moved") {
+				t.Errorf("the refusal itself is gone:\n%s", errb.String())
+			}
+		})
+	}
+}
+
+// The third case above says so out loud rather than printing a bare tag name.
+func TestAnUnreadableCommitIsNamedAsUnreadable(t *testing.T) {
+	s := &stub{byPath: map[string]*http.Response{
+		"GET /repos/o/r/git/ref/tags/v1.0.0": reply(http.StatusOK, `{}`),
+	}}
+	install(t, s)
+	var out, errb bytes.Buffer
+	run([]string{"-token-file", withToken(t, "t"), "o/r", "3", "v1.0.0"}, &out, &errb)
+	if !strings.Contains(errb.String(), "could not be read") {
+		t.Errorf("it should say the commit is unknown rather than imply there is none:\n%s", errb.String())
+	}
+}
