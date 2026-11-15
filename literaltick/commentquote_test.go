@@ -65,12 +65,12 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		{"a ) in a later line only", "x\n# \"a\"\n# ) note " + T, false},
 		// FuzzBody, #133: the span holds a ; and a #, which comments out the rest
 		// of the command line after the cut (bash 3.2.57 RAN each of the first
-		// three; `a#b` ran nothing and is refused anyway as the rule cannot tell
-		// it apart cheaply, and a lone ; ran nothing and is allowed).
+		// three; `a#b` and a lone ; ran nothing and are allowed: only a # after a
+		// ; & ( or a blank starts a comment).
 		{"a ;# in the span, a newline and the marker", "#)\";#\"\n" + T, true},
 		{"a blank and # in the span", "#)\" #\"\n" + T, true},
 		{"the ) earlier in a longer comment", "# note ) \";#\"\n" + T, true},
-		{"a # inside a word of the span", "#)\"a#b\"\n" + T, true},
+		{"a # inside a word of the span starts no comment", "#)\"a#b\"\n" + T, false},
 		{"a ; alone in the span", "#)\";\"\n" + T, false},
 		// V2: an ODD number of " on the comment line and a ) later in the body.
 		{"V2: a lone \" then a line holding \")\"|", "#\"\n\")\"|" + T, true},

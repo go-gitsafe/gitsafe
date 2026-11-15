@@ -568,15 +568,19 @@ func unbalancedClose(body string) bool {
 			// chosen so: when the comment LINE holds a ), [quoteSpanBreaks] pairs
 			// the " characters from the # to the END OF THE BODY (not to the end of
 			// the comment line, and not from the )), and the body is unsure if a
-			// pair encloses any of | & # newline ' \ or a backtick, or if a " is
-			// left unpaired. The # is FuzzBody's (#133): after the cut the " of
+			// pair encloses any of | & newline ' \ or a backtick, or a # that
+			// starts a comment (after ; & ( or a blank), or if a " is left
+			// unpaired. The # is FuzzBody's (#133): after the cut the " of
 			// `";#"` closes the command's own quote, the ; ends the command and
 			// the # starts a comment, so the next line is code (bash 3.2.57 ran
-			// `#)";#"` newline T; the same without the #, or with `a#b`, ran nothing). A span of plain text is not unsure, nor is a span
+			// `#)";#"` newline T; the same without the #, or with `a#b`, ran
+			// nothing). A span of plain text is not unsure, nor is a span
 			// holding a space, ( ) ; or a comma, although bash cuts some of
-			// those: refusing them cost more than it bought, and no cut among them
-			// ran a backtick (execution needs a ) in the comment, a " after it,
-			// and a lone | after that). Limiting the scan to the comment line
+			// those: refusing them cost more than it bought, and no cut among
+			// them ran a backtick. A conjunction rule (a ) in the comment, a "
+			// after it, a lone | after that) was tried instead of the | & ' \
+			// and backtick tests and cost MORE (594 against 586) and misses the
+			// # case, which runs with no pipe. Limiting the scan to the comment line
 			// caught 1 cut of the 29 measured, so the scan runs on. Any ) with any
 			// quote cost 755 refusals and any paren 1 051, against 551 before.
 			// The spans are paired from the # itself, not from the ): FuzzBody
@@ -610,8 +614,8 @@ func unbalancedClose(body string) bool {
 
 // quoteSpanBreaks pairs the " characters of rest, which runs from the # of a
 // comment to the END OF THE BODY, and reports whether a pair encloses any of
-// | & # newline ' \ or a backtick, or a " is left without a partner: the shape in
-// which bash 3.2.57's scan stops hiding the ) of the comment (#133).
+// | & newline ' \ a backtick or a comment-starting #, or a " is left without a
+// partner: the shape in which bash 3.2.57's scan stops hiding the ) of the comment (#133).
 func quoteSpanBreaks(rest string) bool {
 	for {
 		open := strings.IndexByte(rest, '"')
@@ -623,11 +627,22 @@ func quoteSpanBreaks(rest string) bool {
 		if shut < 0 {
 			return true
 		}
-		if strings.ContainsAny(rest[:shut], "|&#\n'\\`") {
+		if strings.ContainsAny(rest[:shut], "|&\n'\\`") || commentStartIn(rest[:shut]) {
 			return true
 		}
 		rest = rest[shut+1:]
 	}
+}
+
+// commentStartIn reports whether s holds a # that starts a comment once the
+// quotes around s are read the other way: one after a ; & ( blank or tab.
+func commentStartIn(s string) bool {
+	for k := 1; k < len(s); k++ {
+		if s[k] == '#' && strings.IndexByte(";&( \t", s[k-1]) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // oddBackslashes reports whether the byte at k is preceded by an odd number of
