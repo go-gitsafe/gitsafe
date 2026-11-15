@@ -198,6 +198,8 @@ func TestClassify(t *testing.T) {
 		// no ), still hides it, and the body stays one.
 		{"a ) and a lone \" in a comment of the body", "\"$(cat <<'E'\n#)\"|x\nE\n)\"", "dcccccccccccccccccccccc"},
 		{"a ) and an even count of \" in a comment", "\"$(cat <<'E'\n# \"a\" )|x\nE\n)\"", "dcccccccccccchhhhhhhhhhhhcd"},
+		{"V2: a lone \" on a comment line and a ) later", "\"$(cat <<'E'\n#\"\n\")\"|x\nE\n)\"", "dcccccccccccccccccccccccc" + "c"},
+		{"a backtick inside \" owns the second \", the ) is bare", "\"$(cat <<'E'\n\"`\"`\")x\nE\n)\"", "dcccccccccccccccccccccccc"},
 		{"a ) alone in a comment stays hidden", "\"$(cat <<'E'\n# ) note\nE\n)\"", "dcccccccccccchhhhhhhhhhhcd"},
 		{"a ) inside an expanded heredoc body", "\"$(cat <<E\n(x)\nE\n)\"", "dcccccccccccccccccc"},
 	} {

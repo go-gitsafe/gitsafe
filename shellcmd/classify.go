@@ -500,6 +500,25 @@ func unbalancedClose(body string) bool {
 					j++
 					continue
 				}
+				// ⛔ A BACKTICK INSIDE " … " OWNS THE NEXT QUOTE (#133): bash's
+				// scan reads `…` as a span of its own there, so a " inside it
+				// does not close the outer one. ``"`"`")`T`` is the outer "
+				// closing on the THIRD ", leaving the ) bare; closing it on the
+				// second hid the ) inside a backtick span and allowed what bash
+				// 3.2.57 runs.
+				if c == '"' && body[j] == '`' {
+					k := j + 1
+					for ; k < len(body) && body[k] != '`'; k++ {
+						if body[k] == '\\' {
+							k++
+						}
+					}
+					if k >= len(body) {
+						return false // an unterminated span: the scan never reaches a )
+					}
+					j = k
+					continue
+				}
 				if body[j] == c {
 					break
 				}
@@ -532,8 +551,8 @@ func unbalancedClose(body string) bool {
 			if j < 0 {
 				end = len(body)
 			}
-			// ⛔ A COMMENT WITH A ) AND, AFTER IT, A " SPAN THAT IS NOT ONE PLAIN
-			// WORD (#133, found by FuzzBody). Asked of bash 3.2.57 per variant, on
+			// ⛔ A COMMENT WITH A ) AND A " SPAN THAT BREAKS THE SCAN (#133, found
+			// by FuzzBody). Asked of bash 3.2.57 per variant, on
 			// whether the substitution still spans the whole body and whether a
 			// backtick after it runs (TestACommentWithAParenAndAQuote):
 			//
@@ -545,14 +564,29 @@ func unbalancedClose(body string) bool {
 			//	"# ) \"a$b\"", "# ) \"a.b-c_d\"" span; ( ) ; ' ` , tab and a
 			//	                       newline inside the " " do not
 			//
-			// After a ) the scan stops treating the comment as hidden as soon as
-			// a " opens a span holding anything but [A-Za-z0-9_.$-], or none is
-			// closed on the line, and the substitution ends at that ). Unsure
-			// refuses, for exactly that shape: any ) with any quote cost 755
-			// refusals and any paren 1 051, against 551, so neither was kept.
+			// WHAT THE CODE DOES, which is wider than the rows above and was
+			// chosen so: when the comment LINE holds a ), [quoteSpanBreaks] pairs
+			// the " characters from the # to the END OF THE BODY (not to the end of
+			// the comment line, and not from the )), and the body is unsure if a
+			// pair encloses any of | & newline ' \ or a backtick, or if a " is
+			// left unpaired. A span of plain text is not unsure, nor is a span
+			// holding a space, ( ) ; or a comma, although bash cuts some of
+			// those: refusing them cost more than it bought, and no cut among them
+			// ran a backtick (execution needs a ) in the comment, a " after it,
+			// and a lone | after that). Limiting the scan to the comment line
+			// caught 1 cut of the 29 measured, so the scan runs on. Any ) with any
+			// quote cost 755 refusals and any paren 1 051, against 551 before.
 			// The spans are paired from the # itself, not from the ): FuzzBody
 			// found `#")")"|T`, where the first ) sits inside a span.
 			if strings.IndexByte(body[i:end], ')') >= 0 && quoteSpanBreaks(body[i:]) {
+				return true
+			}
+			// ⛔ AN ODD NUMBER OF " ON THE COMMENT LINE (#133, "V2"): the lone "
+			// opens a span in bash's scan that runs into the following lines and
+			// pairs the quotes there differently from this scan. With a ) anywhere
+			// later, `#"` newline `")"|T` ran its backtick in bash 3.2.57. Unsure
+			// refuses; it cost +2 refusals over the transcripts.
+			if strings.Count(body[i:end], `"`)%2 == 1 && strings.IndexByte(body[end:], ')') >= 0 {
 				return true
 			}
 			if j < 0 {
@@ -571,10 +605,10 @@ func unbalancedClose(body string) bool {
 	return false
 }
 
-// quoteSpanBreaks reports whether rest, the text of a comment after a ), holds
-// a " span that is not one plain word ([A-Za-z0-9_.$-]*), or a " that never
-// closes on the line: the shape in which bash 3.2.57's scan stops hiding the )
-// (#133).
+// quoteSpanBreaks pairs the " characters of rest, which runs from the # of a
+// comment to the END OF THE BODY, and reports whether a pair encloses any of
+// | & newline ' \ or a backtick, or a " is left without a partner: the shape in
+// which bash 3.2.57's scan stops hiding the ) of the comment (#133).
 func quoteSpanBreaks(rest string) bool {
 	for {
 		open := strings.IndexByte(rest, '"')
