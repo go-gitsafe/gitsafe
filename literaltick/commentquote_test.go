@@ -78,7 +78,8 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		{"the same after a word and a blank", "x #'\nx')\"|" + T, true},
 		{"an odd ' then a second ' and )\"& (FuzzBody 9533303894e0bbea)", "#'\n')\"&" + T, true},
 		{"an odd ' and no second ' later", "# it's\n(x)\"|" + T, false},
-		{"an odd ' and a second ' but no \" and | after the )", "#'\n')" + T, false},
+		{"an odd ' then a second ' and )\" then a newline (FuzzBody b0adc02f8140116d)", "#'\n')\"\n" + T, true},
+		{"an odd ' and a second ' but no \" after the )", "#'\n')" + T, false},
 		// V2: an ODD number of " on the comment line and a ) later in the body.
 		{"V2: a lone \" then a line holding \")\"|", "#\"\n\")\"|" + T, true},
 		{"V2: after a word line", "#\"\nx\")\"|" + T, true},
@@ -140,6 +141,7 @@ func TestCommentQuoteCorpusDecodes(t *testing.T) {
 		"f6a028469111f9dd": "#)\";#\"\n" + T,
 		"1d3d1b483c5655cf": "#'\n')\"|" + T,
 		"9533303894e0bbea": "#'\n')\"&" + T,
+		"b0adc02f8140116d": "#'\n')\"\n" + T,
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", "fuzz", "FuzzBody", name))
 		if err != nil {
