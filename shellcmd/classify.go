@@ -200,6 +200,29 @@ func Classify(cmd string) []byte {
 			fill(i, i+2, ClassCode)
 			stack = append(stack, frame{kind: 'A', depth: 2})
 			i += 2
+		case c == '(' && next != ')' && !parenIsShell(s, cls, i):
+			// ⛔ FOUND BY THE zsh ORACLE (#121): a ( that follows an ARGUMENT is a
+			// syntax error in bash and a glob group or qualifier in zsh, which
+			// substitutes the backticks before it complains of the pattern, and
+			// reads what follows (a # after the ( or a |, a newline) by glob
+			// rules: `: (E`+newline+`#`+T creates the file in zsh. No comment or
+			// quote that follows can be trusted. Unsure refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
+		case c == '#' && i > 0 && (s[i-1] == '(' || s[i-1] == '|') && cls[i-1] == ClassCode:
+			// ⛔ FOUND BY THE zsh ORACLE (#121). After a ( or a | bash reads # as a
+			// comment, but zsh reads `(#` as the opening of a glob flag and `a(`…`)`
+			// or `(|#` as a glob pattern, and it substitutes the backticks BEFORE it
+			// complains of the pattern: `echo a(#`+T+` and `: (|#`+T creates the file
+			// in zsh and is a comment in bash. Which shell runs the line is not
+			// knowable here, so the rest is code that no comment can hide. Unsure
+			// refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
 		case c == '#' && wordStart(s, cls, i) && top() != 'C':
 			// ⛔ A comment inside $( … ) or ${ … }: bash finds the closing ) before
 			// it reads the comment, so what a comment hides there is not what it
@@ -278,6 +301,35 @@ func Classify(cmd string) []byte {
 //
 // The byte before must be UNESCAPED code and a separator: `a\ #x` and `$(a)#x`
 // are mid-word, and `)` is not a boundary.
+// parenIsShell reports whether the ( at i is shell syntax in every shell: a
+// subshell or a group at the start of a command, an array or a process
+// substitution (after =, < or >), or the ( of a case pattern after `in`. A (
+// anywhere else follows an argument.
+func parenIsShell(s string, cls []byte, i int) bool {
+	j := i
+	for j > 0 && (s[j-1] == ' ' || s[j-1] == '\t') {
+		j--
+	}
+	if j == 0 {
+		return true
+	}
+	if cls[j-1] != ClassCode {
+		return false
+	}
+	if strings.IndexByte(";&|(\n{)=<>", s[j-1]) >= 0 {
+		return true
+	}
+	k := j
+	for k > 0 && s[k-1] >= 'a' && s[k-1] <= 'z' && cls[k-1] == ClassCode {
+		k--
+	}
+	switch s[k:j] {
+	case "in", "then", "do", "else", "elif", "if", "while", "until", "time":
+		return k == 0 || strings.IndexByte(" \t\n;&|(){", s[k-1]) >= 0
+	}
+	return false
+}
+
 func wordStart(s string, cls []byte, i int) bool {
 	return i == 0 || (cls[i-1] == ClassCode && strings.IndexByte(" \t\n;&|(", s[i-1]) >= 0)
 }

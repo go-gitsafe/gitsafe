@@ -78,6 +78,15 @@ func reviewCases() []string {
 		`echo "$(case x in x) :;; esac)'` + T + `'"`,
 		`echo "$(echo "$(case x in x) :;; esac)")'` + T + `'"`,
 		`echo "$(case x in (x) :;; esac)'` + T + `'"`,
+		// #121: found by zsh, where `(#` opens a glob flag and `a(` a glob
+		// qualifier, and the backticks are substituted before the bad pattern is
+		// reported; bash reads the same # as a comment.
+		`\$(#` + T,
+		`echo a(#` + T,
+		`echo (#` + T,
+		`echo \$(#` + T + `)`,
+		`: (|#` + T,
+		`echo a|#` + T,
 	}
 }
 
@@ -104,6 +113,22 @@ func corpusCases(t *testing.T) []string {
 	return out
 }
 
+// oracleShells are the shells the oracle asks. The rule refuses what ANY of them
+// would execute, so the expected result is never derived from which are
+// installed. One that is absent is LOGGED BY NAME (visible with -v), never
+// counted as a pass; CI installs zsh so that it really runs there.
+func oracleShells(t testing.TB) []string {
+	var shells []string
+	for _, s := range []string{"bash", "dash", "zsh"} {
+		if p, err := exec.LookPath(s); err == nil {
+			shells = append(shells, p)
+		} else {
+			t.Logf("SKIPPED %s: not installed here, its half of the oracle did not run", s)
+		}
+	}
+	return shells
+}
+
 var span = regexp.MustCompile("`[^`'\"\\\\$]*`")
 
 // runs reports whether shell executed a backtick of cmd, by the file the
@@ -120,7 +145,16 @@ func runs(t *testing.T, shell, cmd string) bool {
 	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, shell, "-c", cmd)
+	args := []string{"-c", cmd}
+	if strings.HasSuffix(shell, "zsh") {
+		// ⛔ zsh runs as `zsh -f -c`: -f is NO_RCS, so no ~/.zshenv or ~/.zshrc
+		// can change the result. It is a non-interactive shell with zsh's DEFAULT
+		// options: `interactivecomments` is off and does not apply, so `#` does
+		// not start a comment mid-line in any zsh run here, and that is the very
+		// property the rule's comment handling must not depend on.
+		args = []string{"-f", "-c", cmd}
+	}
+	c := exec.CommandContext(ctx, shell, args...)
 	c.Dir = dir
 	c.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir}
 	_ = c.Run() // a failing command is fine: only the marker matters
@@ -138,16 +172,9 @@ func runs(t *testing.T, shell, cmd string) bool {
 // The command's own backtick spans are rewritten to T first, so "ran" is
 // observable; a span holding a quote or a $ is left alone and proves nothing.
 func TestTheRuleRefusesWhateverARealShellRuns(t *testing.T) {
-	var shells []string
-	for _, s := range []string{"bash", "dash"} {
-		if p, err := exec.LookPath(s); err == nil {
-			shells = append(shells, p)
-		} else {
-			t.Logf("no %s here: its half of the oracle is skipped", s)
-		}
-	}
+	shells := oracleShells(t)
 	if len(shells) == 0 {
-		t.Skip("neither bash nor dash is installed")
+		t.Skip("none of bash, dash, zsh is installed")
 	}
 	seen := map[string]bool{}
 	cases := append(reviewCases(), corpusCases(t)...)
@@ -218,16 +245,11 @@ func oracleSeed(toks ...string) []byte {
 
 // ⛔ THE DIFFERENTIAL FUZZ. TestTheRuleRefusesWhateverARealShellRuns judges the
 // cases somebody thought of; this one judges the cases nobody did. Each program
-// is built from the safe grammar above and run under bash and dash exactly as
+// is built from the safe grammar above and run under bash, dash and zsh exactly as
 // the oracle does (own directory, 5 s, stdin closed). It fails when either
 // shell created the marker and the rule allowed the command.
 func FuzzOracle(f *testing.F) {
-	var shells []string
-	for _, s := range []string{"bash", "dash"} {
-		if p, err := exec.LookPath(s); err == nil {
-			shells = append(shells, p)
-		}
-	}
+	shells := oracleShells(f)
 	for _, seed := range [][]byte{
 		oracleSeed("echo ", "\"", "$(", "echo ", "x", ")", "'", T, "'", "\""),
 		oracleSeed("echo ", "\"", "$(", ": ", "x", ")", "'", T, "'", "\""),
