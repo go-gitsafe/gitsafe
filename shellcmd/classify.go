@@ -596,6 +596,19 @@ func unbalancedClose(body string) bool {
 			if strings.Count(body[i:end], `"`)%2 == 1 && strings.IndexByte(body[end:], ')') >= 0 {
 				return true
 			}
+			// The same for ' and `, found by FuzzBody (`#'` newline `')"|T`
+			// ran in bash 3.2.57): the odd quote of the comment pairs with the
+			// next one of its kind, and a ) AFTER that one is bare. Prose with
+			// an apostrophe is common, so the rule also needs a " and a |
+			// after that ): any ) after an odd ' cost 745 refusals against 581,
+			// with the backtick as well 746.
+			for _, q := range []string{"'"} {
+				if strings.Count(body[i:end], q)%2 == 1 {
+					if k := strings.Index(body[end:], q); k >= 0 && closeQuotePipe(body[end+k+1:]) {
+						return true
+					}
+				}
+			}
 			if j < 0 {
 				return false // the comment runs to the end: no ) can be seen
 			}
@@ -632,6 +645,20 @@ func quoteSpanBreaks(rest string) bool {
 		}
 		rest = rest[shut+1:]
 	}
+}
+
+// closeQuotePipe reports whether rest holds a ), then a ", then a | : the
+// conjunction in which a ) cut by a paired ' span ran its backtick.
+func closeQuotePipe(rest string) bool {
+	p := strings.IndexByte(rest, ')')
+	if p < 0 {
+		return false
+	}
+	q := strings.IndexByte(rest[p:], '"')
+	if q < 0 {
+		return false
+	}
+	return strings.IndexByte(rest[p+q:], '|') >= 0
 }
 
 // commentStartIn reports whether s holds a # that starts a comment once the

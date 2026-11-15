@@ -72,6 +72,12 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		{"the ) earlier in a longer comment", "# note ) \";#\"\n" + T, true},
 		{"a # inside a word of the span starts no comment", "#)\"a#b\"\n" + T, false},
 		{"a ; alone in the span", "#)\";\"\n" + T, false},
+		// FuzzBody, #133: an odd ' on the comment line pairs with the next ', and
+		// the ) after it is bare (bash 3.2.57 ran the first two).
+		{"an odd ' then a second ' and )\"|", "#'\n')\"|" + T, true},
+		{"the same after a word and a blank", "x #'\nx')\"|" + T, true},
+		{"an odd ' and no second ' later", "# it's\n(x)\"|" + T, false},
+		{"an odd ' and a second ' but no \" and | after the )", "#'\n')" + T, false},
 		// V2: an ODD number of " on the comment line and a ) later in the body.
 		{"V2: a lone \" then a line holding \")\"|", "#\"\n\")\"|" + T, true},
 		{"V2: after a word line", "#\"\nx\")\"|" + T, true},
@@ -102,6 +108,7 @@ func TestV2AndDqBacktickAreRealCuts(t *testing.T) {
 		t.Skip("no shell to ask")
 	}
 	for name, body := range map[string]string{
+		"an odd ' after a comment":      "#'\n')\"|" + T,
 		"V2 lone \" after a comment":    "#\"\n\")\"|" + T,
 		"V2 after a word line":          "#\"\nx\")\"|" + T,
 		"V2 after a word and blanks":    "x #\"\n\")\"|" + T,
@@ -130,6 +137,7 @@ func TestCommentQuoteCorpusDecodes(t *testing.T) {
 		"issue133-seed4":   "#;)\"|" + T,
 		"seed-589e8577":    "#)\"|" + T,
 		"f6a028469111f9dd": "#)\";#\"\n" + T,
+		"1d3d1b483c5655cf": "#'\n')\"|" + T,
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", "fuzz", "FuzzBody", name))
 		if err != nil {
