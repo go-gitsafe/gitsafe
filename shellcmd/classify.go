@@ -73,7 +73,7 @@ func Classify(cmd string) []byte {
 	// them runs: the classifier leaves them as code, and the rule refuses.
 	plainSingle := func() bool {
 		// Arithmetic does not quote with ' either: $(('`x`')) runs the backtick.
-		if len(stack) > 0 && stack[len(stack)-1].kind == 'A' {
+		if len(stack) > 0 && (stack[len(stack)-1].kind == 'A' || stack[len(stack)-1].kind == 'K') {
 			return true
 		}
 		return len(stack) > 0 && stack[len(stack)-1].kind == 'B' && stack[len(stack)-1].dq
@@ -115,6 +115,10 @@ func Classify(cmd string) []byte {
 					stack = append(stack, frame{kind: 'P', depth: 1, start: i})
 					i += 2
 				}
+			case c == '$' && next == '[':
+				fill(i, i+2, ClassCode)
+				stack = append(stack, frame{kind: 'K', depth: 1})
+				i += 2
 			default:
 				cls[i] = ClassDouble
 				i++
@@ -147,7 +151,9 @@ func Classify(cmd string) []byte {
 			stack = stack[:len(stack)-1]
 			cls[i] = ClassCode
 			i++
-		case top() == 'A' && (c == '\'' || c == '"' || (c == '$' && next == '\'')):
+		case (top() == 'A' || top() == 'K') && (c == '\'' || c == '"' || (c == '$' && next == '\'')):
+			// (The legacy `$[ … ]` is the same arithmetic frame, kind 'K', #131:
+			// bash and zsh evaluate it and a ' is no quote there; dash has no $[.)
 			// ⛔ ASKED OF THE SHELLS (#124), per variant (TestArithmeticQuotes):
 			// where the )) that closes $(( … )) is when a quote stands inside
 			// depends on the shell. bash 3.2.57 SKIPS a '…' or "…" span while it
@@ -190,7 +196,7 @@ func Classify(cmd string) []byte {
 			cls[i] = ClassDouble
 			stack = append(stack, frame{kind: 'D'})
 			i++
-		case c == '$' && next == '(' && top() == 'A':
+		case c == '$' && (next == '(' || next == '[') && (top() == 'A' || top() == 'K'):
 			// ⛔ FOUND BY THE zsh ORACLE IN CI (#121): inside $(( … )) zsh scans
 			// for the closing )) and takes ' as an ordinary byte, so where a $(
 			// or a nested $(( ends is not what bash reads:
@@ -209,6 +215,20 @@ func Classify(cmd string) []byte {
 			} else {
 				stack = append(stack, frame{kind: 'P', depth: 1, start: i})
 				i += 2
+			}
+		case c == '$' && next == '[':
+			fill(i, i+2, ClassCode)
+			stack = append(stack, frame{kind: 'K', depth: 1})
+			i += 2
+		case c == '[' && top() == 'K':
+			stack[len(stack)-1].depth++
+			cls[i] = ClassCode
+			i++
+		case c == ']' && top() == 'K':
+			cls[i] = ClassCode
+			i++
+			if stack[len(stack)-1].depth--; stack[len(stack)-1].depth == 0 {
+				stack = stack[:len(stack)-1]
 			}
 		case c == '(' && (top() == 'P' || top() == 'A'):
 			stack[len(stack)-1].depth++
@@ -303,7 +323,7 @@ func Classify(cmd string) []byte {
 				}
 				return cls
 			}
-			if !ok || top() == 'A' || top() == 'B' {
+			if !ok || top() == 'A' || top() == 'B' || top() == 'K' {
 				fill(i, i+2, ClassCode)
 				i += 2
 				continue
@@ -622,6 +642,13 @@ var assignName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // The byte before must be UNESCAPED code and a separator: `a\ #x` and `$(a)#x`
 // are mid-word, and `)` is not a boundary.
 func wordStart(s string, cls []byte, i int) bool {
+	// ⛔ A # at the start of the line that FOLLOWS a heredoc's terminator is a
+	// comment too (fuzz, #131: `<<'E'`+nl+`E`+nl+`#'E`+nl+T+`E`+nl+`'` runs T
+	// in bash): the newline ending the terminator line is heredoc class, not
+	// code, and reading that # as an ordinary byte let the ' after it quote T.
+	if i > 0 && s[i-1] == '\n' && (cls[i-1] == ClassHeredocQuoted || cls[i-1] == ClassHeredocExpanded) {
+		return true
+	}
 	return i == 0 || (cls[i-1] == ClassCode && strings.IndexByte(" \t\n;&|(", s[i-1]) >= 0)
 }
 
