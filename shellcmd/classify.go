@@ -249,10 +249,40 @@ func Classify(cmd string) []byte {
 					}
 					return cls
 				}
-				// ⛔ Inside $( … ) bash looks for the closing ) before it reads a
+				// ⛔ Inside $( … ) bash looks for the closing ) before it reads the
 				// heredoc, so a ) in the body can end the substitution early.
-				// Unsure refuses.
-				if len(stack) > 0 && strings.Contains(s[from:i], ")") {
+				// Unsure refuses. It is REAL: the fuzz corpus holds
+				//
+				//	"$(<<'E'\ncase x in x) `:>ran`E\nE\ncase x in x) "
+				//
+				// which bash runs. But the doubt was stated about any ), and so
+				// stated it cost more than every other reading in this file put
+				// together: guardscan over this machine's transcripts put the
+				// literal-backtick rule at 5 050 refusals of 554 998 commands,
+				// and the top of that table was one shape — a PR body or commit
+				// message passed as `--body "$(cat <<'EOF' … EOF\n)"` whose prose
+				// holds an ordinary pair of parentheses, as prose does. From that
+				// ) the whole command read as code, so every backtick after it
+				// read as live, in the very form this guard's own advice
+				// prescribes for prose.
+				//
+				// ⛔ WHAT SEPARATES THEM IS BALANCE, AND THE SHELLS WERE ASKED.
+				// A ) the body itself opens with a ( does not end anything in
+				// zsh, bash or dash; a ) with no ( of its own can. So the doubt
+				// now covers exactly the unbalanced case, plus every expanded
+				// body, where the shell also substitutes what it reads and this
+				// lexer's model of it is weaker.
+				//
+				// ⛔ WHICH BASH ANSWERS MATTERS, so neither half may be inferred
+				// from the shells that happen to be installed: the unbalanced
+				// cases are evaluated by bash 3.2.57, the one Apple ships, and
+				// NOT by the bash on ubuntu-latest. A guard refuses what ANY
+				// shell would run, so an absence here is not a verdict.
+				// See TestTheRuleAllowsWhatNoRealShellRuns in literaltick, which
+				// states each case's expectation and puts it to zsh, bash and
+				// dash rather than reading the expectation off them.
+				if len(stack) > 0 && (expanded && strings.Contains(s[from:i], ")") ||
+					unbalancedClose(s[from:i])) {
 					for k := from; k < len(s); k++ {
 						cls[k] = ClassCode
 					}
@@ -272,6 +302,149 @@ func Classify(cmd string) []byte {
 		}
 	}
 	return cls
+}
+
+// unbalancedClose reports whether body holds a ) that body itself does not
+// open — the one a command substitution around it can end on.
+//
+// ⛔ IT MUST COUNT A ( ONLY WHERE BASH COUNTS ONE, and the first version of
+// this function did not. bash finds the ) that closes a $( … ) by scanning the
+// characters, and that scan SKIPS quoted spans — '…', "…", `…`, $'…' — and a #
+// comment. A ( inside one of those is a ( bash never sees, so counting it here
+// made the following ) look matched while bash treated it as the end of the
+// substitution. Everything after it was then live code that this package
+// called a quoted heredoc body: a FALSE ALLOW, and the inputs were ordinary
+// English prose, because an apostrophe opens a span:
+//
+//	--body "$(cat <<'EOF'
+//	don't do this (it's wrong) and run `…` instead
+//	EOF
+//	)"
+//
+// bash 3.2.57 runs that backtick. "don'" … "(it'" is one span, the ( is hidden
+// inside it, and the ) after "s wrong" ends the substitution. Found by review,
+// not by this package's own tests, whose rows all happened to be quote-free.
+//
+// ⛔ WHAT THIS MODELS, NAMED SO THE NEXT READER CAN DIFF AGAINST IT: bash's
+// character scan for the ) that closes a $( … ), which runs BEFORE the command
+// inside is parsed. That is a different routine from the parser, and therefore
+// from [Classify], which models what a byte MEANS once parsed. Deriving this
+// function from Classify was tried and is wrong in two witnessed ways: Classify
+// uses a wider word-start set for a #, and it knows about heredocs, so a PR
+// body that merely TALKS about a heredoc has its ) classed as body text while
+// bash's scan — which has no notion of heredocs — ends the substitution there.
+// See TestAHeredocInTheProseIsNotAHeredoc.
+//
+// In bash 3.2 that scan is reported to be subst.c's extract_delimited_string
+// (named from an independent review, not read here); bash 5 replaced it with
+// the real parser, which is why bash 5 does not reproduce any of this and why
+// CI cannot judge these cases. The authority is therefore the shells on the
+// machine, asked per syntax variant, in both directions.
+//
+// ⛔ AN UNTERMINATED SPAN ENDS NOTHING, and that is measured rather than
+// assumed. A scan that cannot close a span never reaches a ) either, so it
+// cannot end the substitution early: bash 3.2.57 answers `bash -n` on the real
+// PR body of this package's testdata with
+//
+//	unexpected EOF while looking for matching `''
+//
+// — a syntax error, in which nothing runs at all — while zsh -n accepts the
+// same file, because zsh does not scan a quoted heredoc body for quotes. So an
+// unterminated span is an allow here, not the unsure case. Ordinary prose has
+// an odd apostrophe more often than not, and refusing on it would put back
+// most of the 5 050.
+func unbalancedClose(body string) bool {
+	depth := 0
+	for i := 0; i < len(body); i++ {
+		switch c := body[i]; c {
+		case '\\':
+			i++ // a \) is not a ) to anyone
+		case '\'', '"', '`':
+			// Skip the span, the way bash's scan does. A backtick span counts
+			// too: it is what keeps the apostrophes of ordinary prose from
+			// pairing across a code fence.
+			//
+			// ⛔ $'…' HONOURS A BACKSLASH AND '…' DOES NOT, so the two end in
+			// different places and a ) can be quoted in one and bare in the
+			// other. Skipping both alike closed $'a\'' early at the \', left
+			// the trailing ' looking unterminated — an allow — and bash 3.2.57
+			// then ended the substitution at the ) after it and ran the rest.
+			// A false allow, and a regression of the hidden-paren fix; found by
+			// the second pass of the review that found the first. The control
+			// that isolates it: without the $, bash does NOT end it, because
+			// there the backslash is literal and the span really does stop at
+			// the \'. See TestAnsiCQuotingEndsWhereBashEndsIt.
+			// ⛔ AND THE $ MUST NOT ITSELF BE ESCAPED. A \$ is a literal
+			// dollar, so the quote after it opens a PLAIN span, where a
+			// backslash is literal and the span ends at the next quote. Read
+			// as ANSI-C it swallowed that quote and the rest looked
+			// unterminated — an allow — while bash ended the substitution at
+			// the ) after it. Found by [FuzzBody] in 71 seconds with the body
+			//
+			//	\$'\')`…`
+			//
+			// which is the fourth false allow in this one reading, and the
+			// first that a fuzzer rather than a reviewer found: fixing the
+			// frame is what let the search reach this function at all.
+			ansiC := c == '\'' && i > 0 && body[i-1] == '$' && !oddBackslashes(body, i-1)
+			j := i + 1
+			for ; j < len(body); j++ {
+				if body[j] == '\\' && (c != '\'' || ansiC) {
+					j++
+					continue
+				}
+				if body[j] == c {
+					break
+				}
+			}
+			if j >= len(body) {
+				return false // unterminated: the scan never reaches a )
+			}
+			i = j
+		case '#':
+			// ⛔ WHITESPACE OR A NEWLINE, AND NOTHING ELSE — which is NARROWER
+			// than [wordStart]'s set and was measured, not reasoned. bash was
+			// asked where a # hides a ( from its own scan
+			// (TestWhereACommentHidesAParenFromBash):
+			//
+			//	"# a ( note"   after \n   comment      bash ended the $( … )
+			//	"; #a ( note"  after ' '  comment      ended it
+			//	"x #a ( note"  after ' '  comment      ended it
+			//	";#a ( note"   after ;    NOT a comment   did not end it
+			//	"|#a ( note"   after |    NOT a comment   did not end it
+			//	"x#a ( note"   mid-word  NOT a comment   did not end it
+			//
+			// The ; and | rows are why this is not wordStart: a fuzz run found
+			// ";#case x in x) `…`" in 44 seconds, where treating that # as a
+			// comment hid the ) and allowed what bash runs.
+			if i > 0 && strings.IndexByte(" \t\n", body[i-1]) < 0 {
+				continue
+			}
+			j := strings.IndexByte(body[i:], '\n')
+			if j < 0 {
+				return false // the comment runs to the end: no ) can be seen
+			}
+			i += j
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return true
+			}
+			depth--
+		}
+	}
+	return false
+}
+
+// oddBackslashes reports whether the byte at k is preceded by an odd number of
+// backslashes, which makes it escaped and therefore literal.
+func oddBackslashes(s string, k int) bool {
+	n := 0
+	for j := k - 1; j >= 0 && s[j] == '\\'; j-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 // wordStart reports whether a # at i begins a comment.

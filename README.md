@@ -1346,7 +1346,19 @@ the same way the guards print.
 guardscan                      every transcript under ~/.claude/projects
 guardscan --rule stalebase     one rule
 guardscan --escaped            only where somebody reached for the escape
+guardscan --why                under each example, what the rule says it matched
+guardscan --full               each example whole, newlines and all
 ```
+
+⛔ **`--why` and `--full` exist because a count is not a diagnosis.** An example
+line is one truncated line, and in a long command the match is almost never in
+the prefix that fits. Reading the truncated examples of the literal-backtick
+rule's 5 050 refusals, the first conclusion drawn was that they were dominated
+by `gh pr create --body "$(cat <<'EOF' …)"` — and a test written against that
+shape *passed*, six times over, because the backtick was elsewhere in every
+line. `--why` prints the rule's own account of the match, `--full` prints the
+command whole, and the real cause was then found in one pass: see
+[A backtick the shell evaluates](#a-backtick-the-shell-evaluates-where-prose-was-meant).
 
 ⭐ **The `--escaped` rows are the valuable ones.** A refusal somebody worked
 around is a refusal they judged wrong *at the moment they were holding the
@@ -1494,6 +1506,127 @@ including a deliberate one. The trade is cheap in the direction that matters: a
 deliberate substitution rewrites to `$(…)` and is better for it, while a code
 fence that slipped through is a message whose words are gone and whose tool said
 success.
+
+### ⛔ A parenthesis in the prose, and 5 050 refusals
+
+Released, the rule was then put to `guardscan` — which is what `guardscan` is
+for, and what was not done before merging it. Over **4 346 transcripts and
+554 998 Bash commands** it answered:
+
+| the rule | refused |
+| --- | --- |
+| as released | **5 050** |
+| after this fix | **539** |
+
+The whole of that difference was one reading, and not in this rule at all.
+`shellcmd.Classify` carried a doubt about a `)` inside a heredoc body within
+`$( … )`: bash looks for the closing `)` before it reads the heredoc, so a `)`
+in the body *can* end the substitution early, and unsure refuses. The doubt is
+real — the fuzz corpus holds a seed in which a `case x in x)` pattern inside a
+quoted heredoc body does end the substitution, and bash runs the backtick after
+it — but the doubt was stated about **any** `)`. So a PR body or commit
+message passed as `--body "$(cat <<'EOF' … EOF\n)"` whose prose contained an
+ordinary pair of parentheses read as *code* from that byte on, and every
+backtick after it read as live. The form this rule's own advice prescribes for
+prose was the form it refused.
+
+**What separates the two cases is balance, and the shells were asked rather than
+reasoned with.** A `)` the body itself opens with a `(` ends nothing in zsh,
+bash or dash; a `)` with no `(` of its own can. The doubt now covers exactly the
+unbalanced case, plus every *expanded* body.
+
+### ⛔ And a `(` bash never sees must not be counted
+
+The first version of that balance test counted a `(` wherever it appeared, and
+an independent review of the pull request broke it in one move. bash finds the
+closing `)` by scanning the characters, and that scan **skips quoted spans and
+comments**. A `(` inside one is a `(` bash never sees, so the `)` after it looks
+matched here and ends the substitution there — and everything past it, which
+this package had just declared a quoted heredoc body, is live code. A **false
+allow**, the dangerous direction, and the inputs are ordinary English:
+
+```
+--body "$(cat <<'EOF'
+don't do this (it's wrong) and run `…` instead
+EOF
+)"
+```
+
+`don'` … `(it'` is one span to bash, the `(` is hidden inside it, and the `)`
+after `s wrong` ends the substitution. bash 3.2.57 runs that backtick. Four such
+classes were found — an apostrophe, a single-quoted `(`, a double-quoted `(`, a
+`(` in a `#` comment — and none of this package's own rows could have caught
+them, because every row happened to be quote-free. A table is only as honest as
+its own variety.
+
+Two more readings came out of fixing it, both measured rather than argued:
+
+- **An unterminated span ends nothing.** A scan that cannot close a span never
+  reaches a `)` either. `bash -n` on the real PR body answers *"unexpected EOF
+  while looking for matching `'`"* — a syntax error, in which nothing runs —
+  while `zsh -n` accepts the same file. So an unterminated span is an allow,
+  not the unsure case; prose has an odd apostrophe more often than not.
+- **A `#` opens a comment only after whitespace or a newline** — narrower than
+  the lexer's own word-start set. A fuzz run found a body beginning `;#case x in
+  x)` in 44 seconds, where treating that `#` as a comment hid the `)`. bash was
+  then asked for the boundary directly: `;#` and `|#` are *not* comments to it,
+  while a `#` after a space or a newline is.
+- **`$'…'` honours a backslash and `'…'` does not**, so the two end in
+  different places — and the `$` must not itself be escaped, because `\$` is a
+  literal dollar and the quote after it opens a *plain* span.
+
+⛔ **Four false allows in one reading, and only one of them came from the
+fuzzer** — because `FuzzOracle` mutates a whole command, so almost every input
+is spent building the frame (`"`, `$(`, the heredoc opener) before a single body
+byte can matter. So the witness changed rather than the design: `FuzzBody` fixes
+the frame and fuzzes **only** the body, seeded with the rows the review and the
+shells produced. It found the fourth defect — `\$'\')` — in 71 seconds, and then
+ran 638 000 executions clean.
+
+⛔ **What that scan models, named so it can be diffed:** bash's character search
+for the `)` that closes a `$( … )`, which runs *before* the command inside is
+parsed. Deriving it from `Classify` was tried and is wrong — `Classify` models
+the **parser**, so it knows about heredocs, and a PR body that merely *talks*
+about a heredoc has its `)` classed as body text while bash's scan ends the
+substitution there. bash 5 replaced that scan with the real parser, which is why
+bash 5 reproduces none of this and CI cannot judge it: the authority is the
+shells on the machine, asked per syntax variant, in both directions.
+
+⛔ **And the bash that answers depends on which bash you have.** The three
+unbalanced cases are evaluated by **bash 3.2.57**, the one Apple ships and the
+one on this machine, and are *not* evaluated by the bash on `ubuntu-latest`.
+CI said so three minutes after the first push, because the first version of the
+new test inferred its expectation from the shells it found — "nothing ran it
+here, so the rule must allow". An absence on the shells that happen to be
+installed is not evidence that no shell evaluates it, and a guard must refuse
+what **any** shell would run. The table now states what the rule must do, and
+the shells check that statement instead of making it.
+
+⭐ **The fix moved four other rules, and three of those moves are recovered
+misses.** Every rule strips quoted heredoc bodies through the same classifier,
+so a body that was not recognised stayed in the command text and blinded them.
+Measured against a drift control (the same binary twice over six minutes),
+`ghbyhand` went **up** by 30 — and `--why` says what it now matches:
+
+```
+gh api repos/go-ansible/modules/pulls/9 -X PATCH -f body="$BODY"
+gh api -X POST repos/go-embedded-ruby/ruby/pulls --input -
+gh api repos/go-tex/engine/pulls -f title="engine: acmart two-column …"
+```
+
+Hand-typed GitHub writes, in `BODY=$(cat <<'EOF' … )` commands whose prose had
+been splitting the statement list. Those are exactly what `ghbyhand` exists to
+refuse, and it had been missing them.
+
+⛔ **The oracle only asked one question, and it was the question that cannot see
+this.** `TestTheRuleRefusesWhateverARealShellRuns` asks "did a shell RUN this
+backtick?" and requires a refusal; it can only ever find a *miss*. An
+over-refusal is invisible to it, and a guard is abandoned for over-refusing long
+before it is abandoned for missing something. The converse is now a test too:
+`TestTheRuleAllowsWhatNoRealShellRuns` — if no shell evaluates it, the guard
+must not refuse — and it asks **zsh** as well, the shell that actually runs the
+commands on this machine (the forward oracle still asks only bash and dash:
+[#121](https://github.com/go-gitsafe/gitsafe/issues/121)).
 
 ## Working trees in directories that are emptied
 

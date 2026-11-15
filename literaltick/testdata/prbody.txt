@@ -1,0 +1,12 @@
+cd /Users/x/Documents/VCS/GIT/github.com/go-ansible/playbook && gh pr create --title "Support strategy: free, fix nested-role vars, fix register on setup/set_fact" --body "$(cat <<'EOF'
+## Summary
+- `strategy: free` is now implemented — each host runs its whole task list and its own notified handlers independently and concurrently, with no per-task barrier across hosts (unlike the default `linear`). Any other named strategy (`debug`, `host_pinned`, a strategy plugin) is still rejected at parse time.
+- Fixed nested-role variable scoping: `pushRoleVars` replaced (instead of merging onto) the enclosing role's `RoleDefaults`/`RoleVars` layer, so a role included from another role's own tasks lost any variable the inner role didn't itself define. Confirmed wrong, then confirmed fixed, against real `ansible-playbook` runs.
+- Fixed `register:` on `setup`/`set_fact`: `resultToMap` only ever flattened `Result.Extra`, never `Result.Facts`, so a registered setup/set_fact result was silently missing its output entirely. Now nested under `ansible_facts`, matching real Ansible's registered-result shape exactly (verified: `sf_result.keys()` there is `["changed", "failed", "ansible_facts"]`).
+
+## Test plan
+- [x] `go test ./...` (incl. two new regression tests for nested-role scoping and register/ansible_facts, and a real-timing test proving `free` has no cross-host barrier)
+- [x] `go test ./... -race`
+- [x] Both variable-scoping fixes verified against a real `ansible-playbook` (core 2.21.3) run of an equivalent fixture, not just this port's own test expectations
+EOF
+)" 2>&1
