@@ -94,6 +94,7 @@ func reviewCases() []string {
 		"echo in (E\n#" + T,
 		"echo $(true)(#" + T,
 		"echo a(E) #" + T,
+		"$(($(('$('))" + T + "'))",
 	}
 }
 

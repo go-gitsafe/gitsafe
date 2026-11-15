@@ -157,6 +157,16 @@ func Classify(cmd string) []byte {
 			cls[i] = ClassDouble
 			stack = append(stack, frame{kind: 'D'})
 			i++
+		case c == '$' && next == '(' && top() == 'A':
+			// ⛔ FOUND BY THE zsh ORACLE IN CI (#121): inside $(( … )) zsh scans
+			// for the closing )) and takes ' as an ordinary byte, so where a $(
+			// or a nested $(( ends is not what bash reads:
+			// `$(($(('$('))`+T+`'))` runs the backtick in zsh only. Unsure
+			// refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
 		case c == '$' && next == '(':
 			fill(i, i+2, ClassCode)
 			if i+2 < len(s) && s[i+2] == '(' {
@@ -245,6 +255,17 @@ func Classify(cmd string) []byte {
 				continue
 			}
 			h, end, ok := parseHeredoc(s, i+2)
+			if top() == 'B' && ok && strings.IndexByte(s[end:], '\n') >= 0 {
+				// ⛔ FOUND BY A LONGER FUZZ RUN (#121, bash, not zsh): in
+				// `$(${x:-case x in x) <<E`+newline+`'`+T+`'}…` bash reads the <<E as a
+				// real heredoc whose UNQUOTED body runs the backtick, where this
+				// classifier saw a ' that quotes it. Whether a ${ … } holds a
+				// heredoc is not knowable here. Unsure refuses.
+				for k := i; k < len(s); k++ {
+					cls[k] = ClassCode
+				}
+				return cls
+			}
 			if !ok || top() == 'A' || top() == 'B' {
 				fill(i, i+2, ClassCode)
 				i += 2
@@ -266,7 +287,13 @@ func Classify(cmd string) []byte {
 				pending = nil
 				// ⛔ An UNQUOTED body expands, and a $( in it can run past the
 				// terminator line in dash. Unsure refuses.
-				if expanded && strings.Contains(s[from:i], "$(") {
+				//
+				// ⛔ FOUND BY THE zsh ORACLE (#121): a backslash-newline in an
+				// UNQUOTED body continues the line in zsh, which then does not see
+				// the terminator and reads the body to the end of the command:
+				// `<<-E`+newline+`\`+newline+tab+`E`+newline+`#`+T runs the backtick.
+				// Where the body ends is not knowable here. Unsure refuses.
+				if expanded && (strings.Contains(s[from:i], "$(") || strings.Contains(s[from:i], "\\\n")) {
 					for k := from; k < len(s); k++ {
 						cls[k] = ClassCode
 					}
