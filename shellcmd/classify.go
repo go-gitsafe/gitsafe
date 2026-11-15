@@ -593,7 +593,7 @@ func unbalancedClose(body string) bool {
 			// pairs the quotes there differently from this scan. With a ) anywhere
 			// later, `#"` newline `")"|T` ran its backtick in bash 3.2.57. Unsure
 			// refuses; it cost +2 refusals over the transcripts.
-			if strings.Count(body[i:end], `"`)%2 == 1 && strings.IndexByte(body[end:], ')') >= 0 {
+			if countUnescaped(body[i:end], '"')%2 == 1 && strings.IndexByte(body[end:], ')') >= 0 {
 				return true
 			}
 			// The same for ' and `, found by FuzzBody (`#'` newline `')"|T`
@@ -604,7 +604,7 @@ func unbalancedClose(body string) bool {
 			// | or &): any ) after an odd ' cost 745 refusals against 581, with
 			// the backtick as well 746.
 			for _, q := range []string{"'", "`"} {
-				if strings.Count(body[i:end], q)%2 == 1 {
+				if countUnescaped(body[i:end], q[0])%2 == 1 {
 					if k := strings.Index(body[end:], q); k >= 0 && closeThenQuote(body[end+k+1:]) {
 						return true
 					}
@@ -651,6 +651,18 @@ func quoteSpanBreaks(rest string) bool {
 		}
 		rest = rest[shut+1:]
 	}
+}
+
+// countUnescaped counts the q in s that no backslash precedes: FuzzBody found
+// `#\”` newline `')"|T`, which bash runs as an ODD ' pairing with the next.
+func countUnescaped(s string, q byte) int {
+	n := 0
+	for k := 0; k < len(s); k++ {
+		if s[k] == q && (k == 0 || s[k-1] != '\\') {
+			n++
+		}
+	}
+	return n
 }
 
 // closeThenQuote reports whether rest holds a ) and, after it, a ": the
