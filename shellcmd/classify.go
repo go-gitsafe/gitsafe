@@ -603,7 +603,7 @@ func unbalancedClose(body string) bool {
 			// ) (FuzzBody: `#'` newline `')"` newline T ran, with or without a
 			// | or &): any ) after an odd ' cost 745 refusals against 581, with
 			// the backtick as well 746.
-			for _, q := range []string{"'"} {
+			for _, q := range []string{"'", "`"} {
 				if strings.Count(body[i:end], q)%2 == 1 {
 					if k := strings.Index(body[end:], q); k >= 0 && closeThenQuote(body[end+k+1:]) {
 						return true

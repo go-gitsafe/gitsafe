@@ -79,8 +79,15 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		{"an odd ' then a second ' and )\"& (FuzzBody 9533303894e0bbea)", "#'\n')\"&" + T, true},
 		{"an odd ' and no second ' later", "# it's\n(x)\"|" + T, false},
 		{"an odd ' then a second ' and )\" then a newline (FuzzBody b0adc02f8140116d)", "#'\n')\"\n" + T, true},
+		{"an odd backtick then a second one and )\" then a newline", "#`\n`)\"\n" + T, true},
+		{"an odd backtick then a second one and )\"|", "#`\n`)\"|" + T, true},
 		{"an odd ' and a second ' but no \" after the )", "#'\n')" + T, false},
 		// V2: an ODD number of " on the comment line and a ) later in the body.
+		// Measured with gitsafe-133-probe/span under bash 3.2.57 (ran = true for all
+		// three): a second comment's " does not close the first.
+		{"V2: two comment lines, quotes pairing across", "#\"\n#\"\n)\"|" + T, true},
+		{"V2: a second comment line with a blank before its \"", "#\"\n# \"\n)\"|" + T, true},
+		{"V2: a closed pair, then a fresh odd comment line", "# \"a\"\n#\"\n\")\"|" + T, true},
 		{"V2: a lone \" then a line holding \")\"|", "#\"\n\")\"|" + T, true},
 		{"V2: after a word line", "#\"\nx\")\"|" + T, true},
 		{"V2: after a word and blanks", "x #\"\n\")\"|" + T, true},
@@ -142,6 +149,8 @@ func TestCommentQuoteCorpusDecodes(t *testing.T) {
 		"1d3d1b483c5655cf": "#'\n')\"|" + T,
 		"9533303894e0bbea": "#'\n')\"&" + T,
 		"b0adc02f8140116d": "#'\n')\"\n" + T,
+		"bt-newline":       "#`\n`)\"\n" + T,
+		"bt-pipe":          "#`\n`)\"|" + T,
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", "fuzz", "FuzzBody", name))
 		if err != nil {
