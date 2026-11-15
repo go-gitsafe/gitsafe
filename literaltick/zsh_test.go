@@ -21,6 +21,9 @@ func TestZshOnlyExecutionsAreRefused(t *testing.T) {
 		{"# right after a ( that is a subshell", "(#" + T},
 		{"# right after a pipe", "echo a|#" + T},
 		{"( after a ) , then #", "echo $(true)(#" + T},
+		{"a $( inside $(( )), found by the fuzz smoke in CI", "$(($(('$('))" + T + "'))"},
+		{"a heredoc inside ${ } (bash, found by a longer fuzz run)", "$(${x:-case x in x) <<E\n'" + T + "'}case x in x) "},
+		{"a continued line hides the terminator from zsh", "<<-E\n\\\n\tE\n#" + T},
 		{"in after a quoted case subject", "case \"$x\" in (E\n#" + T},
 	} {
 		if !check(tc.cmd).Found() {
