@@ -82,6 +82,7 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		{"an odd backtick then a second one and )\" then a newline", "#`\n`)\"\n" + T, true},
 		{"an escaped \" then a \" and a pipe (FuzzBody 8c166a2c1744b998)", "#)\\\"\"|" + T, true},
 		{"an escaped ' then a ' makes the count odd (FuzzBody 1507c57c2efc7d6f)", "#\\''\n')\"|" + T, true},
+		{"an even run of backslashes does not escape the ' (FuzzBody d8e15c80da0cee1d)", "#\\\\'\n')\"|" + T, true},
 		{"an odd backtick then a second one and )\"|", "#`\n`)\"|" + T, true},
 		{"an odd ' and a second ' but no \" after the )", "#'\n')" + T, false},
 		// V2: an ODD number of " on the comment line and a ) later in the body.
@@ -154,6 +155,7 @@ func TestCommentQuoteCorpusDecodes(t *testing.T) {
 		"bt-newline":       "#`\n`)\"\n" + T,
 		"8c166a2c1744b998": "#)\\\"\"|" + T,
 		"1507c57c2efc7d6f": "#\\''\n')\"|" + T,
+		"d8e15c80da0cee1d": "#\\\\'\n')\"|" + T,
 		"bt-pipe":          "#`\n`)\"|" + T,
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", "fuzz", "FuzzBody", name))

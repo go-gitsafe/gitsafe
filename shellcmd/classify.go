@@ -658,7 +658,7 @@ func quoteSpanBreaks(rest string) bool {
 func countUnescaped(s string, q byte) int {
 	n := 0
 	for k := 0; k < len(s); k++ {
-		if s[k] == q && (k == 0 || s[k-1] != '\\') {
+		if s[k] == q && !oddBackslashes(s, k) {
 			n++
 		}
 	}
