@@ -60,6 +60,15 @@ func Classify(cmd string) []byte {
 		}
 		return stack[len(stack)-1].kind
 	}
+	// open reports whether a frame of kind k is open anywhere on the stack.
+	open := func(k byte) bool {
+		for _, f := range stack {
+			if f.kind == k {
+				return true
+			}
+		}
+		return false
+	}
 	// In "${x:-'…'}" the single quotes are NOT quoting, so a backtick between
 	// them runs: the classifier leaves them as code, and the rule refuses.
 	plainSingle := func() bool {
@@ -123,10 +132,34 @@ func Classify(cmd string) []byte {
 			fill(i, i+2, ClassCode)
 			stack = append(stack, frame{kind: 'B', dq: plainSingle()})
 			i += 2
+		case c == ')' && top() == 'B' && open('P'):
+			// ⛔ FOUND BY A FUZZ RUN (#124 family, bash 3.2.57): its scan for the )
+			// that closes $( … ) does not track ${ … }, so in
+			// `"$(${x:-case x in x) '`+T+`'<<'E'`+newline+`"` that ) ENDS the
+			// substitution, and what follows is a double-quoted string in which the
+			// backtick runs. Where the substitution ends is not knowable here.
+			// Unsure refuses.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
 		case c == '}' && top() == 'B':
 			stack = stack[:len(stack)-1]
 			cls[i] = ClassCode
 			i++
+		case top() == 'A' && (c == '\'' || c == '"' || (c == '$' && next == '\'')):
+			// ⛔ ASKED OF THE SHELLS (#124), per variant (TestArithmeticQuotes):
+			// where the )) that closes $(( … )) is when a quote stands inside
+			// depends on the shell. bash 3.2.57 SKIPS a '…' or "…" span while it
+			// looks for the )), so `$(('))'`+T+`))` is closed by the LAST )) and
+			// the backtick after it runs; dash and zsh do not skip, they fail at
+			// the quote, so the same text reads differently there. No reading is
+			// right for all three, and `$(('`+T+`'))` must stay refused as well:
+			// ' is no quote in arithmetic. Unsure refuses the rest of the line.
+			for k := i; k < len(s); k++ {
+				cls[k] = ClassCode
+			}
+			return cls
 		case plainSingle() && (c == '\'' || (c == '$' && next == '\'')):
 			cls[i] = ClassCode
 			i++
@@ -221,7 +254,11 @@ func Classify(cmd string) []byte {
 				cls[k] = ClassCode
 			}
 			return cls
-		case c == '#' && i > 0 && (s[i-1] == '(' || s[i-1] == '|') && cls[i-1] == ClassCode:
+		case c == '#' && i > 0 && (s[i-1] == '(' || s[i-1] == '|' || s[i-1] == ')') && cls[i-1] == ClassCode:
+			// ⛔ A # right after a ) too (fuzz, #124 family): after `(( ))` or a
+			// `( … )` subshell the ) is an OPERATOR and bash starts a comment, as
+			// in `(( ))#'E`+newline+T+`E`+newline+`'`; after `$( … )` it is
+			// mid-word. This classifier cannot tell the two apart. Unsure refuses.
 			// ⛔ FOUND BY THE zsh ORACLE (#121). After a ( or a | bash reads # as a
 			// comment, but zsh reads `(#` as the opening of a glob flag and `a(`…`)`
 			// or `(|#` as a glob pattern, and it substitutes the backticks BEFORE it
