@@ -631,6 +631,11 @@ func unbalancedClose(body string) bool {
 // | & newline ' \ a backtick or a comment-starting #, or a " is left without a
 // partner: the shape in which bash 3.2.57's scan stops hiding the ) of the comment (#133).
 func quoteSpanBreaks(rest string) bool {
+	// An escaped " (FuzzBody: `#)\""|T` ran) is a quote bash's scan reads one
+	// way and this pairing another: unsure.
+	if strings.Contains(rest, `\"`) {
+		return true
+	}
 	for {
 		open := strings.IndexByte(rest, '"')
 		if open < 0 {
