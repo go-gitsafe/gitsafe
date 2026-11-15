@@ -181,6 +181,17 @@ func TestClassify(t *testing.T) {
 		{"a $' inside $(( )) makes the rest code", "$(($'))'x))", "ccccccccccc"},
 		{"the quote before it is still a quote", "'a' $(('b))", "ssscccccccc"},
 		{"no quote inside: the one after the close still quotes", "$((1)) 'x'", "ccccccc" + "sss"},
+		// ⛔ #131: the legacy $[ … ] is arithmetic too. bash and zsh evaluate it
+		// (a ' is no quote there and the backtick runs); dash has no $[ and reads
+		// the quote as a quote. No reading is right for all three, so a quote
+		// inside makes the rest code, as for $(( )).
+		{"a ' inside $[ ]", "$['x']", "cccccc"},
+		{"a \" inside $[ ]", "$[\"x\"]", "cccccc"},
+		{"a $' inside $[ ]", "$[$'x']", "ccccccc"},
+		{"no quote inside $[ ]: the one after the close quotes", "$[1] 'x'", "cccccsss"},
+		{"nested [ ] inside $[ ]", "$[a[1]] 'x'", "ccccccccsss"},
+		{"a $[ never closed is all code", "$[1 'x'", "ccccccc"},
+		{"$[ inside double quotes", "\"$[1]\" 'x'", "dccccdcsss"},
 		{"a ) inside an expanded heredoc body", "\"$(cat <<E\n(x)\nE\n)\"", "dcccccccccccccccccc"},
 	} {
 		if got := string(Classify(tc.cmd)); got != tc.want {

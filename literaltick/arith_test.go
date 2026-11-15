@@ -37,6 +37,25 @@ func TestArithmeticQuotesAreRefused(t *testing.T) {
 		{"inside double quotes", "\"$(('))'" + T + "))\"", true},
 		{"a ) inside ${ } inside $( ): bash's scan ends the substitution there (fuzz)", "\"$(${x:-case x in x) '" + T + "'<<'E'\n\"", true},
 		{"a # right after (( )) is a comment in bash (fuzz)", "(( ))#'E\n" + T + "E\n'", true},
+		// #131, the legacy $[ … ]. Asked of the shells (2026-11-15; T = backtick):
+		//   $['T']       bash RAN, zsh RAN, dash no (no $[: the quote quotes)
+		//   $[$'T']      bash RAN, zsh RAN, dash no
+		//   $["T"]       bash, dash and zsh all RAN
+		//   "$['T']"     bash, dash and zsh all RAN (inside double quotes)
+		//   <<E $['T'] E bash, dash and zsh all RAN (an unquoted heredoc body)
+		//   <<'E' $[T] E none ran (a quoted body)
+		//   $[1 + 2] 'T' and $[ x[1] ] 'T': none ran
+		{"#131 ' inside $[ ]", "echo $['" + T + "']", true},
+		{"#131 $' inside $[ ]", "echo $[$'" + T + "']", true},
+		{"#131 \" inside $[ ]", "echo $[\"" + T + "\"]", true},
+		{"#131 $[ inside double quotes", "echo \"$['" + T + "']\"", true},
+		{"#131 $[ in an unquoted heredoc body", "cat <<E\n$['" + T + "']\nE\n", true},
+		{"#131 ] inside a quote in $[ ]", "echo $[x[']']] " + T, true},
+		{"a # on the line after a heredoc terminator is a comment (fuzz)", "<<'E'\nE\n#'E\n" + T + "E\n'", true},
+		{"#131 a quoted heredoc body is literal", "cat <<'E'\n$[`x`]\nE\n", false},
+		{"#131 no quote inside $[ ]", "echo $[1 + 2] '`x`'", false},
+		{"#131 nested [ ] inside $[ ]", "echo $[ x[1] ] '`x`'", false},
+		{"#131 a stray ] after the close", "echo $[ ] ] '`x`'", false},
 		{"no quote inside: the one after the close quotes", "echo $((1 + 2)) '`x`'", false},
 		{"a quote before the arithmetic", "echo '(' $((1 + 2)) '`x`'", false},
 	} {
