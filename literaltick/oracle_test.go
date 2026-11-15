@@ -87,6 +87,13 @@ func reviewCases() []string {
 		`echo \$(#` + T + `)`,
 		`: (|#` + T,
 		`echo a|#` + T,
+		"echo $(true)(E\n#" + T,
+		"echo $((1))(E\n#" + T,
+		"echo a=(E\n#" + T,
+		"echo a{(E\n#" + T,
+		"echo in (E\n#" + T,
+		"echo $(true)(#" + T,
+		"echo a(E) #" + T,
 	}
 }
 
@@ -117,16 +124,39 @@ func corpusCases(t *testing.T) []string {
 // would execute, so the expected result is never derived from which are
 // installed. One that is absent is LOGGED BY NAME (visible with -v), never
 // counted as a pass; CI installs zsh so that it really runs there.
+//
+// ⛔ GITSAFE_ORACLE_SHELLS (comma separated, set in ci.yml) NAMES the shells a
+// run must have: one that is missing then FAILS the run, naming it, so a CI
+// image without zsh cannot read as a pass.
 func oracleShells(t testing.TB) []string {
-	var shells []string
-	for _, s := range []string{"bash", "dash", "zsh"} {
-		if p, err := exec.LookPath(s); err == nil {
-			shells = append(shells, p)
-		} else {
-			t.Logf("SKIPPED %s: not installed here, its half of the oracle did not run", s)
-		}
+	shells, absent, missing := lookShells(os.Getenv("GITSAFE_ORACLE_SHELLS"), exec.LookPath)
+	for _, s := range absent {
+		t.Logf("SKIPPED %s: not installed here, its half of the oracle did not run", s)
+	}
+	for _, s := range missing {
+		t.Fatalf("GITSAFE_ORACLE_SHELLS requires %s and it is not installed: the oracle would silently skip it", s)
 	}
 	return shells
+}
+
+// lookShells finds the oracle's shells with look. It returns the paths found,
+// the names not found, and the names among those that required demands.
+func lookShells(required string, look func(string) (string, error)) (shells, absent, missing []string) {
+	need := map[string]bool{}
+	for _, n := range strings.Split(required, ",") {
+		need[strings.TrimSpace(n)] = true
+	}
+	for _, s := range []string{"bash", "dash", "zsh"} {
+		if p, err := look(s); err == nil {
+			shells = append(shells, p)
+			continue
+		}
+		absent = append(absent, s)
+		if need[s] {
+			missing = append(missing, s)
+		}
+	}
+	return shells, absent, missing
 }
 
 var span = regexp.MustCompile("`[^`'\"\\\\$]*`")
@@ -149,9 +179,11 @@ func runs(t *testing.T, shell, cmd string) bool {
 	if strings.HasSuffix(shell, "zsh") {
 		// ⛔ zsh runs as `zsh -f -c`: -f is NO_RCS, so no ~/.zshenv or ~/.zshrc
 		// can change the result. It is a non-interactive shell with zsh's DEFAULT
-		// options: `interactivecomments` is off and does not apply, so `#` does
-		// not start a comment mid-line in any zsh run here, and that is the very
-		// property the rule's comment handling must not depend on.
+		// options. `interactivecomments` is an option of INTERACTIVE shells and
+		// does not apply: a non-interactive zsh reads # as a comment at the start
+		// of a word, as bash does (`zsh -f -c 'echo a(E) #`…`'` runs nothing). It
+		// reads it differently only inside what it takes for a glob, after a ( or
+		// a |, and that is where the oracle found the rule's misses.
 		args = []string{"-f", "-c", cmd}
 	}
 	c := exec.CommandContext(ctx, shell, args...)
@@ -263,6 +295,13 @@ func FuzzOracle(f *testing.F) {
 		oracleSeed("echo ", "\"", "<<'E'\n", "\"", "\n", "echo ", T),
 		oracleSeed("true ", ";", "echo ", T),
 		oracleSeed("<<-E\n", "\tE\n", "echo ", T),
+		// #121: the ( that only zsh reads as a glob group. The grammar has no
+		// `=` or `{`, so a=( and a{( are in reviewCases only.
+		oracleSeed("echo ", "$(", "true ", ")", "(", "x", "\n", "#", T),
+		oracleSeed("echo ", "$((", "x", "))", "(", "x", "\n", "#", T),
+		oracleSeed("echo ", "x", " ", "(", "x", "\n", "#", T),
+		oracleSeed(": ", "(", "|", "#", T),
+		oracleSeed("(", "#", T),
 	} {
 		f.Add(seed)
 	}
