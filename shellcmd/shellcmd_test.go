@@ -192,6 +192,13 @@ func TestClassify(t *testing.T) {
 		{"nested [ ] inside $[ ]", "$[a[1]] 'x'", "ccccccccsss"},
 		{"a $[ never closed is all code", "$[1 'x'", "ccccccc"},
 		{"$[ inside double quotes", "\"$[1]\" 'x'", "dccccdcsss"},
+		// ⛔ #133: a comment holding a ) and an ODD number of " no longer hides
+		// the ) from bash 3.2.57's scan (it ends the substitution there), so the
+		// body is not a quoted heredoc body any more: all code. An even count, or
+		// no ), still hides it, and the body stays one.
+		{"a ) and a lone \" in a comment of the body", "\"$(cat <<'E'\n#)\"|x\nE\n)\"", "dcccccccccccccccccccccc"},
+		{"a ) and an even count of \" in a comment", "\"$(cat <<'E'\n# \"a\" )|x\nE\n)\"", "dcccccccccccchhhhhhhhhhhhcd"},
+		{"a ) alone in a comment stays hidden", "\"$(cat <<'E'\n# ) note\nE\n)\"", "dcccccccccccchhhhhhhhhhhcd"},
 		{"a ) inside an expanded heredoc body", "\"$(cat <<E\n(x)\nE\n)\"", "dcccccccccccccccccc"},
 	} {
 		if got := string(Classify(tc.cmd)); got != tc.want {

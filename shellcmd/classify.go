@@ -528,6 +528,33 @@ func unbalancedClose(body string) bool {
 				continue
 			}
 			j := strings.IndexByte(body[i:], '\n')
+			end := i + j
+			if j < 0 {
+				end = len(body)
+			}
+			// ⛔ A COMMENT WITH A ) AND, AFTER IT, A " SPAN THAT IS NOT ONE PLAIN
+			// WORD (#133, found by FuzzBody). Asked of bash 3.2.57 per variant, on
+			// whether the substitution still spans the whole body and whether a
+			// backtick after it runs (TestACommentWithAParenAndAQuote):
+			//
+			//	"# ) note"             spans: the comment hides the )
+			//	"# ) \"x\"|T"          spans, nothing ran: a plain word in " "
+			//	"# \"a b\" )|T"        spans: the " BEFORE the ) changes nothing
+			//	"# ) \"a b\""          does NOT span (a space), "# ) \"a|b\"|T" RAN
+			//	"# ) \"a&b\"|T"        RAN; "#)\"|T" RAN; "#)\"|\"T" RAN
+			//	"# ) \"a$b\"", "# ) \"a.b-c_d\"" span; ( ) ; ' ` , tab and a
+			//	                       newline inside the " " do not
+			//
+			// After a ) the scan stops treating the comment as hidden as soon as
+			// a " opens a span holding anything but [A-Za-z0-9_.$-], or none is
+			// closed on the line, and the substitution ends at that ). Unsure
+			// refuses, for exactly that shape: any ) with any quote cost 755
+			// refusals and any paren 1 051, against 551, so neither was kept.
+			// The spans are paired from the # itself, not from the ): FuzzBody
+			// found `#")")"|T`, where the first ) sits inside a span.
+			if strings.IndexByte(body[i:end], ')') >= 0 && quoteSpanBreaks(body[i:]) {
+				return true
+			}
 			if j < 0 {
 				return false // the comment runs to the end: no ) can be seen
 			}
@@ -542,6 +569,28 @@ func unbalancedClose(body string) bool {
 		}
 	}
 	return false
+}
+
+// quoteSpanBreaks reports whether rest, the text of a comment after a ), holds
+// a " span that is not one plain word ([A-Za-z0-9_.$-]*), or a " that never
+// closes on the line: the shape in which bash 3.2.57's scan stops hiding the )
+// (#133).
+func quoteSpanBreaks(rest string) bool {
+	for {
+		open := strings.IndexByte(rest, '"')
+		if open < 0 {
+			return false
+		}
+		rest = rest[open+1:]
+		shut := strings.IndexByte(rest, '"')
+		if shut < 0 {
+			return true
+		}
+		if strings.ContainsAny(rest[:shut], "|&\n'\\`") {
+			return true
+		}
+		rest = rest[shut+1:]
+	}
 }
 
 // oddBackslashes reports whether the byte at k is preceded by an odd number of
