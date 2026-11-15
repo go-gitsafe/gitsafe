@@ -757,6 +757,11 @@ func commandPos(s string, cls []byte, e int) bool {
 	if j == 0 {
 		return true
 	}
+	// ⛔ #128: the newline that ends a heredoc's terminator line starts a command
+	// (asked of bash 3.2.57, dash and zsh: `(`, `(#`, `(|#` after it ran nothing).
+	if s[j-1] == '\n' && (cls[j-1] == ClassHeredocQuoted || cls[j-1] == ClassHeredocExpanded) {
+		return true
+	}
 	if cls[j-1] != ClassCode {
 		return false
 	}
@@ -805,10 +810,65 @@ func parenIsShell(s string, cls []byte, i int) bool {
 		case '=':
 			w, k := wordBefore(s, cls, i)
 			name := strings.TrimSuffix(strings.TrimSuffix(w, "="), "+")
-			return name != "" && assignName.MatchString(name) && commandPos(s, cls, k)
+			return name != "" && assignName.MatchString(name) && (commandPos(s, cls, k) || assignPrefix(s, cls, k))
 		}
 	}
+	// ⛔ #128: the ) that ends a `case` pattern: what follows is a command.
+	if j := skipBlanks(s, i); j > 0 && s[j-1] == ')' && cls[j-1] == ClassCode && caseArmClose(s, cls, j-1) {
+		return true
+	}
 	return commandPos(s, cls, i)
+}
+
+// assignPrefix reports whether the word that starts at k is preceded only by
+// words that keep an array assignment an assignment (#128): declaration
+// builtins (local declare typeset export readonly), their -flags, and other
+// assignments, the first of them in command position. Asked of bash 3.2.57,
+// dash and zsh -f -c: `local a=(…)`, `declare -a a=(…)`, `export a=(…)` and
+// `FOO=1 a=(1) …` run nothing after any `#`, `|#` or newline-`#` in the list,
+// while `echo a=(…)` is a glob qualifier in zsh and stays unsure.
+func assignPrefix(s string, cls []byte, k int) bool {
+	p := skipBlanks(s, k)
+	if p >= k { // no blank between: the word is not separate
+		return false
+	}
+	w, k2 := wordBefore(s, cls, p)
+	switch {
+	case w == "":
+		return false
+	case w == "local" || w == "declare" || w == "typeset" || w == "export" || w == "readonly":
+		return commandPos(s, cls, k2)
+	case w[0] == '-' && len(w) > 1:
+		return assignPrefix(s, cls, k2)
+	}
+	if eq := strings.IndexByte(w, '='); eq > 0 && assignName.MatchString(strings.TrimSuffix(w[:eq], "+")) {
+		return commandPos(s, cls, k2) || assignPrefix(s, cls, k2)
+	}
+	return false
+}
+
+// caseArmClose reports whether the ) at i ends a `case` pattern: the pattern
+// (words joined by |) follows `in` of `case WORD in`, or a ;; ;& ;;& (#128).
+func caseArmClose(s string, cls []byte, i int) bool {
+	w, k := wordBefore(s, cls, i)
+	if w == "" {
+		return false
+	}
+	for {
+		p := skipBlanks(s, k)
+		if p > 0 && s[p-1] == '|' && cls[p-1] == ClassCode {
+			w, k = wordBefore(s, cls, skipBlanks(s, p-1))
+			if w == "" {
+				return false
+			}
+			continue
+		}
+		if p > 0 && cls[p-1] == ClassCode && (s[p-1] == ';' || s[p-1] == '&' && p > 1 && s[p-2] == ';') {
+			return true
+		}
+		kw, _ := wordBefore(s, cls, p)
+		return kw == "in" && p < k && commandPos(s, cls, k)
+	}
 }
 
 var assignName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
