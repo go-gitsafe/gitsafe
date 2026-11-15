@@ -1,7 +1,6 @@
 package literaltick
 
 import (
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,12 +27,7 @@ import (
 // the rule allowed is a failure. Its seeds are the rows the review and the
 // shells produced, so the search starts where the known defects were.
 func FuzzBody(f *testing.F) {
-	var shells []string
-	for _, s := range []string{"bash", "dash"} {
-		if p, err := exec.LookPath(s); err == nil {
-			shells = append(shells, p)
-		}
-	}
+	shells := oracleShells(f) // bash, dash and zsh, the oracle's own list
 	for _, seed := range [][]byte{
 		bodySeed("don", "'", "t ", "(", "it", "'", "s", ")", " ", T),
 		bodySeed("'", "(", "'", " ", ")", " ", T),

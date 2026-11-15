@@ -173,6 +173,14 @@ func TestClassify(t *testing.T) {
 		{"a ) inside a quoted heredoc body", "\"$(cat <<'E'\n(x)\nE\n)\"", "dcccccccccccchhhhhhcd"},
 		// The doubt is kept for an UNQUOTED body, where the shell expands what
 		// it reads and this lexer's model of it is weaker.
+		// ⛔ #124: bash skips '…' and "…" while it looks for the )) that closes
+		// $(( … )), dash and zsh do not, so a quote inside means the close is
+		// not knowable: the rest of the line is code in EVERY reading.
+		{"a ' inside $(( )) makes the rest code", "$(('))'x))", "cccccccccc"},
+		{"a \" inside $(( )) makes the rest code", "$((\"))\"x))", "cccccccccc"},
+		{"a $' inside $(( )) makes the rest code", "$(($'))'x))", "ccccccccccc"},
+		{"the quote before it is still a quote", "'a' $(('b))", "ssscccccccc"},
+		{"no quote inside: the one after the close still quotes", "$((1)) 'x'", "ccccccc" + "sss"},
 		{"a ) inside an expanded heredoc body", "\"$(cat <<E\n(x)\nE\n)\"", "dcccccccccccccccccc"},
 	} {
 		if got := string(Classify(tc.cmd)); got != tc.want {
