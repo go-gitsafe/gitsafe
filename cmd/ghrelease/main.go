@@ -255,12 +255,13 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	// finding that out after merging leaves the caller with a merged pull
 	// request and no release -- recoverable, but only by someone who knows
 	// what half-happened.
-	switch exists, err := tagExists(token, repo, tag); {
+	switch exists, sha, subject, err := tagAt(token, repo, tag); {
 	case err != nil:
 		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
 		return 1
 	case exists:
 		fmt.Fprintf(stderr, "ghrelease: %s already has the tag %s, and a published tag is not moved\n", repo, tag)
+		fmt.Fprint(stderr, pointsAt(tag, sha, subject))
 		return 1
 	}
 
@@ -440,13 +441,19 @@ func resumeRelease(args []string, tokenFile string, notes *string, makeLatest bo
 		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
 		return 1
 	}
-	switch exists, err := tagExists(token, repo, tag); {
+	switch exists, sha, subject, err := tagAt(token, repo, tag); {
 	case err != nil:
 		fmt.Fprintf(stderr, "ghrelease: %v\n", err)
 		return 1
 	case !exists:
 		fmt.Fprintf(stderr, "ghrelease: %s has no tag %s; -release-only does not create one\n", repo, tag)
 		return 1
+	default:
+		// ⛔ The same reading on the OTHER polarity, and it is not symmetry for
+		// its own sake: -release-only publishes a release FOR an existing tag,
+		// so which commit that tag marks is the one fact the operator is
+		// acting on, and until now nothing said it.
+		fmt.Fprint(stdout, pointsAt(tag, sha, subject))
 	}
 	switch has, err := releaseExists(token, repo, tag); {
 	case err != nil:
@@ -652,21 +659,119 @@ func api(token, method, url string, body any) (*http.Response, error) {
 	return resp, nil
 }
 
-// tagExists reports whether the tag is already published.
-func tagExists(token, repo, tag string) (bool, error) {
+// tagAt reports whether the tag is already published AND WHAT IT POINTS AT:
+// the commit's abbreviated sha and the first line of its message, empty when
+// they could not be read.
+//
+// ⛔⛔ THE SECOND HALF IS THE POINT, and it comes from a false deduction
+// published on 2026-11-15. `go list -m -versions` answered
+// "… v0.124.1 v0.125.0 v0.126.0", so v0.127.0 was the first free number — and
+// from that list I concluded WHO had taken v0.126.0 and WHY, told another
+// session its work "ships without a tag of its own", and was wrong: v0.126.0
+// was that session's own marker, on its own merge commit. A version list says
+// THAT a number is taken, never BY WHAT. One `git log -1 v0.126.0` would have
+// said; nothing asked, because the refusal that mentioned the tag said nothing
+// about it.
+//
+// So the reading goes INTO the refusal, where the operator is choosing a
+// version — not into a line printed after the decision, which is read by
+// nobody who has already moved on. Sibling of #41, which made the DRY RUN name
+// the commit it would tag; this names the commit a refusal is about.
+//
+// ⛔ A decoration that fails must never soften the refusal. The tag exists the
+// moment the ref is 200; everything after that is description, and each of its
+// three reads may fail without changing the verdict. An annotated tag needs
+// one extra hop (ref -> tag object -> commit), which is why the type is read
+// rather than assumed.
+func tagAt(token, repo, tag string) (exists bool, sha, subject string, err error) {
 	resp, err := api(token, http.MethodGet,
 		fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", apiBase, repo, tag), nil)
 	if err != nil {
-		return false, err
+		return false, "", "", err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, nil
 	case http.StatusNotFound:
-		return false, nil
+		return false, "", "", nil
+	case http.StatusOK:
+	default:
+		return false, "", "", refused("looking for the tag", resp)
 	}
-	return false, refused("looking for the tag", resp)
+
+	var ref struct {
+		Object struct {
+			SHA  string `json:"sha"`
+			Type string `json:"type"`
+		} `json:"object"`
+	}
+	// A body that does not decode, or carries no object, leaves the tag
+	// existing and undescribed.
+	if json.NewDecoder(resp.Body).Decode(&ref) != nil || ref.Object.SHA == "" {
+		return true, "", "", nil
+	}
+	commit := ref.Object.SHA
+	if ref.Object.Type == "tag" {
+		if c, ok := annotatedTarget(token, repo, commit); ok {
+			commit = c
+		} else {
+			return true, "", "", nil
+		}
+	}
+	return true, short(commit), commitSubject(token, repo, commit), nil
+}
+
+// annotatedTarget resolves an annotated tag object to the commit it wraps.
+func annotatedTarget(token, repo, sha string) (string, bool) {
+	resp, err := api(token, http.MethodGet,
+		fmt.Sprintf("%s/repos/%s/git/tags/%s", apiBase, repo, sha), nil)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	var t struct {
+		Object struct{ SHA string } `json:"object"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&t) != nil || t.Object.SHA == "" {
+		return "", false
+	}
+	return t.Object.SHA, true
+}
+
+// commitSubject is the first line of a commit's message, or "" if it cannot be
+// read. A subject is description: it never decides anything.
+func commitSubject(token, repo, sha string) string {
+	resp, err := api(token, http.MethodGet,
+		fmt.Sprintf("%s/repos/%s/commits/%s", apiBase, repo, sha), nil)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var c struct {
+		Commit struct{ Message string } `json:"commit"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&c) != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(c.Commit.Message, "\n")
+	return strings.TrimSpace(line)
+}
+
+// pointsAt is the sentence a refusal adds under itself. It never claims more
+// than was read.
+func pointsAt(tag, sha, subject string) string {
+	switch {
+	case sha == "":
+		return fmt.Sprintf("ghrelease: %s → (the commit it points at could not be read; the tag exists all the same)\n", tag)
+	case subject == "":
+		return fmt.Sprintf("ghrelease: %s → %s\n", tag, sha)
+	}
+	return fmt.Sprintf("ghrelease: %s → %s %s\n", tag, sha, subject)
 }
 
 // mergeState reads whether the pull request is merged and, if it is, the commit
