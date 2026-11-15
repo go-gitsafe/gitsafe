@@ -124,11 +124,11 @@ func TestV2AndDqBacktickAreRealCuts(t *testing.T) {
 // the issue names: a wrong token index would commit a different body.
 func TestCommentQuoteCorpusDecodes(t *testing.T) {
 	for name, want := range map[string]string{
-		"issue133-seed1": "#)\"|" + T,
-		"issue133-seed2": "x\n#)\"|" + T,
-		"issue133-seed3": "t #)\"|" + T,
-		"issue133-seed4": "#;)\"|" + T,
-		"seed-589e8577":  "#)\"|" + T,
+		"issue133-seed1":   "#)\"|" + T,
+		"issue133-seed2":   "x\n#)\"|" + T,
+		"issue133-seed3":   "t #)\"|" + T,
+		"issue133-seed4":   "#;)\"|" + T,
+		"seed-589e8577":    "#)\"|" + T,
 		"f6a028469111f9dd": "#)\";#\"\n" + T,
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", "fuzz", "FuzzBody", name))
