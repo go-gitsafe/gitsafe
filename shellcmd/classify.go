@@ -568,8 +568,11 @@ func unbalancedClose(body string) bool {
 			// chosen so: when the comment LINE holds a ), [quoteSpanBreaks] pairs
 			// the " characters from the # to the END OF THE BODY (not to the end of
 			// the comment line, and not from the )), and the body is unsure if a
-			// pair encloses any of | & newline ' \ or a backtick, or if a " is
-			// left unpaired. A span of plain text is not unsure, nor is a span
+			// pair encloses any of | & # newline ' \ or a backtick, or if a " is
+			// left unpaired. The # is FuzzBody's (#133): after the cut the " of
+			// `";#"` closes the command's own quote, the ; ends the command and
+			// the # starts a comment, so the next line is code (bash 3.2.57 ran
+			// `#)";#"` newline T; the same without the #, or with `a#b`, ran nothing). A span of plain text is not unsure, nor is a span
 			// holding a space, ( ) ; or a comma, although bash cuts some of
 			// those: refusing them cost more than it bought, and no cut among them
 			// ran a backtick (execution needs a ) in the comment, a " after it,
@@ -607,7 +610,7 @@ func unbalancedClose(body string) bool {
 
 // quoteSpanBreaks pairs the " characters of rest, which runs from the # of a
 // comment to the END OF THE BODY, and reports whether a pair encloses any of
-// | & newline ' \ or a backtick, or a " is left without a partner: the shape in
+// | & # newline ' \ or a backtick, or a " is left without a partner: the shape in
 // which bash 3.2.57's scan stops hiding the ) of the comment (#133).
 func quoteSpanBreaks(rest string) bool {
 	for {
@@ -620,7 +623,7 @@ func quoteSpanBreaks(rest string) bool {
 		if shut < 0 {
 			return true
 		}
-		if strings.ContainsAny(rest[:shut], "|&\n'\\`") {
+		if strings.ContainsAny(rest[:shut], "|&#\n'\\`") {
 			return true
 		}
 		rest = rest[shut+1:]

@@ -63,6 +63,15 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		{"an odd ` after the )", "# ) `|" + T, false},
 		{"an odd \" and no )", "# \"|" + T, false},
 		{"a ) in a later line only", "x\n# \"a\"\n# ) note " + T, false},
+		// FuzzBody, #133: the span holds a ; and a #, which comments out the rest
+		// of the command line after the cut (bash 3.2.57 RAN each of the first
+		// three; `a#b` ran nothing and is refused anyway as the rule cannot tell
+		// it apart cheaply, and a lone ; ran nothing and is allowed).
+		{"a ;# in the span, a newline and the marker", "#)\";#\"\n" + T, true},
+		{"a blank and # in the span", "#)\" #\"\n" + T, true},
+		{"the ) earlier in a longer comment", "# note ) \";#\"\n" + T, true},
+		{"a # inside a word of the span", "#)\"a#b\"\n" + T, true},
+		{"a ; alone in the span", "#)\";\"\n" + T, false},
 		// V2: an ODD number of " on the comment line and a ) later in the body.
 		{"V2: a lone \" then a line holding \")\"|", "#\"\n\")\"|" + T, true},
 		{"V2: after a word line", "#\"\nx\")\"|" + T, true},
@@ -120,6 +129,7 @@ func TestCommentQuoteCorpusDecodes(t *testing.T) {
 		"issue133-seed3": "t #)\"|" + T,
 		"issue133-seed4": "#;)\"|" + T,
 		"seed-589e8577":  "#)\"|" + T,
+		"f6a028469111f9dd": "#)\";#\"\n" + T,
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", "fuzz", "FuzzBody", name))
 		if err != nil {
