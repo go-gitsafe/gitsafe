@@ -388,8 +388,18 @@ func Classify(cmd string) []byte {
 				// See TestTheRuleAllowsWhatNoRealShellRuns in literaltick, which
 				// states each case's expectation and puts it to zsh, bash and
 				// dash rather than reading the expectation off them.
-				if len(stack) > 0 && (expanded && strings.Contains(s[from:i], ")") ||
-					unbalancedClose(s[from:i])) {
+				//
+				// ⛔ AND A SPAN THE BODY LEAVES OPEN (#136). bash's scan has no
+				// notion of a heredoc, so a lone " in a quoted body pairs with the
+				// next " ANYWHERE after it, the terminator line included, which
+				// then hides the terminator and moves the substitution's close
+				// to a later ). `$(<<'E'` NL `"E` NL `E` NL `")"x) #T"` ran T in
+				// bash 3.2.57 and in no other shell. Unsure refuses when the
+				// body ends inside a span whose quote occurs again after it.
+				var open byte
+				cut := scanClose(s[from:i], &open)
+				if len(stack) > 0 && (expanded && strings.Contains(s[from:i], ")") || cut ||
+					open != 0 && closeAfterQuote(s[i:], open)) {
 					for k := from; k < len(s); k++ {
 						cls[k] = ClassCode
 					}
@@ -460,7 +470,13 @@ func Classify(cmd string) []byte {
 // unterminated span is an allow here, not the unsure case. Ordinary prose has
 // an odd apostrophe more often than not, and refusing on it would put back
 // most of the 5 050.
-func unbalancedClose(body string) bool {
+func unbalancedClose(body string) bool { return scanClose(body, nil) }
+
+// scanClose is [unbalancedClose]. When the scan ends on a span that never
+// closes, and open is not nil, *open is the quote that opened it: the span
+// would close on the next such quote AFTER body, because bash's scan does not
+// know where a heredoc ends (#136).
+func scanClose(body string, open *byte) bool {
 	depth := 0
 	for i := 0; i < len(body); i++ {
 		switch c := body[i]; c {
@@ -514,6 +530,9 @@ func unbalancedClose(body string) bool {
 						}
 					}
 					if k >= len(body) {
+						if open != nil {
+							*open = '`'
+						}
 						return false // an unterminated span: the scan never reaches a )
 					}
 					j = k
@@ -524,6 +543,9 @@ func unbalancedClose(body string) bool {
 				}
 			}
 			if j >= len(body) {
+				if open != nil {
+					*open = c
+				}
 				return false // unterminated: the scan never reaches a )
 			}
 			i = j
@@ -651,6 +673,18 @@ func quoteSpanBreaks(rest string) bool {
 		}
 		rest = rest[shut+1:]
 	}
+}
+
+// closeAfterQuote reports whether the first q of rest comes before its first ):
+// the span a heredoc body left open closes on that q, and the ) after it is
+// bare. A body's lone quote normally pairs with the command's own closing
+// quote, which comes AFTER the frame's own ) (the substitution then never
+// closes: a syntax error, nothing runs). Any ) after the q cost 778 refusals
+// against 622.
+func closeAfterQuote(rest string, q byte) bool {
+	k := strings.IndexByte(rest, q)
+	p := strings.IndexByte(rest, ')')
+	return k >= 0 && p > k
 }
 
 // countUnescaped counts the q in s that no backslash precedes: FuzzBody found

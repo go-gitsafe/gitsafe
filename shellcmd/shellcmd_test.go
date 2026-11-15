@@ -204,6 +204,7 @@ func TestClassify(t *testing.T) {
 		{"an odd ' pairing with the next ' then )\"", "\"$(cat <<'E'\n#'\n')\"\nx\nE\n)\"", "dccccccccccccccccccccccccc"},
 		{"an odd backtick pairing with the next one then )\"", "\"$(cat <<'E'\n#`\n`)\"\nx\nE\n)\"", "dccccccccccccccccccccccccc"},
 		{"an odd ' with no second ' stays a body", "\"$(cat <<'E'\n# it's\n(x)\nE\n)\"", "dcccccccccccchhhhhhhhhhhhhcd"},
+		{"#136: a body leaving a \" open, the quote and a ) after it", "$(<<'E'\n\"E\nE\n\")\"x)", "cccccccccccccccccc"},
 		{"a ) alone in a comment stays hidden", "\"$(cat <<'E'\n# ) note\nE\n)\"", "dcccccccccccchhhhhhhhhhhcd"},
 		{"a ) inside an expanded heredoc body", "\"$(cat <<E\n(x)\nE\n)\"", "dcccccccccccccccccc"},
 	} {
