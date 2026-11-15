@@ -76,6 +76,7 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		// the ) after it is bare (bash 3.2.57 ran the first two).
 		{"an odd ' then a second ' and )\"|", "#'\n')\"|" + T, true},
 		{"the same after a word and a blank", "x #'\nx')\"|" + T, true},
+		{"an odd ' then a second ' and )\"& (FuzzBody 9533303894e0bbea)", "#'\n')\"&" + T, true},
 		{"an odd ' and no second ' later", "# it's\n(x)\"|" + T, false},
 		{"an odd ' and a second ' but no \" and | after the )", "#'\n')" + T, false},
 		// V2: an ODD number of " on the comment line and a ) later in the body.
@@ -138,6 +139,7 @@ func TestCommentQuoteCorpusDecodes(t *testing.T) {
 		"seed-589e8577":    "#)\"|" + T,
 		"f6a028469111f9dd": "#)\";#\"\n" + T,
 		"1d3d1b483c5655cf": "#'\n')\"|" + T,
+		"9533303894e0bbea": "#'\n')\"&" + T,
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", "fuzz", "FuzzBody", name))
 		if err != nil {

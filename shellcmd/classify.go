@@ -647,7 +647,7 @@ func quoteSpanBreaks(rest string) bool {
 	}
 }
 
-// closeQuotePipe reports whether rest holds a ), then a ", then a | : the
+// closeQuotePipe reports whether rest holds a ), then a ", then a | or &: the
 // conjunction in which a ) cut by a paired ' span ran its backtick.
 func closeQuotePipe(rest string) bool {
 	p := strings.IndexByte(rest, ')')
@@ -658,7 +658,7 @@ func closeQuotePipe(rest string) bool {
 	if q < 0 {
 		return false
 	}
-	return strings.IndexByte(rest[p+q:], '|') >= 0
+	return strings.ContainsAny(rest[p+q:], "|&")
 }
 
 // commentStartIn reports whether s holds a # that starts a comment once the
