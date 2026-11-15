@@ -500,6 +500,25 @@ func unbalancedClose(body string) bool {
 					j++
 					continue
 				}
+				// ⛔ A BACKTICK INSIDE " … " OWNS THE NEXT QUOTE (#133): bash's
+				// scan reads `…` as a span of its own there, so a " inside it
+				// does not close the outer one. ``"`"`")`T`` is the outer "
+				// closing on the THIRD ", leaving the ) bare; closing it on the
+				// second hid the ) inside a backtick span and allowed what bash
+				// 3.2.57 runs.
+				if c == '"' && body[j] == '`' {
+					k := j + 1
+					for ; k < len(body) && body[k] != '`'; k++ {
+						if body[k] == '\\' {
+							k++
+						}
+					}
+					if k >= len(body) {
+						return false // an unterminated span: the scan never reaches a )
+					}
+					j = k
+					continue
+				}
 				if body[j] == c {
 					break
 				}
@@ -532,8 +551,8 @@ func unbalancedClose(body string) bool {
 			if j < 0 {
 				end = len(body)
 			}
-			// ⛔ A COMMENT WITH A ) AND, AFTER IT, A " SPAN THAT IS NOT ONE PLAIN
-			// WORD (#133, found by FuzzBody). Asked of bash 3.2.57 per variant, on
+			// ⛔ A COMMENT WITH A ) AND A " SPAN THAT BREAKS THE SCAN (#133, found
+			// by FuzzBody). Asked of bash 3.2.57 per variant, on
 			// whether the substitution still spans the whole body and whether a
 			// backtick after it runs (TestACommentWithAParenAndAQuote):
 			//
@@ -545,15 +564,51 @@ func unbalancedClose(body string) bool {
 			//	"# ) \"a$b\"", "# ) \"a.b-c_d\"" span; ( ) ; ' ` , tab and a
 			//	                       newline inside the " " do not
 			//
-			// After a ) the scan stops treating the comment as hidden as soon as
-			// a " opens a span holding anything but [A-Za-z0-9_.$-], or none is
-			// closed on the line, and the substitution ends at that ). Unsure
-			// refuses, for exactly that shape: any ) with any quote cost 755
-			// refusals and any paren 1 051, against 551, so neither was kept.
+			// WHAT THE CODE DOES, which is wider than the rows above and was
+			// chosen so: when the comment LINE holds a ), [quoteSpanBreaks] pairs
+			// the " characters from the # to the END OF THE BODY (not to the end of
+			// the comment line, and not from the )), and the body is unsure if a
+			// pair encloses any of | & newline ' \ or a backtick, or a # that
+			// starts a comment (after ; & ( or a blank), or if a " is left
+			// unpaired. The # is FuzzBody's (#133): after the cut the " of
+			// `";#"` closes the command's own quote, the ; ends the command and
+			// the # starts a comment, so the next line is code (bash 3.2.57 ran
+			// `#)";#"` newline T; the same without the #, or with `a#b`, ran
+			// nothing). A span of plain text is not unsure, nor is a span
+			// holding a space, ( ) ; or a comma, although bash cuts some of
+			// those: refusing them cost more than it bought, and no cut among
+			// them ran a backtick. A conjunction rule (a ) in the comment, a "
+			// after it, a lone | after that) was tried instead of the | & ' \
+			// and backtick tests and cost MORE (594 against 586) and misses the
+			// # case, which runs with no pipe. Limiting the scan to the comment line
+			// caught 1 cut of the 29 measured, so the scan runs on. Any ) with any
+			// quote cost 755 refusals and any paren 1 051, against 551 before.
 			// The spans are paired from the # itself, not from the ): FuzzBody
 			// found `#")")"|T`, where the first ) sits inside a span.
 			if strings.IndexByte(body[i:end], ')') >= 0 && quoteSpanBreaks(body[i:]) {
 				return true
+			}
+			// ⛔ AN ODD NUMBER OF " ON THE COMMENT LINE (#133, "V2"): the lone "
+			// opens a span in bash's scan that runs into the following lines and
+			// pairs the quotes there differently from this scan. With a ) anywhere
+			// later, `#"` newline `")"|T` ran its backtick in bash 3.2.57. Unsure
+			// refuses; it cost +2 refusals over the transcripts.
+			if countUnescaped(body[i:end], '"')%2 == 1 && strings.IndexByte(body[end:], ')') >= 0 {
+				return true
+			}
+			// The same for ' and `, found by FuzzBody (`#'` newline `')"|T`
+			// ran in bash 3.2.57): the odd quote of the comment pairs with the
+			// next one of its kind, and a ) AFTER that one is bare. Prose with
+			// an apostrophe is common, so the rule also needs a " after that
+			// ) (FuzzBody: `#'` newline `')"` newline T ran, with or without a
+			// | or &): any ) after an odd ' cost 745 refusals against 581, with
+			// the backtick as well 746.
+			for _, q := range []string{"'", "`"} {
+				if countUnescaped(body[i:end], q[0])%2 == 1 {
+					if k := strings.Index(body[end:], q); k >= 0 && closeThenQuote(body[end+k+1:]) {
+						return true
+					}
+				}
 			}
 			if j < 0 {
 				return false // the comment runs to the end: no ) can be seen
@@ -571,11 +626,16 @@ func unbalancedClose(body string) bool {
 	return false
 }
 
-// quoteSpanBreaks reports whether rest, the text of a comment after a ), holds
-// a " span that is not one plain word ([A-Za-z0-9_.$-]*), or a " that never
-// closes on the line: the shape in which bash 3.2.57's scan stops hiding the )
-// (#133).
+// quoteSpanBreaks pairs the " characters of rest, which runs from the # of a
+// comment to the END OF THE BODY, and reports whether a pair encloses any of
+// | & newline ' \ a backtick or a comment-starting #, or a " is left without a
+// partner: the shape in which bash 3.2.57's scan stops hiding the ) of the comment (#133).
 func quoteSpanBreaks(rest string) bool {
+	// An escaped " (FuzzBody: `#)\""|T` ran) is a quote bash's scan reads one
+	// way and this pairing another: unsure.
+	if strings.Contains(rest, `\"`) {
+		return true
+	}
 	for {
 		open := strings.IndexByte(rest, '"')
 		if open < 0 {
@@ -586,11 +646,44 @@ func quoteSpanBreaks(rest string) bool {
 		if shut < 0 {
 			return true
 		}
-		if strings.ContainsAny(rest[:shut], "|&\n'\\`") {
+		if strings.ContainsAny(rest[:shut], "|&\n'\\`") || commentStartIn(rest[:shut]) {
 			return true
 		}
 		rest = rest[shut+1:]
 	}
+}
+
+// countUnescaped counts the q in s that no backslash precedes: FuzzBody found
+// `#\”` newline `')"|T`, which bash runs as an ODD ' pairing with the next.
+func countUnescaped(s string, q byte) int {
+	n := 0
+	for k := 0; k < len(s); k++ {
+		if s[k] == q && !oddBackslashes(s, k) {
+			n++
+		}
+	}
+	return n
+}
+
+// closeThenQuote reports whether rest holds a ) and, after it, a ": the
+// conjunction in which a ) cut by a paired ' span ran its backtick.
+func closeThenQuote(rest string) bool {
+	p := strings.IndexByte(rest, ')')
+	if p < 0 {
+		return false
+	}
+	return strings.IndexByte(rest[p:], '"') >= 0
+}
+
+// commentStartIn reports whether s holds a # that starts a comment once the
+// quotes around s are read the other way: one after a ; & ( blank or tab.
+func commentStartIn(s string) bool {
+	for k := 1; k < len(s); k++ {
+		if s[k] == '#' && strings.IndexByte(";&( \t", s[k-1]) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // oddBackslashes reports whether the byte at k is preceded by an odd number of
