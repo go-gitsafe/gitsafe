@@ -152,6 +152,14 @@ func TestEqwordRowsCountAndDoNotRefuse(t *testing.T) {
 	if !strings.Contains(got, "echo one; echo ====; echo two") || !strings.Contains(got, "1 run(s)") {
 		t.Errorf("the separator that loses a command was not counted once:\n%s", got)
 	}
+	// ⛔ A COUNT IS NOT A REFUSAL: the header counts what rules would refuse,
+	// and the counting-only hits go on their own named line.
+	if !strings.Contains(got, "would be refused: 0 of 3 command(s)") {
+		t.Errorf("a counting-only hit was counted as refused:\n%s", got)
+	}
+	if !strings.Contains(got, "counted only (no rule refuses these): 1 of 3 command(s)") {
+		t.Errorf("the counting-only line is missing or wrong:\n%s", got)
+	}
 	if strings.Contains(got, "=sh") {
 		t.Errorf("an =cmd that resolves was counted as a loss:\n%s", got)
 	}
@@ -203,7 +211,6 @@ func TestEveryRuleGuardBashRunsIsScanned(t *testing.T) {
 	// Rows that COUNT and that guard-bash deliberately does not run (#129).
 	// Naming them here is the declaration: a row that is neither imported nor
 	// listed is still a failure.
-	countingOnly := map[string]bool{"eqword": true, "eqword-intended": true}
 	for name := range scanned {
 		if countingOnly[name] {
 			continue

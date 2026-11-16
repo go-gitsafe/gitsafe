@@ -100,6 +100,10 @@ are printed through the redactor, the same way the guards print.`,
 	return c
 }
 
+// countingOnly are the rows that count and that guard-bash does not run: their
+// hits are reported on their own line and never in "would be refused".
+var countingOnly = map[string]bool{"eqword": true, "eqword-intended": true}
+
 // rules is every rule guard-bash runs, adapted to one shape.
 //
 // ⛔ THE LIST IS THE RISK HERE, and it is the same risk hookcheck's corpus had:
@@ -267,7 +271,7 @@ func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int
 	}
 
 	groups := map[string]*group{}
-	refusedTotal := 0
+	refusedTotal, countedTotal := 0, 0
 	for command, n := range corpus.Commands {
 		if escapedOnly {
 			if _, ok := escapePrefix(command); !ok {
@@ -288,7 +292,11 @@ func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int
 			g.whys[command] = r.Why
 			g.commands[command] += n
 			g.total += n
-			refusedTotal += n
+			if countingOnly[name] {
+				countedTotal += n // a count is not a refusal
+			} else {
+				refusedTotal += n
+			}
 		}
 	}
 
@@ -302,6 +310,10 @@ func report(cmd *cobra.Command, dir, only string, escapedOnly bool, examples int
 		}
 	}
 	fmt.Fprintf(stdout, "\nwould be refused: %d of %d command(s)\n", refusedTotal, corpus.Total)
+	if countedTotal > 0 {
+		fmt.Fprintf(stdout, "counted only (no rule refuses these): %d of %d command(s)\n",
+			countedTotal, corpus.Total)
+	}
 
 	ordered := make([]*group, 0, len(groups))
 	for _, g := range groups {
