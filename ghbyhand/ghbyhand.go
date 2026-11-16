@@ -29,8 +29,8 @@
 //
 // # What it refuses, stated as the ACT
 //
-// Changing GitHub state with `gh`, at all. `gh` is for READS; the one write it
-// keeps is `gh pr create`, the documented way a pull request is opened here.
+// Changing GitHub state with `gh`, at all. `gh` is for READS; opening a pull
+// request is `ghpr <owner/repo> create`.
 //
 // Two kinds of refusal, and the second is the one that closes the hole:
 //
@@ -56,7 +56,6 @@
 //
 //	gh issue list / view               reads: the fleet has no quarrel with them
 //	gh pr checks 443                   one-shot: a table, claiming nothing ahead
-//	gh pr create --body-file b.md      how a pull request is opened here
 //	gh api rate_limit                  a read, and free
 //	gh api graphql -f query=…          a query is a read even though gh POSTs it
 //	git commit -m "gh issue comment"   the words, not the act
@@ -151,6 +150,8 @@ var rules = []rule{
 	// each act below was refused with MissingTool first (fleettools#211-#214).
 	{"pr edit", "edit a pull request",
 		"ghpr <owner/repo> <number> edit [--title T] [--body-file F]"},
+	{"pr create", "open a pull request",
+		"ghpr <owner/repo> create --head <branch> --title <title> --body-file <file> [--base-branch B] [--draft] [--dry-run] (go-fleettools/fleettools ghpr create; it also runs the privacy, bit-parity and issue-disposition checks, so no prbody chain is needed)"},
 	{"pr close", "close a pull request", "ghpr <owner/repo> <number> close"},
 	{"pr reopen", "reopen a pull request", "ghpr <owner/repo> <number> reopen"},
 	{"pr ready", "mark a pull request ready for review", "ghpr <owner/repo> <number> ready"},
@@ -242,15 +243,15 @@ const MissingTool = "no fleet program does this act yet. Do not type it by " +
 
 // readVerbs is every `gh <noun> <verb>` this rule lets through, because it
 // only READS GitHub (or reads it into a local file). Anything else is a write.
-// `pr create` is the one write here, and it is here on purpose: it is how a
-// pull request is opened in this fleet.
+// `pr create` WAS the one write here, on purpose; it is now a row of the rules
+// table (`ghpr <owner/repo> create`).
 //
 // `repo set-default` and `auth setup-git` write the LOCAL git config, not
 // GitHub, so they are here too: `auth setup-git` has 164 runs in the record,
 // and a refusal asking for a tool would be wrong about it.
 var readVerbs = map[string][]string{
 	"issue":       {"list", "view", "status"},
-	"pr":          {"list", "view", "status", "checks", "diff", "checkout", "create"},
+	"pr":          {"list", "view", "status", "checks", "diff", "checkout"},
 	"run":         {"list", "view", "watch", "download"},
 	"workflow":    {"list", "view"},
 	"repo":        {"list", "view", "clone", "set-default"},

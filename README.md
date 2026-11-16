@@ -1766,8 +1766,7 @@ What it does **not** refuse is the half that decides whether the rule survives:
 every `gh` read — `issue view`, `pr checks --watch`, `run watch`, `run list`,
 `repo clone`, `release download`, `search …`, `api rate_limit`, `api
 …/check-runs`, a GraphQL **query** (gh POSTs it, and it is still a read), `api
--X GET … -f q=…` — plus `gh pr create --body-file`, which is how a pull request
-is opened here, and the two commands that only write the **local** git config,
+-X GET … -f q=…` — plus the two commands that only write the **local** git config,
 `auth setup-git` and `repo set-default`. A repository flag before the noun (`gh
 -R o/r pr checks 1`) is read through. A read it does not know is a false
 refusal, and a row to add to `readVerbs`.

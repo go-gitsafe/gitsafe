@@ -46,6 +46,8 @@ func TestRefuses(t *testing.T) {
 		{"pr ready", "gh pr ready 1 -R go-wasmcontainers/relay", "ghpr"},
 		{"pr update-branch", "gh pr update-branch 815", "ghpr"},
 		{"pr review", "gh pr review 105 --approve --body-file b.md", "ghpr"},
+		{"pr create", "gh pr create --title t --body-file b.md", "ghpr <owner/repo> create"},
+		{"pr create, global repo flag", "gh -R go-zpkg/zbk pr create --title t --body-file b.md", "ghpr <owner/repo> create"},
 		{"workflow run", "gh workflow run build.yml -f recipes=x", "ghrun <owner/repo> dispatch"},
 		{"run rerun", "gh run rerun 41853676310 -R go-widgets/window --failed", "ghrun <owner/repo> rerun"},
 		{"run cancel", "gh run cancel 41239533630", "ghrun <owner/repo> cancel"},
@@ -171,9 +173,8 @@ func TestAllows(t *testing.T) {
 		// A GET of a comment collection is a read: no method, no field.
 		"gh api repos/go-zpkg/zbk/issues/282/comments",
 
-		// How a pull request is opened here — and the form literaltick's own
-		// advice recommends.
-		"gh pr create --title t --body-file b.md",
+		// `gh pr create` is no longer here: it is a refusal that names
+		// `ghpr <owner/repo> create` (TestRefuses).
 
 		// Reads that the old table never had to list, and that the read list
 		// now must: each one is a false refusal if it is missing.

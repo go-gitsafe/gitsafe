@@ -207,8 +207,12 @@ var corpus = []struct {
 	// issue reference, each fixed by hand at the last step (gitsafe#113). It is
 	// allowed only behind prbody AND paritycheck text on the SAME file, joined
 	// by `&&`.
-	{"opening a pull request behind both checks",
-		"prbody /tmp/b.md --repo go-zpkg/zbk && paritycheck text /tmp/b.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "allow"},
+	// ⛔ SAID "allow" UNTIL ghbyhand named `ghpr <owner/repo> create` for it:
+	// the chained form is now refused too, because the program runs both checks.
+	{"opening a pull request behind both checks, by hand",
+		"prbody /tmp/b.md --repo go-zpkg/zbk && paritycheck text /tmp/b.md && gh pr create --repo go-zpkg/zbk --title t --body-file /tmp/b.md", "refuse"},
+	{"opening a pull request with ghpr create",
+		"ghpr go-zpkg/zbk create --head b --title t --body-file /tmp/b.md", "allow"},
 	{"opening a pull request with neither check",
 		"gh pr create --title t --body-file /tmp/b.md", "refuse"},
 	{"opening a pull request with only prbody",
