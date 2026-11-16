@@ -28,6 +28,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/discard"
+	"github.com/go-gitsafe/gitsafe/eqword"
 	"github.com/go-gitsafe/gitsafe/ghbyhand"
 	"github.com/go-gitsafe/gitsafe/literaltick"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
@@ -86,7 +87,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, ghbyhand, testrun, chainedgate, shellwork, stalebase, volatile)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, ghbyhand, testrun, chainedgate, shellwork, stalebase, volatile, and the counting-only eqword and eqword-intended)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -173,6 +174,25 @@ func rules(cwd, home, tmpdir string) map[string]func(string) refusal {
 		"literaltick": func(c string) refusal {
 			f := literaltick.Check(c)
 			return kind(f, f.Found(), "a backtick the shell would evaluate")
+		},
+		// ⛔ COUNTING ONLY (go-gitsafe/gitsafe#129): guard-bash does not run
+		// eqword. These two rows say how often a word zsh equals-expands would
+		// take the rest of a line with it ("eqword"), and how often somebody
+		// wrote =cmd on purpose and it worked ("eqword-intended"), so that the
+		// refuse / warn / nothing decision is made from the record.
+		"eqword": func(c string) refusal {
+			if hs := eqword.Check(c); len(hs) > 0 {
+				return kind(hs[0], true, hs[0].Kind())
+			}
+			return refusal{}
+		},
+		"eqword-intended": func(c string) refusal {
+			for _, h := range eqword.Scan(c) {
+				if h.Resolves {
+					return kind(h, true, h.Kind())
+				}
+			}
+			return refusal{}
 		},
 		"shellwork": func(c string) refusal {
 			f := shellwork.Check(c)

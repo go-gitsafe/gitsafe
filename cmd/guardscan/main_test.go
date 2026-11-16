@@ -131,6 +131,39 @@ func TestItReportsWhatTheRulesWouldRefuse(t *testing.T) {
 	}
 }
 
+// ⛔ eqword IS A COUNTING RULE (#129): it is in guardscan and not in guard-bash.
+// This drives both rows over a corpus with one separator that loses the line,
+// one `=cmd` somebody meant, and the same separator with nothing after it.
+func TestEqwordRowsCountAndDoNotRefuse(t *testing.T) {
+	dir := t.TempDir()
+	lines := strings.Join([]string{
+		`{"tool_name":"Bash","tool_input":{"command":"echo one; echo ====; echo two"}}`,
+		`{"tool_name":"Bash","tool_input":{"command":"echo ====\n"}}`,
+		`{"tool_name":"Bash","tool_input":{"command":"=sh -c true; echo after"}}`,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, "s.jsonl"), []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"--transcripts", dir, "--rule", "eqword"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d\n%s", code, errb.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "echo one; echo ====; echo two") || !strings.Contains(got, "1 run(s)") {
+		t.Errorf("the separator that loses a command was not counted once:\n%s", got)
+	}
+	if strings.Contains(got, "=sh") {
+		t.Errorf("an =cmd that resolves was counted as a loss:\n%s", got)
+	}
+	out.Reset()
+	if code := run([]string{"--transcripts", dir, "--rule", "eqword-intended"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d\n%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "=sh -c true") || strings.Contains(out.String(), "echo ====") {
+		t.Errorf("eqword-intended should hold only the =cmd that resolves:\n%s", out.String())
+	}
+}
+
 // ⛔ THE SAME GATE hookcheck's CORPUS NEEDED: a rule nobody adds a line for is
 // a rule this scan stays silent about, and silence reads like "nothing to
 // report". It enumerates the subject — the import block of
@@ -167,7 +200,14 @@ func TestEveryRuleGuardBashRunsIsScanned(t *testing.T) {
 			t.Errorf("guard-bash runs %q and guardscan does not scan it", name)
 		}
 	}
+	// Rows that COUNT and that guard-bash deliberately does not run (#129).
+	// Naming them here is the declaration: a row that is neither imported nor
+	// listed is still a failure.
+	countingOnly := map[string]bool{"eqword": true, "eqword-intended": true}
 	for name := range scanned {
+		if countingOnly[name] {
+			continue
+		}
 		found := false
 		for _, in := range imported {
 			if in == name {
