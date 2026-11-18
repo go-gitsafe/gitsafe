@@ -41,6 +41,8 @@ func TestRefuses(t *testing.T) {
 		{"api PATCH of a pull request", "gh api -X PATCH repos/go-zpkg/zbk/pulls/443 -F body=@b.md", "ghpr <owner/repo> <number> edit"},
 		{"api PUT of a pages site", "gh api -X PUT repos/go-slides-usercontent/go-slides-usercontent.github.io/pages -f build_type=workflow", "ghrepo <owner/repo> pages workflow"},
 		{"api POST creating a pages site", "gh api repos/o/r/pages -f build_type=workflow", "ghrepo <owner/repo> pages workflow"},
+		{"api PUT enabling private vulnerability reporting", "gh api -X PUT repos/go-turn/turn/private-vulnerability-reporting", "ghrepo <owner/repo> private-reporting"},
+		{"api DELETE disabling private vulnerability reporting", "gh api --method DELETE repos/o/r/private-vulnerability-reporting", "private-reporting enable|disable|status"},
 		{"pr close", "gh pr close 77 -R go-fft/fft", "ghpr"},
 		{"pr reopen", "gh pr reopen 17 --repo usbarmory/tamago-go", "ghpr"},
 		{"pr ready", "gh pr ready 1 -R go-wasmcontainers/relay", "ghpr"},
@@ -99,6 +101,18 @@ func TestRefuses(t *testing.T) {
 					f.Why(), f.String(), f.Act)
 			}
 		})
+	}
+}
+
+// Reading the switch is a read: only its PUT and DELETE are refused.
+func TestAllowsReadingPrivateVulnerabilityReporting(t *testing.T) {
+	for _, cmd := range []string{
+		"gh api repos/go-turn/turn/private-vulnerability-reporting",
+		"gh api -X GET repos/o/r/private-vulnerability-reporting",
+	} {
+		if f := Check(cmd); f.Found() {
+			t.Errorf("Check(%q) refused a read: %s", cmd, f)
+		}
 	}
 }
 

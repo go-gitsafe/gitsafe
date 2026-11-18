@@ -456,8 +456,22 @@ func checkAPI(st string, words []string) Finding {
 			Act:     "change a repository's GitHub Pages site",
 			Instead: "ghrepo <owner/repo> pages workflow",
 		}
+	case isPVRPath(path):
+		// PUT enables, DELETE disables; a GET never reaches here (fleettools#350).
+		return Finding{
+			Match:   short(st),
+			Act:     "enable or disable a repository's private vulnerability reporting",
+			Instead: "ghrepo <owner/repo> private-reporting enable|disable|status",
+		}
 	}
 	return missing(st, "write to the GitHub API")
+}
+
+// isPVRPath reports whether the path is a repository's private vulnerability
+// reporting switch.
+func isPVRPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 4 && parts[0] == "repos" && parts[3] == "private-vulnerability-reporting"
 }
 
 // isPagesPath reports whether the path is a repository's Pages site, the
