@@ -863,7 +863,12 @@ func caseArmClose(s string, cls []byte, i int) bool {
 			}
 			continue
 		}
-		if p > 0 && cls[p-1] == ClassCode && (s[p-1] == ';' || s[p-1] == '&' && p > 1 && s[p-2] == ';') {
+		// ⛔ #151: a pattern follows a DOUBLE ;; (or ;& / ;;&), never a single ;.
+		// `$(true ;x)(|E`+newline+`#`+T was taken for a case arm because it
+		// followed one `;`, so the ( after the ) read as a command start; zsh
+		// reads it as a glob group and runs the backtick. Unsure refuses.
+		if p > 1 && cls[p-1] == ClassCode && cls[p-2] == ClassCode &&
+			(s[p-1] == ';' && s[p-2] == ';' || s[p-1] == '&' && s[p-2] == ';') {
 			return true
 		}
 		kw, _ := wordBefore(s, cls, p)
