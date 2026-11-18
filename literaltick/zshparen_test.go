@@ -24,6 +24,7 @@ func TestParenShapesThatRunNothing(t *testing.T) {
 		{"array with a newline comment", "export a=(1\n#" + T + "\n)\n" + q, false},
 		{"case arm subshell", "case x in a) (cd y);; esac; " + q, false},
 		{"case arm subshell, comment inside", "case x in a) (cd y\n#" + T + ");; esac; " + q, false},
+		{"#151 a real second case arm", "case x in a) :;; b) (cd y\n#" + T + ");; esac", false},
 		{"after a quoted heredoc terminator", "cat <<'E'\nfoo\nE\n(cd /); " + q, false},
 		{"after a heredoc terminator, comment inside", "cat <<'E'\nfoo\nE\n(cd /\n#" + T + ")", false},
 		// The nearest shapes that DO run, or that zsh reads as a glob.
@@ -35,6 +36,8 @@ func TestParenShapesThatRunNothing(t *testing.T) {
 		{"echo glob in a case arm", "case x in a) echo (#" + T + ");; esac", true},
 		{"after a heredoc's terminator, ( then #", "cat <<'E'\nfoo\nE\n(#" + T + ")", true},
 		{"a [[ =~ group with a live backtick", "[[ a =~ (b|#" + T + ") ]]", true},
+		{"#151 a single ; is no case arm (zsh glob group)", " $(true ;}x)(|E\n#" + T, true},
+		{"#151 the same with a ;; arm is not refused", "case x in a) :;; b) (|E\n#" + T + ");; esac", false},
 		{"a zsh for list", "for x in (a|#" + T + "); do :; done", true},
 	} {
 		if got := check(tc.cmd).Found(); got != tc.refuse {
