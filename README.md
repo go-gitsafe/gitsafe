@@ -1138,6 +1138,30 @@ and plain switching — `stalebase_test.go` asserts seventeen such commands are
 **not** refused, because a guard that refuses ordinary work is one people learn
 to route around, and the routing becomes habit.
 
+## An amend of a commit that is already on main
+
+`guard-bash` refuses a command containing `git commit … --amend` when the clone's
+`HEAD` is reachable from `origin/<default branch>`
+(`git merge-base --is-ancestor HEAD origin/<default>`), naming the commit, saying
+it is already on the default branch, and suggesting a plain `git commit` and
+`git log -1` (#149).
+
+It happened twice (2026-11-16, 2026-11-18). A chained `git add && git commit &&
+gitpush` was refused by another hook **before any part of the chain ran**; the
+retry `… && git commit --amend --no-edit` then amended the merge commit of the
+previous pull request. Both times it was caught only by reading `git show --stat`.
+
+Unlike the textual rules above, this one asks git, resolving the clone the way
+`volatile` does (`git -C`, an earlier `cd`, else the cwd). Every doubt allows:
+no repository, no origin, no `origin/<default>`, an unborn `HEAD`, a git that
+fails or takes over five seconds. It also allows an amend of an unpushed topic
+commit, of a pushed but unmerged one (the author's own branch), a plain
+`git commit`, an `--amend` inside a quoted message, and an amend that follows a
+command that moves `HEAD` in the same chain (`git commit -m x && git commit
+--amend`). `GITSAFE_ALLOW_AMEND_MERGED=1` as a prefix on the command says it is
+meant. `amendmerged_test.go` builds real clones and asserts both sides of each
+boundary; `FuzzCheck` runs in CI's fuzz smoke.
+
 ## A producer killed by its consumer
 
 `guard-bash` refuses a pipeline that would kill the command whose work matters.

@@ -75,6 +75,8 @@ jobs:
           - { target: FuzzLocateMatchesWholeText, pkg: ./redact }
           # A pull request body is untrusted text, parsed before a merge.
           - { target: FuzzParse, pkg: ./issuegate }
+          # The amend rule's word splitter reads arbitrary command text (#149).
+          - { target: FuzzCheck, pkg: ./amendmerged }
           # The differential oracle: bash, dash and zsh against the rule.
           - { target: FuzzOracle, pkg: ./literaltick }
           # The same oracle with the frame fixed and only a heredoc BODY fuzzed:

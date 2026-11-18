@@ -33,6 +33,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/go-gitsafe/gitsafe/amendmerged"
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/discard"
@@ -155,6 +156,18 @@ func run(stdin io.Reader, stdout io.Writer) int {
 				"Refused: %s.\n\nIt matched %s\n\n%s",
 				f.Why, f.Match, stalebase.Advice(f.Ref)))
 		}
+	}
+	// ⛔ `git commit --amend` on a HEAD that is already on the default branch.
+	// On 2026-11-16 and 2026-11-18 a chained commit was refused by another hook
+	// before any part ran; the retry added --amend and rewrote the previous pull
+	// request's merge commit, both times caught only by reading `git show`. The
+	// lesson was written down between the two. This rule asks git, which the
+	// textual rules cannot; every doubt allows. The escape is read from the
+	// command's own text, like [stalebase]'s. See [amendmerged] (#149).
+	if f := amendmerged.Check(p.ToolInput.Command, p.Cwd, os.Getenv("HOME")); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s",
+			f.Why(), amendmerged.Advice))
 	}
 	// ⛔ The SIBLING damage of the one above, and separable from it: a consumer
 	// that stops reading kills the producer, so the work is ABANDONED rather

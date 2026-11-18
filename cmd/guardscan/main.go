@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/go-gitsafe/gitsafe/amendmerged"
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/cliflags"
@@ -87,7 +88,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, ghbyhand, testrun, chainedgate, shellwork, stalebase, volatile, and the counting-only eqword and eqword-intended)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, ghbyhand, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -213,6 +214,13 @@ func rules(cwd, home, tmpdir string) map[string]func(string) refusal {
 		"stalebase": func(c string) refusal {
 			f := stalebase.Check(c)
 			return kind(f, f.Found(), "a branch started from an unrefreshed remote ref")
+		},
+		// This rule asks git, so the count is against the scan's own directory,
+		// not the clone each old command ran in: read it as "commands that carry
+		// an amend" with a refusal only where that directory's HEAD is published.
+		"amendmerged": func(c string) refusal {
+			f := amendmerged.Check(c, cwd, home)
+			return kind(f, f.Found(), "an amend of a commit already on the default branch")
 		},
 		"volatile": func(c string) refusal {
 			f := volatile.Check(c, cwd, home, tmpdir)
