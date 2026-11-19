@@ -626,7 +626,16 @@ func scanClose(body string, open *byte) bool {
 			// | or &): any ) after an odd ' cost 745 refusals against 581, with
 			// the backtick as well 746.
 			for _, q := range []string{"'", "`"} {
-				if countUnescaped(body[i:end], q[0])%2 == 1 {
+				// ⛔ #146: for ' the pairing is SEQUENTIAL, not a count. In `#'\''` the
+				// first ' opens a span in which the \ is literal, the second CLOSES it
+				// and the third opens another that nothing closes on the line: odd,
+				// where counting the quotes no backslash precedes saw two. bash 3.2.57
+				// then ran the backtick of `#'\''` newline `')"|T` (FuzzBody).
+				odd := countUnescaped(body[i:end], q[0])%2 == 1
+				if q == "'" {
+					odd = singleLeftOpen(body[i:end])
+				}
+				if odd {
 					if k := strings.Index(body[end:], q); k >= 0 && closeThenQuote(body[end+k+1:]) {
 						return true
 					}
@@ -697,6 +706,36 @@ func countUnescaped(s string, q byte) int {
 		}
 	}
 	return n
+}
+
+// singleLeftOpen reports whether a ' span is still open at the end of s when
+// the quotes are paired the way the shell does: outside a span a backslash
+// escapes the next byte, and inside '…' it is literal (#146).
+func singleLeftOpen(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '\'':
+			// $'…' honours a backslash, '…' does not (see the span skip in scanClose).
+			ansiC := i > 0 && s[i-1] == '$' && !oddBackslashes(s, i-1)
+			j := i + 1
+			for ; j < len(s); j++ {
+				if s[j] == '\\' && ansiC {
+					j++
+					continue
+				}
+				if s[j] == '\'' {
+					break
+				}
+			}
+			if j >= len(s) {
+				return true
+			}
+			i = j
+		}
+	}
+	return false
 }
 
 // closeThenQuote reports whether rest holds a ) and, after it, a ": the
