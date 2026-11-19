@@ -82,6 +82,11 @@ func TestACommentWithAQuoteAndAParen(t *testing.T) {
 		{"an odd backtick then a second one and )\" then a newline", "#`\n`)\"\n" + T, true},
 		{"an escaped \" then a \" and a pipe (FuzzBody 8c166a2c1744b998)", "#)\\\"\"|" + T, true},
 		{"an escaped ' then a ' makes the count odd (FuzzBody 1507c57c2efc7d6f)", "#\\''\n')\"|" + T, true},
+		// #146 (FuzzBody e321854c): '\'' is a span that CLOSES at the second ' (the
+		// backslash is literal inside '…') and a third ' that opens another.
+		{"'\\'' leaves a span open (#146)", "#'\\''\n')\"|" + T, true},
+		{"'\\'' mid-line (#146)", "# a '\\'' b\n')\"|" + T, true},
+		{"'\\''' closes every span, nothing runs (#146)", "#'\\'''\n')\"|" + T, false},
 		{"an even run of backslashes does not escape the ' (FuzzBody d8e15c80da0cee1d)", "#\\\\'\n')\"|" + T, true},
 		{"an odd backtick then a second one and )\"|", "#`\n`)\"|" + T, true},
 		{"an odd ' and a second ' but no \" after the )", "#'\n')" + T, false},
@@ -120,6 +125,7 @@ func TestV2AndDqBacktickAreRealCuts(t *testing.T) {
 		t.Skip("no shell to ask")
 	}
 	for name, body := range map[string]string{
+		"'\\'' after a comment (#146)":  "#'\\''\n')\"|" + T,
 		"an odd ' after a comment":      "#'\n')\"|" + T,
 		"V2 lone \" after a comment":    "#\"\n\")\"|" + T,
 		"V2 after a word line":          "#\"\nx\")\"|" + T,
@@ -136,6 +142,25 @@ func TestV2AndDqBacktickAreRealCuts(t *testing.T) {
 			ran = ran || runs(t, sh, cmd)
 		}
 		t.Logf("%s: an installed shell ran the backtick = %v", name, ran)
+	}
+}
+
+// #146, the allowed side of the boundary: with every ' span closed on the comment
+// line, no installed shell runs the backtick, and the rule may allow it. The
+// refused twin differs by one '.
+func TestAClosedQuoteRunOnACommentLineRunsNothing(t *testing.T) {
+	shells := oracleShells(t)
+	if len(shells) == 0 {
+		t.Skip("no shell to ask")
+	}
+	for _, body := range []string{"#'\\'''\n')\"|" + T, "#'\\''\n')\"|" + T} {
+		cmd := "echo --body \"$(cat <<'EOF'\n" + body + "\nEOF\n)\"\n"
+		refused := check(cmd).Found()
+		for _, sh := range shells {
+			if runs(t, sh, cmd) && !refused {
+				t.Errorf("%s ran the backtick of %q and the rule allowed it", sh, cmd)
+			}
+		}
 	}
 }
 
