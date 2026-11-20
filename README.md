@@ -1609,6 +1609,13 @@ the frame and fuzzes **only** the body, seeded with the rows the review and the
 shells produced. It found the fourth defect — `\$'\')` — in 71 seconds, and then
 ran 638 000 executions clean.
 
+⛔ **Pruned in #156.** That whole reading modelled bash 3.2.57's scan for the `)`
+of `$( )`, a shell that never runs these commands. `shellcmd` no longer scans a
+quoted heredoc body for quotes, comments and parentheses (`scanClose` and its
+helpers are deleted), `FuzzBody` and the tests that asserted bash 3.2's answers
+are gone, and the findings they recorded (#133, #136, #146, #153, #154) are
+refused by name under the `plain` grammars instead.
+
 ⛔ **What that scan models, named so it can be diffed:** bash's character search
 for the `)` that closes a `$( … )`, which runs *before* the command inside is
 parsed. Deriving it from `Classify` was tried and is wrong — `Classify` models
@@ -1659,7 +1666,7 @@ starts `zsh -c 'source <snapshot> … && \builtin setopt NO_EXTENDED_GLOB
 NO_BARE_GLOB_QUAL NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST … && eval <command>'`, never
 bash. The oracle runs zsh exactly so (`productionScript`), the setopt line is
 pinned in `literaltick/testdata/production-wrapper.txt` and asserted by
-`TestTheProductionWrapperIsPinned`, and `FuzzOracle` and `FuzzBody` are judged by
+`TestTheProductionWrapperIsPinned`, and `FuzzOracle` is judged by
 that zsh alone: a backtick only bash 3.2 runs (#153, #154 and 35 other historical
 inputs) is not a defect of the guard. The table tests still ask bash and dash.
 

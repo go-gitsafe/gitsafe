@@ -83,10 +83,9 @@ jobs:
           - { target: FuzzCheck, pkg: ./amendmerged }
           # The differential oracle: bash, dash and zsh against the rule.
           - { target: FuzzOracle, pkg: ./literaltick }
-          # The same oracle with the frame fixed and only a heredoc BODY fuzzed:
-          # it finds what FuzzOracle's budget never reaches (#133). zsh is
-          # installed by the step below, so no shell goes unasked.
-          - { target: FuzzBody, pkg: ./literaltick }
+          # (FuzzBody, which fuzzed a heredoc body against bash 3.2's scan, was
+          # removed with that scan in #156.) zsh is installed by the step below,
+          # so no shell goes unasked.
     env:
       GITSAFE_ORACLE_SHELLS: bash,dash,zsh
     steps:

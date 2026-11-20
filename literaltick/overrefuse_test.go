@@ -87,25 +87,11 @@ func TestTheRuleAllowsWhatNoRealShellRuns(t *testing.T) {
 			cmd:   "echo \"$(cat <<'EOF'\n(a) and (b) and " + T + "\nEOF\n)\"\n",
 			allow: true,
 		},
-		// ⛔ THE OTHER SIDE, AND THE FUZZ CORPUS FOUND IT FIRST. A ) in the body
-		// with no ( of its own really can end the substitution: the committed
-		// seed below runs under the bash on this machine. These three are why
-		// the doubt in shellcmd.Classify is kept for an unbalanced ).
-		{
-			name:  "an unbalanced ) in the body",
-			cmd:   "echo \"$(cat <<'EOF'\nx) " + T + "\nEOF\n)\"\n",
-			allow: false,
-		},
-		{
-			name:  "a case pattern in the body",
-			cmd:   "echo \"$(cat <<'EOF'\ncase x in x) " + T + "\nEOF\n)\"\n",
-			allow: false,
-		},
-		{
-			name:  "the fuzz seed itself",
-			cmd:   "\"$(<<'E'\ncase x in x) " + T + "E\nE\ncase x in x) \"",
-			allow: false,
-		},
+		// ⛔ PRUNED (#156): three rows here declared a ) with no ( of its own in a
+		// quoted body inside $( ) must be refused, because bash 3.2.57 ends the
+		// substitution there. That was a bash-only reading; commands run under zsh,
+		// and the bash-3.2 inputs are refused by name under the plain grammars
+		// (TestCheckForRefusesWhateverTheShellOfItsGrammarRuns).
 		// ⛔ THE CONTROL. A bare backtick every shell evaluates, so a run in
 		// which NOTHING is observed is reported as a blind oracle rather than a
 		// clean one.
