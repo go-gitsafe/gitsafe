@@ -1654,6 +1654,15 @@ must not refuse — and it asks **zsh** as well, the shell that actually runs th
 commands on this machine (the forward oracle still asks only bash and dash:
 [#121](https://github.com/go-gitsafe/gitsafe/issues/121)).
 
+⛔ **And the zsh it asks is the one that runs the commands** (#156). The Bash tool
+starts `zsh -c 'source <snapshot> … && \builtin setopt NO_EXTENDED_GLOB
+NO_BARE_GLOB_QUAL NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST … && eval <command>'`, never
+bash. The oracle runs zsh exactly so (`productionScript`), the setopt line is
+pinned in `literaltick/testdata/production-wrapper.txt` and asserted by
+`TestTheProductionWrapperIsPinned`, and `FuzzOracle` and `FuzzBody` are judged by
+that zsh alone: a backtick only bash 3.2 runs (#153, #154 and 35 other historical
+inputs) is not a defect of the guard. The table tests still ask bash and dash.
+
 ## Working trees in directories that are emptied
 
 `guard-bash` refuses a command that would make a git working tree, or commit to
