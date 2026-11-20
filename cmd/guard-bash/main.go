@@ -278,7 +278,12 @@ func run(stdin io.Reader, stdout io.Writer) int {
 	// anyway — against an installed binary that did not have the rule at all,
 	// which is a row passing for the wrong reason. The escape is read from the
 	// command's own text, the way [volatile] and [bypass] read theirs.
-	if f := literaltick.Check(p.ToolInput.Command); f.Found() {
+	//
+	// ⛔ THE GRAMMAR FOLLOWS $SHELL since #156: commands here run under zsh, never
+	// bash, and the older reading modelled the parse of bash 3.2.57. S+ for zsh,
+	// strict S for bash, a refusal for anything else; a command the grammar cannot
+	// read is refused with the construct that put it outside.
+	if f := literaltick.CheckFor(os.Getenv("SHELL"), p.ToolInput.Command); f.Found() {
 		return deny(stdout, fmt.Sprintf(
 			"Refused: %s.\n\n%s\n\n%s",
 			f.Why(), f.String(), literaltick.Advice))

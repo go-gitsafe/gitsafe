@@ -75,6 +75,10 @@ jobs:
           - { target: FuzzLocateMatchesWholeText, pkg: ./redact }
           # A pull request body is untrusted text, parsed before a merge.
           - { target: FuzzParse, pkg: ./issuegate }
+          # S+ and strict S against the production zsh (and bash for S): what the
+          # grammar allows with a backtick, the shell must not run (#156).
+          - { target: FuzzSplus, pkg: ./plain }
+          - { target: FuzzS, pkg: ./plain }
           # The amend rule's word splitter reads arbitrary command text (#149).
           - { target: FuzzCheck, pkg: ./amendmerged }
           # The differential oracle: bash, dash and zsh against the rule.

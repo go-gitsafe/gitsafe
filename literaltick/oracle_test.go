@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-gitsafe/gitsafe/plain"
 )
 
 // The tables in literaltick_test.go call check, which records what it was asked
@@ -160,26 +162,6 @@ func lookShells(required string, look func(string) (string, error)) (shells, abs
 	return shells, absent, missing
 }
 
-// productionSetopt is the option line the Bash tool runs before every command
-// here, captured from a live `ps -ww -o command= -p $$` on 2026-11-19 (zsh 5.9):
-//
-//	/bin/zsh -c source <snapshot> 2>/dev/null || true && \builtin setopt
-//	NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST
-//	2>/dev/null || true && … && eval '<command>' && pwd -P >| <file>
-//
-// ⛔ PINNED, NOT REMEMBERED (#156): testdata/production-wrapper.txt holds the same
-// line and TestTheProductionWrapperIsPinned compares the two, so a change to either
-// fails CI by name. The wrapper is not visible from CI: when the tool's wrapper
-// changes, re-capture it with ps and update both.
-const productionSetopt = `\builtin setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST 2>/dev/null || true`
-
-// productionScript is the zsh -c argument that runs cmd the way the tool does:
-// an empty snapshot, the setopt line, then eval of the single-quoted command.
-func productionScript(cmd string) string {
-	q := "'" + strings.ReplaceAll(cmd, "'", `'\''`) + "'"
-	return "source /dev/null 2>/dev/null || true && " + productionSetopt + " && eval " + q
-}
-
 func isZsh(shell string) bool { return strings.HasSuffix(shell, "zsh") }
 
 var span = regexp.MustCompile("`[^`'\"\\\\$]*`")
@@ -208,7 +190,7 @@ func runs(t *testing.T, shell, cmd string) bool {
 		// a comment at the start of a word, as bash does. It reads it differently
 		// only inside what it takes for a glob, after a ( or a |, and that is
 		// where the oracle found the rule's misses.
-		args = []string{"-c", productionScript(cmd)}
+		args = []string{"-c", plain.ProductionScript(cmd)}
 	}
 	c := exec.CommandContext(ctx, shell, args...)
 	c.Dir = dir
