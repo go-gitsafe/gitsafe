@@ -178,6 +178,8 @@ var rules = []rule{
 		"ghrepo <owner/repo> archive --confirm <owner/repo>"},
 	{"repo delete", "delete a repository",
 		"ghrepo <owner/repo> delete --confirm <owner/repo>"},
+	{"repo transfer", "transfer a repository to another owner",
+		"ghrepo <owner/repo> transfer <new-owner> [--name N] --confirm <owner/repo>"},
 	{"repo sync", "sync a fork with its upstream", "ghrepo <owner/repo> sync [--branch B]"},
 	{"secret set", "set an Actions secret",
 		"ghrepo <owner/repo> secret-set <NAME> --value-file <0600 file>"},
@@ -456,6 +458,13 @@ func checkAPI(st string, words []string) Finding {
 			Act:     "change a repository's GitHub Pages site",
 			Instead: "ghrepo <owner/repo> pages workflow",
 		}
+	case isTransferPath(path):
+		// POST /repos/{o}/{r}/transfer moves a repository to another owner.
+		return Finding{
+			Match:   short(st),
+			Act:     "transfer a repository to another owner",
+			Instead: "ghrepo <owner/repo> transfer <new-owner> [--name N] --confirm <owner/repo>",
+		}
 	case isPVRPath(path):
 		// PUT enables, DELETE disables; a GET never reaches here (fleettools#350).
 		return Finding{
@@ -479,6 +488,12 @@ func checkAPI(st string, words []string) Finding {
 func isAdvisoryPath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return (len(parts) == 4 || len(parts) == 5) && parts[0] == "repos" && parts[3] == "security-advisories"
+}
+
+// isTransferPath reports whether the path is a repository's transfer endpoint.
+func isTransferPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 4 && parts[0] == "repos" && parts[3] == "transfer"
 }
 
 // isPVRPath reports whether the path is a repository's private vulnerability

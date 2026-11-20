@@ -62,6 +62,9 @@ func TestRefuses(t *testing.T) {
 		{"repo rename", "gh repo rename jpeg2000 --repo go-images/go-jpeg2000 --yes", "--confirm"},
 		{"repo archive", "gh repo archive tannevaled/notify --yes", "--confirm"},
 		{"repo delete", "gh repo delete go-ansible/connection --yes", "--confirm"},
+		{"repo transfer", "gh repo transfer go-zpkg/elfpatch go-binfmt", "ghrepo <owner/repo> transfer"},
+		{"api POST transferring a repository", "gh api -X POST repos/go-zpkg/elfpatch/transfer -f new_owner=go-binfmt", "ghrepo <owner/repo> transfer <new-owner>"},
+		{"api POST transferring, field only", "gh api repos/o/r/transfer -f new_owner=x", "--confirm <owner/repo>"},
 		{"repo sync", "gh repo sync tannevaled/purego --source ebitengine/purego", "ghrepo"},
 		{"secret set", "gh secret set RENOVATE_TOKEN --repo go-docutils/.github", "secret-set"},
 
