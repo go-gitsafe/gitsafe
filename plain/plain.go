@@ -23,6 +23,8 @@
 // heredocs and was sound under both; any other shell gets a refusal.
 package plain
 
+import "strings"
+
 // Verdict of Check.
 type Verdict int
 
@@ -113,7 +115,22 @@ func isDelim(c byte) bool {
 	return c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
-func check(cmd string, heredocs bool) Result {
+// skipped is the verdict unc answers with for the one refusal a test switched
+// off (see checkSkipping): the scan then goes on as if the construct were
+// ordinary code, which is what a deleted refusal would do.
+const skipped Verdict = -1
+
+// checkSkipping is check with the refusal whose reason starts with skip
+// switched off. It exists so a test can show, for each construct, a command whose
+// backtick runs and that the grammar would ALLOW without that refusal: the
+// refusal is then the only thing standing between the command and the shell.
+func checkSkipping(cmd string, heredocs bool, skip string) Result {
+	return checkWith(cmd, heredocs, skip)
+}
+
+func check(cmd string, heredocs bool) Result { return checkWith(cmd, heredocs, "") }
+
+func checkWith(cmd string, heredocs bool, skip string) Result {
 	hasTick := false
 	for i := 0; i < len(cmd); i++ {
 		if cmd[i] == '`' {
@@ -124,7 +141,12 @@ func check(cmd string, heredocs bool) Result {
 	if !hasTick {
 		return Result{V: NoTick}
 	}
-	unc := func(why string) Result { return Result{V: Uncertain, Reason: why} }
+	unc := func(why string) Result {
+		if skip != "" && strings.HasPrefix(why, skip) {
+			return Result{V: skipped}
+		}
+		return Result{V: Uncertain, Reason: why}
+	}
 	// stack: each entry is a context; a code entry above depth 0 is a $( ).
 	stack := []ctx{code}
 	evaluated := false
@@ -136,13 +158,17 @@ func check(cmd string, heredocs bool) Result {
 			switch c {
 			case '\n':
 				if len(pending) > 0 {
-					return unc("newline in quotes with a heredoc pending")
+					if r := unc("newline in quotes with a heredoc pending"); r.V != skipped {
+						return r
+					}
 				}
 			case '"':
 				stack = stack[:len(stack)-1]
 			case '\\':
 				if i+1 >= len(cmd) {
-					return unc("trailing backslash")
+					if r := unc("trailing backslash"); r.V != skipped {
+						return r
+					}
 				}
 				i++
 			case '`':
@@ -152,12 +178,16 @@ func check(cmd string, heredocs bool) Result {
 					switch cmd[i+1] {
 					case '(':
 						if i+2 < len(cmd) && cmd[i+2] == '(' {
-							return unc("$((")
+							if r := unc("$(("); r.V != skipped {
+								return r
+							}
 						}
 						stack = append(stack, code)
 						i++
 					case '{', '[', '\'', '"':
-						return unc("$" + string(cmd[i+1]) + " in double quotes")
+						if r := unc("$" + string(cmd[i+1]) + " in double quotes"); r.V != skipped {
+							return r
+						}
 					}
 				}
 			}
@@ -171,12 +201,16 @@ func check(cmd string, heredocs bool) Result {
 				j++
 			}
 			if j >= len(cmd) {
-				return unc("unclosed '")
+				if r := unc("unclosed '"); r.V != skipped {
+					return r
+				}
 			}
 			if len(pending) > 0 {
 				for k := i; k < j; k++ {
 					if cmd[k] == '\n' {
-						return unc("newline in quotes with a heredoc pending")
+						if r := unc("newline in quotes with a heredoc pending"); r.V != skipped {
+							return r
+						}
 					}
 				}
 			}
@@ -185,7 +219,9 @@ func check(cmd string, heredocs bool) Result {
 			stack = append(stack, double)
 		case '\\':
 			if i+1 >= len(cmd) {
-				return unc("trailing backslash")
+				if r := unc("trailing backslash"); r.V != skipped {
+					return r
+				}
 			}
 			i++
 		case '`':
@@ -196,18 +232,24 @@ func check(cmd string, heredocs bool) Result {
 				switch {
 				case n == '(':
 					if i+2 < len(cmd) && cmd[i+2] == '(' {
-						return unc("$((")
+						if r := unc("$(("); r.V != skipped {
+							return r
+						}
 					}
 					stack = append(stack, code)
 					i++
 				case n == '{' || n == '[' || n == '\'' || n == '"':
-					return unc("$" + string(n))
+					if r := unc("$" + string(n)); r.V != skipped {
+						return r
+					}
 				case n == '#' || n == '?' || n == '$' || n == '!' || n == '*' || n == '@' || n == '-':
 					i++
 				}
 			}
 		case '#':
-			return unc("unquoted #")
+			if r := unc("unquoted #"); r.V != skipped {
+				return r
+			}
 		case '\n':
 			// a newline in code context: pending heredoc bodies start here
 			if len(pending) == 0 {
@@ -237,7 +279,9 @@ func check(cmd string, heredocs bool) Result {
 					}
 				}
 				if !found {
-					return unc("heredoc body never ends")
+					if r := unc("heredoc body never ends"); r.V != skipped {
+						return r
+					}
 				}
 			}
 			pending = pending[:0]
@@ -258,27 +302,39 @@ func check(cmd string, heredocs bool) Result {
 				}
 				w, end, ok := heredocOpener(cmd, k)
 				if !ok {
-					return unc("<< unquoted or odd delimiter")
+					if r := unc("<< unquoted or odd delimiter"); r.V != skipped {
+						return r
+					}
 				}
 				pending = append(pending, hdoc{w, strip})
 				i = end
 				continue
 			}
 			if i+1 < len(cmd) && (cmd[i+1] == '<' || cmd[i+1] == '(') {
-				return unc("<< or <(")
+				if r := unc("<< or <("); r.V != skipped {
+					return r
+				}
 			}
 		case '>':
 			if i+1 < len(cmd) && cmd[i+1] == '(' {
-				return unc(">(")
+				if r := unc(">("); r.V != skipped {
+					return r
+				}
 			}
 		case '(':
-			return unc("bare (")
+			if r := unc("bare ("); r.V != skipped {
+				return r
+			}
 		case ')':
 			if len(stack) == 1 {
-				return unc("bare )")
+				if r := unc("bare )"); r.V != skipped {
+					return r
+				}
 			}
 			if len(pending) > 0 {
-				return unc(") with a heredoc pending")
+				if r := unc(") with a heredoc pending"); r.V != skipped {
+					return r
+				}
 			}
 			stack = stack[:len(stack)-1]
 		default:
@@ -288,16 +344,22 @@ func check(cmd string, heredocs bool) Result {
 					j++
 				}
 				if w := cmd[i:j]; w == "case" || w == "esac" {
-					return unc("case")
+					if r := unc("case"); r.V != skipped {
+						return r
+					}
 				}
 			}
 		}
 	}
 	if len(stack) != 1 {
-		return unc("unclosed quote or substitution")
+		if r := unc("unclosed quote or substitution"); r.V != skipped {
+			return r
+		}
 	}
 	if len(pending) > 0 {
-		return unc("heredoc with no body")
+		if r := unc("heredoc with no body"); r.V != skipped {
+			return r
+		}
 	}
 	if evaluated {
 		return Result{V: Refuse}
