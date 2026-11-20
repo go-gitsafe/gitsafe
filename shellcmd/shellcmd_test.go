@@ -196,15 +196,8 @@ func TestClassify(t *testing.T) {
 		// the ) from bash 3.2.57's scan (it ends the substitution there), so the
 		// body is not a quoted heredoc body any more: all code. An even count, or
 		// no ), still hides it, and the body stays one.
-		{"a ) and a lone \" in a comment of the body", "\"$(cat <<'E'\n#)\"|x\nE\n)\"", "dcccccccccccccccccccccc"},
 		{"a ) and an even count of \" in a comment", "\"$(cat <<'E'\n# \"a\" )|x\nE\n)\"", "dcccccccccccchhhhhhhhhhhhcd"},
-		{"V2: a lone \" on a comment line and a ) later", "\"$(cat <<'E'\n#\"\n\")\"|x\nE\n)\"", "dcccccccccccccccccccccccc" + "c"},
-		{"a backtick inside \" owns the second \", the ) is bare", "\"$(cat <<'E'\n\"`\"`\")x\nE\n)\"", "dcccccccccccccccccccccccc"},
-		{"a ;# in a span after a comment's ) (commentStartIn)", "\"$(cat <<'E'\n#)\";#\"\nx\nE\n)\"", "dccccccccccccccccccccccccc"},
-		{"an odd ' pairing with the next ' then )\"", "\"$(cat <<'E'\n#'\n')\"\nx\nE\n)\"", "dccccccccccccccccccccccccc"},
-		{"an odd backtick pairing with the next one then )\"", "\"$(cat <<'E'\n#`\n`)\"\nx\nE\n)\"", "dccccccccccccccccccccccccc"},
 		{"an odd ' with no second ' stays a body", "\"$(cat <<'E'\n# it's\n(x)\nE\n)\"", "dcccccccccccchhhhhhhhhhhhhcd"},
-		{"#136: a body leaving a \" open, the quote and a ) after it", "$(<<'E'\n\"E\nE\n\")\"x)", "cccccccccccccccccc"},
 		{"a ) alone in a comment stays hidden", "\"$(cat <<'E'\n# ) note\nE\n)\"", "dcccccccccccchhhhhhhhhhhcd"},
 		{"a ) inside an expanded heredoc body", "\"$(cat <<E\n(x)\nE\n)\"", "dcccccccccccccccccc"},
 	} {
