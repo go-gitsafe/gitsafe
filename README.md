@@ -1663,6 +1663,23 @@ pinned in `literaltick/testdata/production-wrapper.txt` and asserted by
 that zsh alone: a backtick only bash 3.2 runs (#153, #154 and 35 other historical
 inputs) is not a defect of the guard. The table tests still ask bash and dash.
 
+⛔ **And the rule reads a small grammar, not the parse of a shell that never runs
+it** (#156). `guard-bash` now decides a backtick with `literaltick.CheckFor`,
+which takes the grammar from `$SHELL`: **zsh gets S+**, **bash gets strict S**,
+anything else is refused. S is words, blanks, `; & | && || newline`, `< >`,
+`'…'`, `"…"`, `\x`, `$name` and `$( … )` nested; S+ adds *quoted* heredocs
+(`<<'E'`, `<<\E`, `<<"E"`, with or without `-`), whose body is prose. Anything
+else — an unquoted `#`, `${`, `$((`, `$'`, a bare `(`, `case`, an unquoted
+heredoc, an unclosed quote — makes a command with a backtick **uncertain, and it
+is refused naming the construct**. S+ is sound for the zsh that runs commands
+here (132 M fuzz execs and 1 000 random in-grammar programs, none ran a backtick
+it allowed) and not for bash 3.2, whose scan for the `)` of `$( )` reads a heredoc
+body; hence strict S for bash. Over 629 685 recorded commands the rule refuses
+0.26 % where the older reading refused 0.10 % (`guardscan --rule literaltick`
+against `--rule literaltick-legacy`). `plain/snapshot_test.go` reads the shell
+snapshot the wrapper sources and fails if it sets a global alias or an option
+that would move the grammar.
+
 ## Working trees in directories that are emptied
 
 `guard-bash` refuses a command that would make a git working tree, or commit to

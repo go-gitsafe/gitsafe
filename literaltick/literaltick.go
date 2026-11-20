@@ -86,6 +86,10 @@ type Finding struct {
 	// InDoubleQuotes records the case that surprises people: the backtick sits
 	// inside "…" and is still a substitution.
 	InDoubleQuotes bool
+	// Construct names what put the command outside the grammar [CheckFor] can read
+	// (an unquoted #, a bare (, an unquoted heredoc, an unknown $SHELL …). Empty
+	// when the backtick itself is evaluated.
+	Construct string
 }
 
 // Found reports whether this finding is a refusal.
@@ -93,6 +97,11 @@ func (f Finding) Found() bool { return f.Context != "" }
 
 // Why names the act, for a caller that prints it.
 func (f Finding) Why() string {
+	if f.Construct != "" {
+		return "a backtick in a command this guard cannot read with certainty (" +
+			f.Construct + "): the shell may RUN what is between the backticks, so it " +
+			"is refused rather than guessed at"
+	}
 	if f.InDoubleQuotes {
 		return "a backtick inside double quotes is still a command substitution: " +
 			"the shell will RUN what is between the backticks and put its output in " +

@@ -88,7 +88,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, ghbyhand, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, literaltick-legacy, ghbyhand, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -103,7 +103,7 @@ are printed through the redactor, the same way the guards print.`,
 
 // countingOnly are the rows that count and that guard-bash does not run: their
 // hits are reported on their own line and never in "would be refused".
-var countingOnly = map[string]bool{"eqword": true, "eqword-intended": true}
+var countingOnly = map[string]bool{"eqword": true, "eqword-intended": true, "literaltick-legacy": true}
 
 // rules is every rule guard-bash runs, adapted to one shape.
 //
@@ -176,9 +176,22 @@ func rules(cwd, home, tmpdir string) map[string]func(string) refusal {
 		},
 		// Same gate, same reason — and this one's false refusals are the ones
 		// to count, since it refuses a character rather than a command shape.
+		// What guard-bash runs since #156: S+ for zsh, the shell that executes these
+		// commands. The refusal kind is the construct that put a command outside
+		// the grammar, so a refusal-rate delta can be read per construct.
 		"literaltick": func(c string) refusal {
+			f := literaltick.CheckFor("zsh", c)
+			label := "a backtick the shell would evaluate"
+			if f.Construct != "" {
+				label = "outside the grammar: " + f.Construct
+			}
+			return kind(f, f.Found(), label)
+		},
+		// COUNTING ONLY: the reading guard-bash ran before #156, for the before side
+		// of the refusal-rate delta.
+		"literaltick-legacy": func(c string) refusal {
 			f := literaltick.Check(c)
-			return kind(f, f.Found(), "a backtick the shell would evaluate")
+			return kind(f, f.Found(), "a backtick the shell would evaluate (bash 3.2 reading)")
 		},
 		// ⛔ COUNTING ONLY (go-gitsafe/gitsafe#129): guard-bash does not run
 		// eqword. These two rows say how often a word zsh equals-expands would

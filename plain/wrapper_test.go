@@ -1,4 +1,4 @@
-package literaltick
+package plain
 
 import (
 	"os"
@@ -6,6 +6,20 @@ import (
 	"strings"
 	"testing"
 )
+
+// zshPath finds zsh. A run that REQUIRES it (GITSAFE_ORACLE_SHELLS, set in ci.yml)
+// fails when it is missing, so a CI image without zsh cannot read as a pass.
+func zshPath(t testing.TB) string {
+	t.Helper()
+	p, err := exec.LookPath("zsh")
+	if err != nil {
+		if strings.Contains(os.Getenv("GITSAFE_ORACLE_SHELLS"), "zsh") {
+			t.Fatalf("GITSAFE_ORACLE_SHELLS requires zsh and it is not installed: the oracle would silently skip it")
+		}
+		t.Skip("zsh is not installed here")
+	}
+	return p
+}
 
 // ⛔ THE ORACLE RUNS THE SHELL THAT RUNS THE COMMAND (#156). The Bash tool does not
 // start bash: it starts `zsh -c 'source <snapshot> … && \builtin setopt … && eval
@@ -20,11 +34,11 @@ func TestTheProductionWrapperIsPinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(b)); got != productionSetopt {
-		t.Errorf("testdata/production-wrapper.txt and productionSetopt differ:\n  file: %s\n  code: %s\nre-capture the live wrapper with `ps -ww -o command= -p $$` and update BOTH", got, productionSetopt)
+	if got := strings.TrimSpace(string(b)); got != ProductionSetopt {
+		t.Errorf("testdata/production-wrapper.txt and ProductionSetopt differ:\n  file: %s\n  code: %s\nre-capture the live wrapper with `ps -ww -o command= -p $$` and update BOTH", got, ProductionSetopt)
 	}
 	for _, opt := range []string{"NO_EXTENDED_GLOB", "NO_BARE_GLOB_QUAL", "NO_BRACE_CCL", "NO_MAGIC_EQUAL_SUBST"} {
-		if !strings.Contains(productionSetopt, opt) {
+		if !strings.Contains(ProductionSetopt, opt) {
 			t.Errorf("the pinned line lacks %s", opt)
 		}
 	}
@@ -34,15 +48,7 @@ func TestTheProductionWrapperIsPinned(t *testing.T) {
 // (and extendedglob is on without it), the command is evaluated with its own
 // quotes intact, and the zsh is the 5.x the line was captured on.
 func TestTheProductionWrapperDoesWhatItIsPinnedFor(t *testing.T) {
-	var zsh string
-	for _, s := range oracleShells(t) {
-		if isZsh(s) {
-			zsh = s
-		}
-	}
-	if zsh == "" {
-		t.Skip("zsh is not installed here")
-	}
+	zsh := zshPath(t)
 	run := func(script string) string {
 		c := exec.Command(zsh, "-c", script)
 		c.Dir = t.TempDir()
@@ -59,13 +65,13 @@ func TestTheProductionWrapperDoesWhatItIsPinnedFor(t *testing.T) {
 		t.Errorf("zsh %s: the wrapper was captured on 5.9; re-measure the oracle before accepting another major", ver)
 	}
 	const show = `print -r -- ${options[extendedglob]} ${options[bareglobqual]} ${options[braceccl]} ${options[magicequalsubst]}`
-	if got := run(productionScript(show)); got != "off off off off" {
+	if got := run(ProductionScript(show)); got != "off off off off" {
 		t.Errorf("under the wrapper the four options read %q, want all off", got)
 	}
 	if got := run(show); got == "off off off off" {
 		t.Errorf("without the wrapper the options already read all off: the pin proves nothing")
 	}
-	if got := run(productionScript(`print -r -- "it's" 'a b'`)); got != "it's a b" {
+	if got := run(ProductionScript(`print -r -- "it's" 'a b'`)); got != "it's a b" {
 		t.Errorf("the eval quoting changed the command: %q", got)
 	}
 }
