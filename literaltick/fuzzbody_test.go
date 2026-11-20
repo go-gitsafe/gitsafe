@@ -58,6 +58,9 @@ func FuzzBody(f *testing.F) {
 			return // nothing to judge, or refused: the safe direction
 		}
 		for _, sh := range shells {
+			if !isZsh(sh) { // only the production shell judges (#156), see FuzzOracle
+				continue
+			}
 			if runs(t, sh, cmd) {
 				t.Fatalf("%s RAN a backtick of this BODY and the rule allowed it:\n  body %q\n  cmd  %q",
 					filepath.Base(sh), body, cmd)

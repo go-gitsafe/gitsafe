@@ -160,6 +160,28 @@ func lookShells(required string, look func(string) (string, error)) (shells, abs
 	return shells, absent, missing
 }
 
+// productionSetopt is the option line the Bash tool runs before every command
+// here, captured from a live `ps -ww -o command= -p $$` on 2026-11-19 (zsh 5.9):
+//
+//	/bin/zsh -c source <snapshot> 2>/dev/null || true && \builtin setopt
+//	NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST
+//	2>/dev/null || true && … && eval '<command>' && pwd -P >| <file>
+//
+// ⛔ PINNED, NOT REMEMBERED (#156): testdata/production-wrapper.txt holds the same
+// line and TestTheProductionWrapperIsPinned compares the two, so a change to either
+// fails CI by name. The wrapper is not visible from CI: when the tool's wrapper
+// changes, re-capture it with ps and update both.
+const productionSetopt = `\builtin setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL NO_BRACE_CCL NO_MAGIC_EQUAL_SUBST 2>/dev/null || true`
+
+// productionScript is the zsh -c argument that runs cmd the way the tool does:
+// an empty snapshot, the setopt line, then eval of the single-quoted command.
+func productionScript(cmd string) string {
+	q := "'" + strings.ReplaceAll(cmd, "'", `'\''`) + "'"
+	return "source /dev/null 2>/dev/null || true && " + productionSetopt + " && eval " + q
+}
+
+func isZsh(shell string) bool { return strings.HasSuffix(shell, "zsh") }
+
 var span = regexp.MustCompile("`[^`'\"\\\\$]*`")
 
 // runs reports whether shell executed a backtick of cmd, by the file the
@@ -178,14 +200,15 @@ func runs(t *testing.T, shell, cmd string) bool {
 	defer cancel()
 	args := []string{"-c", cmd}
 	if strings.HasSuffix(shell, "zsh") {
-		// ⛔ zsh runs as `zsh -f -c`: -f is NO_RCS, so no ~/.zshenv or ~/.zshrc
-		// can change the result. It is a non-interactive shell with zsh's DEFAULT
-		// options. `interactivecomments` is an option of INTERACTIVE shells and
-		// does not apply: a non-interactive zsh reads # as a comment at the start
-		// of a word, as bash does (`zsh -f -c 'echo a(E) #`…`'` runs nothing). It
-		// reads it differently only inside what it takes for a glob, after a ( or
-		// a |, and that is where the oracle found the rule's misses.
-		args = []string{"-f", "-c", cmd}
+		// ⛔ zsh runs exactly as the Bash tool runs it here (#156): `zsh -c` with
+		// the production setopt line and `eval` of the command, see
+		// [productionScript]. HOME is the test's own directory, so no ~/.zshenv
+		// can change the result. `interactivecomments` is an option of
+		// INTERACTIVE shells and does not apply: a non-interactive zsh reads # as
+		// a comment at the start of a word, as bash does. It reads it differently
+		// only inside what it takes for a glob, after a ( or a |, and that is
+		// where the oracle found the rule's misses.
+		args = []string{"-c", productionScript(cmd)}
 	}
 	c := exec.CommandContext(ctx, shell, args...)
 	c.Dir = dir
@@ -326,6 +349,13 @@ func FuzzOracle(f *testing.F) {
 			return // nothing to judge, or refused: the safe direction
 		}
 		for _, sh := range shells {
+			// ⛔ ONLY THE PRODUCTION SHELL JUDGES (#156): commands here run under
+			// zsh, never bash. A backtick that only bash 3.2 runs (#153, #154 and
+			// 35 other historical inputs) is not a defect of the guard; the table
+			// tests still ask bash and dash.
+			if !isZsh(sh) {
+				continue
+			}
 			if runs(t, sh, cmd) {
 				t.Fatalf("%s RAN a backtick and the rule allowed it:\n  %q", filepath.Base(sh), cmd)
 			}
