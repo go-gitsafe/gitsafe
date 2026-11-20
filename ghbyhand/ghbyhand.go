@@ -463,8 +463,22 @@ func checkAPI(st string, words []string) Finding {
 			Act:     "enable or disable a repository's private vulnerability reporting",
 			Instead: "ghrepo <owner/repo> private-reporting enable|disable|status",
 		}
+	case isAdvisoryPath(path):
+		// POST creates a draft, PATCH publishes or edits one (fleettools ghadvisory).
+		return Finding{
+			Match:   short(st),
+			Act:     "create or publish a repository security advisory",
+			Instead: "ghadvisory <owner/repo> --new ... | ghadvisory <owner/repo> publish GHSA-...",
+		}
 	}
 	return missing(st, "write to the GitHub API")
+}
+
+// isAdvisoryPath reports whether the path is a repository's security-advisory
+// collection or one advisory.
+func isAdvisoryPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return (len(parts) == 4 || len(parts) == 5) && parts[0] == "repos" && parts[3] == "security-advisories"
 }
 
 // isPVRPath reports whether the path is a repository's private vulnerability

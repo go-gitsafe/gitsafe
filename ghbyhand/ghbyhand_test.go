@@ -43,6 +43,8 @@ func TestRefuses(t *testing.T) {
 		{"api POST creating a pages site", "gh api repos/o/r/pages -f build_type=workflow", "ghrepo <owner/repo> pages workflow"},
 		{"api PUT enabling private vulnerability reporting", "gh api -X PUT repos/go-turn/turn/private-vulnerability-reporting", "ghrepo <owner/repo> private-reporting"},
 		{"api DELETE disabling private vulnerability reporting", "gh api --method DELETE repos/o/r/private-vulnerability-reporting", "private-reporting enable|disable|status"},
+		{"api POST creating a security advisory", "gh api repos/go-authn/krb5/security-advisories -f summary=x", "ghadvisory <owner/repo> --new"},
+		{"api PATCH publishing a security advisory", "gh api -X PATCH repos/o/r/security-advisories/GHSA-aaaa-bbbb-cccc -f state=published", "ghadvisory <owner/repo> publish"},
 		{"pr close", "gh pr close 77 -R go-fft/fft", "ghpr"},
 		{"pr reopen", "gh pr reopen 17 --repo usbarmory/tamago-go", "ghpr"},
 		{"pr ready", "gh pr ready 1 -R go-wasmcontainers/relay", "ghpr"},
