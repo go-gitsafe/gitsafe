@@ -149,7 +149,8 @@ func TestPRCreateNeedsBothChecks(t *testing.T) {
 		cmd  string
 		deny bool
 	}{
-		"both checks":      {`prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && ` + create, false},
+		"both checks":      {`prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && ` + create, true},
+		"ghpr create":      {`ghpr o/r create --head b --title t --body-file /tmp/b.md`, false},
 		"neither":          {create, true},
 		"only prbody":      {`prbody /tmp/b.md --repo o/r && ` + create, true},
 		"only paritycheck": {`paritycheck text /tmp/b.md && ` + create, true},
@@ -172,10 +173,13 @@ func TestPRCreateNeedsBothChecks(t *testing.T) {
 			t.Fatalf("%s: not a decision: %v\n%s", name, err, out)
 		}
 		reason := d.HookSpecificOutput.PermissionDecisionReason
-		// The line to type starts with the two checks and ends with the create
-		// as written (a disguised spelling keeps its spelling).
-		want := `prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && `
-		if d.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(reason, "Type this instead: "+want) ||
+		// ghbyhand answers first now: every `gh pr create`, chained behind the
+		// checks or not, is refused and names `ghpr <owner/repo> create`, which
+		// runs those checks itself. The disguised spellings (env, bash -c) are
+		// still read by the older chained-checks rule, which gives its own line.
+		disguised := strings.Contains(reason, "Type this instead: prbody /tmp/b.md --repo o/r && paritycheck text /tmp/b.md && ")
+		if d.HookSpecificOutput.PermissionDecision != "deny" ||
+			!(strings.Contains(reason, "ghpr <owner/repo> create") || disguised) ||
 			!strings.Contains(reason, create) {
 			t.Errorf("%s: decision %q, reason:\n%s", name, d.HookSpecificOutput.PermissionDecision, reason)
 		}
