@@ -51,6 +51,8 @@ func Classify(cmd string) []byte {
 		depth int
 		dq    bool // 'B' opened inside double quotes
 		start int  // where the frame opened
+		// dollar marks an 'A' frame opened by $(( rather than by (( .
+		dollar bool
 	}
 	var stack []frame
 	var pending []heredoc
@@ -109,7 +111,7 @@ func Classify(cmd string) []byte {
 				fill(i, i+2, ClassCode)
 				if i+2 < len(s) && s[i+2] == '(' {
 					cls[i+2] = ClassCode
-					stack = append(stack, frame{kind: 'A', depth: 2})
+					stack = append(stack, frame{kind: 'A', depth: 2, dollar: true})
 					i += 3
 				} else {
 					stack = append(stack, frame{kind: 'P', depth: 1, start: i})
@@ -202,6 +204,22 @@ func Classify(cmd string) []byte {
 			// or a nested $(( ends is not what bash reads:
 			// `$(($(('$('))`+T+`'))` runs the backtick in zsh only. Unsure
 			// refuses.
+			//
+			// ⛔ NOT EVERY $( IN ARITHMETIC IS THAT DOUBT (#128, #129). The shape
+			// `$(( $(wc -c < f) * 2 / 100 ))` is how a script computes with a
+			// command's output, and reading everything after it as code made a
+			// quoted "=== … ===" line later in the command read as live (62 false
+			// matches of eqword over this machine's transcripts). When the
+			// arithmetic closes at a matching )) and what lies between holds
+			// nothing the shells disagree about, the frame ends there.
+			if next == '(' && top() == 'A' && stack[len(stack)-1].dollar {
+				if end, ok := nestedArithEnd(s, i, stack[len(stack)-1].depth); ok {
+					fill(i, end+1, ClassCode)
+					stack = stack[:len(stack)-1]
+					i = end + 1
+					continue
+				}
+			}
 			for k := i; k < len(s); k++ {
 				cls[k] = ClassCode
 			}
@@ -210,7 +228,7 @@ func Classify(cmd string) []byte {
 			fill(i, i+2, ClassCode)
 			if i+2 < len(s) && s[i+2] == '(' {
 				cls[i+2] = ClassCode
-				stack = append(stack, frame{kind: 'A', depth: 2})
+				stack = append(stack, frame{kind: 'A', depth: 2, dollar: true})
 				i += 3
 			} else {
 				stack = append(stack, frame{kind: 'P', depth: 1, start: i})
@@ -694,4 +712,53 @@ func heredocBodies(s string, cls []byte, pos int, pending []heredoc) int {
 		}
 	}
 	return pos
+}
+
+// nestedArithEnd answers, for the $( at off inside an open $(( … )) whose paren
+// depth is d, where the arithmetic closes: the offset of its final ), and
+// whether that is knowable without asking which shell reads it.
+//
+// ⛔ ASKED OF THE SHELLS (bash 3.2.57, dash, zsh -f -c), per variant, with a
+// backtick hidden behind '…' and behind # after the close: for
+// `$(( $(cmd) OP n ))`, `$(( n OP $(cmd) ))`, two substitutions, `$(wc -c < f)`
+// and a parenthesised `($(cmd))`, NO shell ran the hidden backtick, so the
+// arithmetic ends at the )) in all three. The variants that DO differ all hold
+// a character this refuses: a # (`$(( $(echo 1) #T))` runs in dash and zsh,
+// #128's refuse case), a quote (it runs in all three), a backtick, a
+// backslash, a newline, ${ or $[ or a nested $(( , << (a heredoc), a `case`
+// (its ) closes nothing), and a close that is not the two adjacent )) at the
+// frame's own depth. Anything else here is a plain command and plain operators.
+func nestedArithEnd(s string, off, d int) (end int, ok bool) {
+	for j := off; j < len(s); j++ {
+		var next byte
+		if j+1 < len(s) {
+			next = s[j+1]
+		}
+		switch s[j] {
+		case '\'', '"', '`', '\\', '#', '\n':
+			return 0, false
+		case '<':
+			if next == '<' {
+				return 0, false
+			}
+		case '$':
+			if next == '{' || next == '[' {
+				return 0, false
+			}
+			if next == '(' && j+2 < len(s) && s[j+2] == '(' {
+				return 0, false
+			}
+		case '(':
+			d++
+		case ')':
+			d--
+			if d == 0 {
+				if s[j-1] != ')' || caseWord.MatchString(s[off:j]) {
+					return 0, false
+				}
+				return j, true
+			}
+		}
+	}
+	return 0, false
 }
