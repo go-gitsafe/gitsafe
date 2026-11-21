@@ -1613,8 +1613,10 @@ ran 638 000 executions clean.
 of `$( )`, a shell that never runs these commands. `shellcmd` no longer scans a
 quoted heredoc body for quotes, comments and parentheses (`scanClose` and its
 helpers are deleted), `FuzzBody` and the tests that asserted bash 3.2's answers
-are gone, and the findings they recorded (#133, #136, #146, #153, #154) are
-refused by name under the `plain` grammars instead.
+are gone. The findings they recorded (#133, #136, #146, #153, #154) run the
+backtick in bash 3.2.57 only; no shell beyond the one in use (zsh) is modelled,
+so they are out of scope and **allowed**, not refused. `literaltick`'s
+`TestBash32OnlyShapesAreAllowedSince156` records each verdict.
 
 ⛔ **What that scan models, named so it can be diffed:** bash's character search
 for the `)` that closes a `$( … )`, which runs *before* the command inside is

@@ -421,10 +421,9 @@ func Classify(cmd string) []byte {
 				// quoted body, so the premise is zsh's reading, and no shell beyond
 				// the one in use is modelled. What that scan found (#133, #136,
 				// #146, #153, #154) runs the backtick in bash 3.2.57 only, and is
-				// OUT OF SCOPE since #156, NOT refused by name: #133, #146 and
-				// #153 are allowed; #136 and #154 happen to be refused by the
-				// case-arm and heredoc grammars. TestBash32OnlyShapesAreNotRefusedSince156
-				// in literaltick records each verdict.
+				// OUT OF SCOPE since #156, and NOT refused: all five are ALLOWED.
+				// TestBash32OnlyShapesAreAllowedSince156 in literaltick records
+				// each verdict.
 				if len(stack) > 0 && expanded && strings.Contains(s[from:i], ")") {
 					for k := from; k < len(s); k++ {
 						cls[k] = ClassCode
