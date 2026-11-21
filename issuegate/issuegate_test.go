@@ -15,43 +15,83 @@ func TestParse(t *testing.T) {
 		name, body string
 		want       []Ref
 	}{
-		{"closes", "Closes #1", []Ref{{self, 1, Closes}}},
+		{"closes", "Closes #1", []Ref{{self, 1, Closes, false}}},
 		{"every keyword", "close #1 closes #2 closed #3 fix #4 fixes #5 fixed #6 resolve #7 resolves #8 resolved #9",
-			[]Ref{{self, 1, Closes}, {self, 2, Closes}, {self, 3, Closes}, {self, 4, Closes}, {self, 5, Closes},
-				{self, 6, Closes}, {self, 7, Closes}, {self, 8, Closes}, {self, 9, Closes}}},
-		{"upper case and colon", "FIXES: #4", []Ref{{self, 4, Closes}}},
-		{"refs", "Refs #2", []Ref{{self, 2, Refs}}},
-		{"refs case-insensitive", "refs #2, REFS #3", []Ref{{self, 2, Refs}, {self, 3, Refs}}},
-		{"bare", "see #3 for context", []Ref{{self, 3, Bare}}},
-		{"owner/repo", "Fixes go-fleettools/fleettools#12", []Ref{{"go-fleettools/fleettools", 12, Closes}}},
-		{"owner/repo bare", "context: other/repo#7", []Ref{{"other/repo", 7, Bare}}},
-		{"closes only the next one", "Closes #1, #2", []Ref{{self, 1, Closes}, {self, 2, Bare}}},
-		{"keyword each", "Resolves #10, resolves #123", []Ref{{self, 10, Closes}, {self, 123, Closes}}},
-		{"refs list", "Refs #1, #2 and #3 & #4", []Ref{{self, 1, Refs}, {self, 2, Refs}, {self, 3, Refs}, {self, 4, Refs}}},
-		{"keyword on another line does not count", "Closes\n#5", []Ref{{self, 5, Bare}}},
-		{"keyword is a whole word", "suffixes #5 and prefixed #6", []Ref{{self, 5, Bare}, {self, 6, Bare}}},
-		{"fenced block", "text\n```\nCloses #9\n#10\n```\nafter #11", []Ref{{self, 11, Bare}}},
-		{"unterminated fence", "a #1\n```\n#2", []Ref{{self, 1, Bare}}},
+			[]Ref{{self, 1, Closes, false}, {self, 2, Closes, false}, {self, 3, Closes, false}, {self, 4, Closes, false}, {self, 5, Closes, false},
+				{self, 6, Closes, false}, {self, 7, Closes, false}, {self, 8, Closes, false}, {self, 9, Closes, false}}},
+		{"upper case and colon", "FIXES: #4", []Ref{{self, 4, Closes, false}}},
+		{"refs", "Refs #2", []Ref{{self, 2, Refs, false}}},
+		{"refs case-insensitive", "refs #2, REFS #3", []Ref{{self, 2, Refs, false}, {self, 3, Refs, false}}},
+		{"bare", "see #3 for context", []Ref{{self, 3, Bare, false}}},
+		{"owner/repo", "Fixes go-fleettools/fleettools#12", []Ref{{"go-fleettools/fleettools", 12, Closes, false}}},
+		{"owner/repo bare", "context: other/repo#7", []Ref{{"other/repo", 7, Bare, false}}},
+		{"closes only the next one", "Closes #1, #2", []Ref{{self, 1, Closes, false}, {self, 2, Bare, false}}},
+		{"keyword each", "Resolves #10, resolves #123", []Ref{{self, 10, Closes, false}, {self, 123, Closes, false}}},
+		{"refs list", "Refs #1, #2 and #3 & #4", []Ref{{self, 1, Refs, false}, {self, 2, Refs, false}, {self, 3, Refs, false}, {self, 4, Refs, false}}},
+		{"keyword on another line does not count", "Closes\n#5", []Ref{{self, 5, Bare, false}}},
+		{"keyword is a whole word", "suffixes #5 and prefixed #6", []Ref{{self, 5, Bare, false}, {self, 6, Bare, false}}},
+		{"fenced block", "text\n```\nCloses #9\n#10\n```\nafter #11", []Ref{{self, 11, Bare, false}}},
+		{"unterminated fence", "a #1\n```\n#2", []Ref{{self, 1, Bare, false}}},
 		{"tilde fence", "~~~\n#2\n~~~", nil},
 		{"code span", "use `#8` or `Closes #9` here", nil},
 		{"html comment", "<!-- Closes #1 -->\nbody", nil},
 		{"pull request url", "see https://github.com/o/r/pull/12#issuecomment-5 and http://x.y/#3", nil},
-		{"issue url after keyword", "Fixes https://github.com/o/r/issues/4", []Ref{{"o/r", 4, Closes}}},
-		{"in parentheses", "(Closes #6)", []Ref{{self, 6, Closes}}},
-		{"duplicate: closing wins", "see #3\nCloses #3\nRefs #3", []Ref{{self, 3, Closes}}},
-		{"duplicate: refs over bare", "see #3\nRefs #3", []Ref{{self, 3, Refs}}},
+		{"issue url after keyword", "Fixes https://github.com/o/r/issues/4", []Ref{{"o/r", 4, Closes, false}}},
+		{"in parentheses", "(Closes #6)", []Ref{{self, 6, Closes, false}}},
+		{"duplicate: closing wins", "see #3\nCloses #3\nRefs #3", []Ref{{self, 3, Closes, false}}},
+		{"duplicate: refs over bare", "see #3\nRefs #3", []Ref{{self, 3, Refs, false}}},
 		{"not a reference", "C#5 a&#8217; x#y foo/bar/baz#4 ##6 #", nil},
 		{"huge number rejected by width", "#1234567890", nil},
 		{"zero", "Closes #0", nil},
+
+		// ⛔ A NEGATION CHANGES NOTHING FOR GITHUB, so Kind stays Closes and the
+		// contradiction is flagged. The sentence that provoked this closed a
+		// real issue on merge.
+		{"the sentence that closed an issue", "It does not fix #17", []Ref{{self, 17, Closes, true}}},
+		{"contraction", "This doesn't close #4", []Ref{{self, 4, Closes, true}}},
+		{"a word between", "It does not actually fix #17", []Ref{{self, 17, Closes, true}}},
+		// ⛔ Written as a negation case and measured as the opposite: GitHub's
+		// list has no gerunds (close/closes/closed, never "closing"), so this
+		// sentence carries no keyword to contradict. Kept, because it is the
+		// phrasing one reaches for when trying to be careful.
+		{"a gerund is no keyword, so there is nothing to contradict", "Landing this without closing #9",
+			[]Ref{{self, 9, Bare, false}}},
+		{"without, with a keyword GitHub reads", "Shipped without fixes #9", []Ref{{self, 9, Closes, true}}},
+		{"never", "This never resolves #3", []Ref{{self, 3, Closes, true}}},
+		// ⛔ The cases the rule must NOT catch, each a sentence somebody writes.
+		{"refs under a negation is not a contradiction", "This does not finish it; Refs #7",
+			[]Ref{{self, 7, Refs, false}}},
+		{"a negation far earlier is not this sentence", "It does not matter which branch you take when you close #8",
+			[]Ref{{self, 8, Closes, false}}},
+		{"a plain close is untouched", "Closes #2", []Ref{{self, 2, Closes, false}}},
+		{"negation in a code span is stripped first", "`does not` fix #5", []Ref{{self, 5, Closes, false}}},
+		{"one contradicting sentence is enough", "Closes #6\nand it does not close #6",
+			[]Ref{{self, 6, Closes, true}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := Parse(c.body, self)
-			if fmt.Sprint(got) != fmt.Sprint(c.want) {
-				t.Errorf("Parse(%q)\n got %v\nwant %v", c.body, got, c.want)
+			if show(got) != show(c.want) {
+				t.Errorf("Parse(%q)\n got %s\nwant %s", c.body, show(got), show(c.want))
 			}
 		})
 	}
+}
+
+// ⛔⛔ THIS TABLE WAS VACUOUS ABOUT THE THING IT EXISTS TO CHECK. It compared
+// fmt.Sprint of the two slices — and Ref has a String method that prints
+// "owner/repo#N" and nothing else, so every Kind in the want column above was
+// decoration: "Closes #1" and "see #1" compared EQUAL. Found by mutation, not
+// by reading: removing the negation check left the suite green, and removing
+// the keyword classification would have too.
+//
+// show prints what the case is actually about.
+func show(refs []Ref) string {
+	parts := make([]string, len(refs))
+	for i, r := range refs {
+		parts[i] = fmt.Sprintf("%s/%s/negated=%v", r, r.Kind, r.Negated)
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 // fake is GitHub, as the gate sees it.

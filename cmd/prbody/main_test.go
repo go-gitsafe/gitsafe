@@ -126,6 +126,35 @@ func TestEveryDispositionStatedPasses(t *testing.T) {
 	}
 }
 
+// ⛔⛔ The sentence that closed an issue on merge. "It does not fix #17" reads to
+// its author as a promise NOT to close, and GitHub closes 17 anyway: it matches
+// the keyword and the number, never the sentence. Refused, before the pull
+// request exists.
+func TestANegatedClosingKeywordIsRefusedBecauseGitHubClosesItAnyway(t *testing.T) {
+	p := bodyFile(t, "This lands the parser only. It does not fix #17.\n")
+	rc, out, errb := prbody(t, p, "--repo", "go-zpkg/zbk")
+	if rc != 1 {
+		t.Fatalf("rc = %d, want 1; stdout: %s stderr: %s", rc, out, errb)
+	}
+	if !strings.Contains(out, "under a negation") {
+		t.Errorf("the listing should mark the reference:\n%s", out)
+	}
+	for _, want := range []string{"go-zpkg/zbk#17", "never the sentence", "Refs <ref>"} {
+		if !strings.Contains(errb, want) {
+			t.Errorf("the refusal does not carry %q:\n%s", want, errb)
+		}
+	}
+}
+
+// ⛔ The control: the same body WITHOUT the negation is the ordinary case, and
+// must pass. A gate that refused every `Closes` would be refused by everybody.
+func TestAPlainClosingKeywordStillPasses(t *testing.T) {
+	p := bodyFile(t, "This finishes the parser. Closes #17.\n")
+	if rc, out, errb := prbody(t, p, "--repo", "go-zpkg/zbk"); rc != 0 {
+		t.Fatalf("rc = %d, want 0; stdout: %s stderr: %s", rc, out, errb)
+	}
+}
+
 // A body mentioning nothing is not a failure: most bodies are that case, and a
 // check that complained about them would be turned off.
 func TestNoReferenceIsNotAFailure(t *testing.T) {

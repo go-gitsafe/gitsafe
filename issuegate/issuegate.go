@@ -53,6 +53,10 @@ type Ref struct {
 	Repo   string // owner/repo, the pull request's own when the body wrote `#N`
 	Number int
 	Kind   Kind
+	// Negated: the closing keyword sits under a negation — "does not fix #17".
+	// Kind stays Closes, because that is what GitHub will do; this says the
+	// sentence claims the opposite, and the two cannot both be honoured.
+	Negated bool
 }
 
 // String is the reference as it is written: owner/repo#N.
@@ -75,6 +79,17 @@ var (
 	ref      = regexp.MustCompile(`(?:^|[^\w/#&.-])((?:[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+)?)#(\d{1,9})\b`)
 	keyword  = regexp.MustCompile(`(?i)(?:^|[^A-Za-z])(clos(?:e[sd]?)|fix(?:es|ed)?|resolv(?:e[sd]?)|refs?)[:\s]*$`)
 	joiner   = regexp.MustCompile(`(?i)^\s*(?:,\s*(?:and\s+)?|and\s+|&\s*)$`)
+	// ⛔ A NEGATION BEFORE A CLOSING KEYWORD CHANGES NOTHING FOR GITHUB. "It does
+	// not fix #17" closes issue 17 on merge: the forge matches the keyword and
+	// the number, never the sentence they sit in. The author read their own
+	// sentence and meant the opposite, which is why this is a refusal and not a
+	// note — the two readings cannot both be served, and only one of them is
+	// GitHub's. Measured on a real merge (memory
+	// a-negated-closing-keyword-still-closes, 2026-11-13).
+	//
+	// The window is three words: far enough for "does not actually fix #17",
+	// near enough that a negation two sentences earlier is not dragged in.
+	negation = regexp.MustCompile(`(?i)(?:^|[^A-Za-z])(?:do(?:es)?\s+not|d(?:o|oe)sn['’]?t|did\s+not|didn['’]?t|will\s+not|won['’]?t|cannot|can['’]?t|should\s+not|shouldn['’]?t|never|without|no\s+longer|not)(?:\s+[A-Za-z']+){0,3}\s*$`)
 )
 
 // Strip removes what is not prose: fenced blocks, HTML comments (a pull request
@@ -120,10 +135,15 @@ func Parse(body, repo string) []Ref {
 				continue
 			}
 			kind := Bare
-			if km := keyword.FindStringSubmatch(line[:start]); km != nil {
+			negated := false
+			if km := keyword.FindStringSubmatchIndex(line[:start]); km != nil {
+				word := strings.ToLower(line[km[2]:km[3]])
 				kind = Refs
-				if !strings.HasPrefix(strings.ToLower(km[1]), "ref") {
+				if !strings.HasPrefix(word, "ref") {
 					kind = Closes
+					// What GitHub will do is Closes either way; what the author
+					// wrote says the opposite. The contradiction is the finding.
+					negated = negation.MatchString(line[:km[2]])
 				}
 			} else if prev >= 0 && prevKind == Refs && joiner.MatchString(line[prev:start]) {
 				kind = Refs
@@ -134,10 +154,13 @@ func Parse(body, repo string) []Ref {
 				if kind > out[i].Kind {
 					out[i].Kind = kind
 				}
+				// One contradicting sentence is enough to report: a body that
+				// says it elsewhere in the clear does not undo it.
+				out[i].Negated = out[i].Negated || negated
 				continue
 			}
 			index[key] = len(out)
-			out = append(out, Ref{Repo: r, Number: n, Kind: kind})
+			out = append(out, Ref{Repo: r, Number: n, Kind: kind, Negated: negated})
 		}
 	}
 	return out
@@ -167,6 +190,9 @@ type Verdict struct {
 	Refs      []Ref // open issues that stay open on purpose
 	Unclassed []Ref // open issues mentioned bare: the reason to refuse
 	Ignored   []Ref // pull requests, closed issues, numbers that are no issue
+	// Contradicted: open issues GitHub will close although the sentence says it
+	// does not. Also in Closing, because that is what the merge would do.
+	Contradicted []Ref
 }
 
 // Classify parses body and resolves every reference with one GET each. It
@@ -190,6 +216,9 @@ func Classify(c Client, body, repo string) (Verdict, error) {
 		switch r.Kind {
 		case Closes:
 			v.Closing = append(v.Closing, r)
+			if r.Negated {
+				v.Contradicted = append(v.Contradicted, r)
+			}
 		case Refs:
 			v.Refs = append(v.Refs, r)
 		default:
@@ -202,6 +231,18 @@ func Classify(c Client, body, repo string) (Verdict, error) {
 // Refusal is the message for a verdict with unclassified issues, or "" when the
 // merge may go ahead.
 func (v Verdict) Refusal() string {
+	// ⛔ The contradiction comes first, because it is the one the author cannot
+	// see by reading their own sentence back.
+	if len(v.Contradicted) > 0 {
+		names := make([]string, len(v.Contradicted))
+		for i, r := range v.Contradicted {
+			names[i] = r.String()
+		}
+		return fmt.Sprintf("the body puts a closing keyword under a negation for %s — and GitHub will CLOSE %s on merge anyway: "+
+			"it matches the keyword and the number, never the sentence. Write `Refs %s` and say the rest in prose; "+
+			"or merge anyway with --issues-waiver \"<reason>\", which is recorded as a comment",
+			strings.Join(names, ", "), v.Contradicted[0], v.Contradicted[0])
+	}
 	if len(v.Unclassed) == 0 {
 		return ""
 	}
