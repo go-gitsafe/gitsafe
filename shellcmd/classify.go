@@ -1042,6 +1042,12 @@ func nestedArithEnd(s string, off, d int) (end int, ok bool) {
 			d++
 		case ')':
 			d--
+			// ⛔ Same refusal as the main loop: a ) taking the frame to depth 1
+			// without a ) after it is not a close; dash reads it as a literal
+			// byte and stays in arithmetic, so a later )) is not the close.
+			if d == 1 && next != ')' {
+				return 0, false
+			}
 			if d == 0 {
 				if s[j-1] != ')' || caseWord.MatchString(s[off:j]) {
 					return 0, false
