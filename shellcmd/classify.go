@@ -418,9 +418,12 @@ func Classify(cmd string) []byte {
 				// ⛔ PRUNED (#156): the balance scan that modelled bash 3.2.57's
 				// reading of a QUOTED body inside $( ) (scanClose and its helpers)
 				// is gone. Commands here run under zsh, which does not scan a
-				// quoted body, and decisions are taken by the grammars of the plain
-				// package; what that scan found (#133, #136, #146, #153, #154) is
-				// refused by name there.
+				// quoted body, so the premise is zsh's reading, and no shell beyond
+				// the one in use is modelled. What that scan found (#133, #136,
+				// #146, #153, #154) runs the backtick in bash 3.2.57 only, and is
+				// OUT OF SCOPE since #156, and NOT refused: all five are ALLOWED.
+				// TestBash32OnlyShapesAreAllowedSince156 in literaltick records
+				// each verdict.
 				if len(stack) > 0 && expanded && strings.Contains(s[from:i], ")") {
 					for k := from; k < len(s); k++ {
 						cls[k] = ClassCode
