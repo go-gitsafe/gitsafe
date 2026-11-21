@@ -267,7 +267,9 @@ func Classify(cmd string) []byte {
 			// $( … ) holding one cannot be known. UNSURE ALWAYS RESOLVES TO
 			// REFUSING: the rest of the command is code that no quote can change,
 			// never a frame in which a ' still quotes.
-			if f.depth == 0 && f.kind == 'P' && caseWord.MatchString(s[f.start:i]) {
+			// ⛔ The `case` must be CODE (#147): the word in a quoted heredoc body,
+			// a quoted span or a comment is prose, as in a PR body's "in this case".
+			if f.depth == 0 && f.kind == 'P' && caseInCode(s, cls, f.start, i) {
 				for k := i; k < len(s); k++ {
 					cls[k] = ClassCode
 				}
@@ -281,6 +283,14 @@ func Classify(cmd string) []byte {
 			fill(i, i+2, ClassCode)
 			stack = append(stack, frame{kind: 'A', depth: 2})
 			i += 2
+		case c == '(' && top() == 'B' && stack[len(stack)-1].dq:
+			// ⛔ A ( IN THE DEFAULT OF A QUOTED ${ … } (#147), asked of the shells:
+			// `"${x:-(none)}"` is a word in zsh, bash and dash, never a glob group or
+			// a subshell, so a banner's `${x:-(unset)}` is not a doubt about the rest
+			// of the line (8 false eqword matches). The same row inside $( … )
+			// and $(( … )) is in the oracle table, and the shells agree there.
+			cls[i] = ClassCode
+			i++
 		case c == '(' && next != ')' && !parenIsShell(s, cls, i):
 			// ⛔ FOUND BY THE zsh ORACLE (#121): a ( that follows an ARGUMENT is a
 			// syntax error in bash and a glob group or qualifier in zsh, which
@@ -717,6 +727,44 @@ func heredocBodies(s string, cls []byte, pos int, pending []heredoc) int {
 	return pos
 }
 
+// caseInCode reports whether s[from:to] holds a word `case` that is CODE: one
+// the shell may take for the keyword. A `case` that cls already marks quoted,
+// heredoc or comment is text.
+func caseInCode(s string, cls []byte, from, to int) bool {
+	for pos := from; pos < to; {
+		m := caseWord.FindStringSubmatchIndex(s[pos:to])
+		if m == nil {
+			return false
+		}
+		start := pos + m[3]
+		if cls[start] == ClassCode {
+			return true
+		}
+		pos = start + 1
+	}
+	return false
+}
+
+// benignSpan returns the offset of the quote that closes the '…' or "…" span
+// opening at j, or 0 when the span holds anything a shell could read two ways:
+// a paren, either quote, a backtick, a backslash, #, a newline, or $ before one
+// of ( { [ ' ".
+func benignSpan(s string, j int) int {
+	for k := j + 1; k < len(s); k++ {
+		switch s[k] {
+		case s[j]:
+			return k
+		case '(', ')', '\'', '"', '`', '\\', '#', '\n':
+			return 0
+		case '$':
+			if k+1 < len(s) && strings.IndexByte("({['\"", s[k+1]) >= 0 {
+				return 0
+			}
+		}
+	}
+	return 0
+}
+
 // nestedArithEnd answers, for the $( at off inside an open $(( … )) whose paren
 // depth is d, where the arithmetic closes: the offset of its final ), and
 // whether that is knowable without asking which shell reads it.
@@ -732,13 +780,30 @@ func heredocBodies(s string, cls []byte, pos int, pending []heredoc) int {
 // (its ) closes nothing), and a close that is not the two adjacent )) at the
 // frame's own depth. Anything else here is a plain command and plain operators.
 func nestedArithEnd(s string, off, d int) (end int, ok bool) {
+	base := d
 	for j := off; j < len(s); j++ {
 		var next byte
 		if j+1 < len(s) {
 			next = s[j+1]
 		}
 		switch s[j] {
-		case '\'', '"', '`', '\\', '#', '\n':
+		case '\'', '"':
+			// ⛔ A QUOTED SPAN INSIDE THE NESTED $( … ) (#147), asked of the shells:
+			// `$(( $(grep -c 'x' "$L") - 1 ))` is how a script counts, and a quote
+			// there read the rest of the command as code (10 false eqword matches).
+			// The span is skipped only when no shell can read it differently: it
+			// closes, and holds no paren, quote, backtick, backslash, #, newline or
+			// expansion opener. A quote directly in the arithmetic (depth == base) stays
+			// refused; inside any parenthesis (a $( ), or a bare group like
+			// `('y')`) the same span rules apply, and the oracle rows say the shells agree.
+			if d > base {
+				if k := benignSpan(s, j); k > 0 {
+					j = k
+					continue
+				}
+			}
+			return 0, false
+		case '`', '\\', '#', '\n':
 			return 0, false
 		case '<':
 			if next == '<' {
