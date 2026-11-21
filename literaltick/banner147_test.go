@@ -46,6 +46,18 @@ func TestBannerShapesOfIssue147(t *testing.T) {
 		{"A a quote at the arithmetic's own level", "echo $(( $(echo 'x') + 'y' )); echo " + q, true},
 		{"A the close is not adjacent", "echo $(( $(echo 'x') ) + 1 )); echo " + q, true},
 
+		// A: a quote inside a bare parenthesis at the arithmetic's own level
+		{"A quoted span in a bare group", "echo $(( $(echo x) + ('y') )); echo " + q, false},
+		{"A quoted span in a bare group, comment tail", "echo $(( $(echo x) + ('y') )) #" + T, false},
+		{"A a ) in the span of a bare group", "echo $(( $(echo x) + (')') )); echo " + q, true},
+		{"A a backtick in the span of a bare group runs", "echo $(( $(echo x) + ('" + T + "') ))", true},
+
+		// B unquoted inside $(( )) and $[ ]: the dq flag is set there by plainSingle
+		{"B unquoted default in $(( ))", "echo $(( ${x:-(} )) " + q, false},
+		{"B unquoted default in $[ ]", "echo $[ ${x:-(} ] " + q, false},
+		{"B unquoted default in $(( )), comment tail", "echo $(( ${x:-(} )) #" + T, false},
+		{"B unquoted default in $[ ], comment tail", "echo $[ ${x:-(} ] #" + T, false},
+
 		// B: allowed
 		{"B one default", "echo \"${x:-(none)}\" " + q, false},
 		{"B comment tail", "echo \"${x:-(none)}\" #" + T, false},

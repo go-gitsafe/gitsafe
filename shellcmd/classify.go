@@ -793,7 +793,9 @@ func nestedArithEnd(s string, off, d int) (end int, ok bool) {
 			// there read the rest of the command as code (10 false eqword matches).
 			// The span is skipped only when no shell can read it differently: it
 			// closes, and holds no paren, quote, backtick, backslash, #, newline or
-			// expansion opener. A quote at the arithmetic's own level stays refused.
+			// expansion opener. A quote directly in the arithmetic (depth == base) stays
+			// refused; inside any parenthesis (a $( ), or a bare group like
+			// `('y')`) the same span rules apply, and the oracle rows say the shells agree.
 			if d > base {
 				if k := benignSpan(s, j); k > 0 {
 					j = k
