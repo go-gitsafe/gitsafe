@@ -34,6 +34,7 @@ import (
 	"os"
 
 	"github.com/go-gitsafe/gitsafe/amendmerged"
+	"github.com/go-gitsafe/gitsafe/bgstatus"
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/discard"
@@ -143,6 +144,27 @@ func run(stdin io.Reader, stdout io.Writer) int {
 				"Refused: %s.\n\n%s\n\n%s",
 				f.Why(), f.String(), pipestatus.Advice))
 		}
+	}
+	// ⛔⛔ AND THE OTHER HALF OF THE SAME SENTENCE, which [shellwork] below
+	// ADVISES: "redirect and read the file instead — which also keeps the
+	// command's own exit status". The shape that advice is written in,
+	// `cmd > $L 2>&1; echo "rc=$?" >> $L`, keeps the status in the FILE and
+	// destroys it in the exit status, because a compound's status is its last
+	// statement's. Started in the background, that is the only status the
+	// harness reports: on 2026-11-22 two notifications said "exit code 0" while
+	// mutsweep had exited 1 with two survivors and ratewait had exited 1 on
+	// TIMEOUT. [pipestatus] above cannot see it and says so in its own doc
+	// comment — with no pipeline, `$?` really is the command's status. The
+	// defect is one level up. See [bgstatus].
+	//
+	// ⛔ NO ESCAPE, per the direction recorded for [testrun] and [ghbyhand]:
+	// `brief -n 20 -- <cmd>` takes the same command, shows the same output and
+	// exits with the command's status, so an escape would buy nothing but the
+	// defect. It was already installed, and nothing found it.
+	if f := bgstatus.Check(p.ToolInput.Command, p.ToolInput.RunInBackground); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\n%s",
+			f.Why(), f.String(), bgstatus.Advice))
 	}
 	// ⛔ `git checkout -b work origin/main` reads as "branch from main" and
 	// branches from whatever this clone last fetched. On 2026-11-07 one session

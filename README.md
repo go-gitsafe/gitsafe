@@ -1130,6 +1130,83 @@ wrong for a census, where the end is the summary — and nothing in the text say
 one it is. That one stays a note, and the package says so rather than pretending to
 it.
 
+## A status recorded in the output and dropped from the exit status
+
+The rule above ends by advising *run the command on its own and read its status*,
+and `shellwork` further down says it in the shape people actually type:
+
+    redirect and read the file instead -- `cmd > /tmp/out.txt 2>&1`
+    which also keeps the command's own exit status
+
+The advice is right and the shape is wrong, and `guard-bash` taught it to itself:
+
+    mutsweep -dir . -- go test ./... > $L 2>&1; echo "mutsweep rc=$?" >> $L
+
+⛔ The status of the **compound** is the `echo`'s, which is 0 whatever the tool did.
+In the foreground that costs nothing, because the file is read. Started in the
+**background**, the compound's status is the only one the harness reports, and on
+2026-11-22 it said so twice in twenty minutes:
+
+| the notification | the file |
+| --- | --- |
+| `Full mutation sweep completed (exit code 0)` | `mutsweep rc=1` — **2 survivors** |
+| `Wait for the budget … completed (exit code 0)` | `ratewait rc=1` TIMEOUT, then `prwait rc=3` **QUOTA — not a verdict** |
+
+Both times the real answer was in the file, and both times reading it was a
+decision rather than something that arrived. The notification is what arrives
+*without being asked for*, and it said exactly what was hoped for.
+
+This is **not** the rule above. `pipestatus` names `cmd ; echo $?` among the shapes
+it must not refuse, and is right to: with no pipeline, the status `$?` holds really
+is the command's. The defect is one level up — in what the **line** exits with — so
+it is a rule of its own, and it is the only one here besides `volatile`'s redirect
+half that reads `run_in_background`.
+
+### There is no escape, because the program already existed
+
+    brief -n 20 -- mutsweep -dir . -- go test ./...
+
+`brief` runs the command, shows that much of its output, and exits with **its**
+status. It was installed the whole time; what found it was not the memory but
+`fleetverbs --match "exit status" --text`, and only with `--text`, since 128
+`package main`s export no symbols. An escape would buy nothing but the defect,
+which is the direction already recorded for `testrun` and `ghbyhand`.
+
+### What it must not refuse, and why `&&` has to stay allowed
+
+    cmd > f 2>&1; echo "rc=$?" >> f     # in the FOREGROUND: the file is read
+    brief -n 20 -- cmd > f 2>&1         # the status is the command's
+    cmd && echo "rc=$?"                 # `&&` short-circuits: a failure survives
+    cmd > f 2>&1                        # nothing was discarded
+    cmd > f; echo done                  # no status was claimed to be recorded
+    echo 'write about ; echo $? here'   # single quotes do not expand
+
+⛔ `&&` has to stay allowed, or the rule has no correct form and gets routed around:
+`brief -n 5 -- a && brief -n 20 -- b` reports both statuses and stops at the first
+failure. `||` is refused, and for the sharpest reason of the lot — it runs the report
+exactly when the command **failed**, which is the case the status was wanted for.
+
+### A backslashed quote does not end the quoting
+
+Reading that rule off a command line needs one notion of *where a statement ends*,
+and the repository had two. Measured at 21:29 on 2026-11-22, while this very rule
+was being added:
+
+    git grep -n "a\"\|b\"" -- f        # refused as a pipeline
+
+zsh reads the whole pattern as **one argument**: inside double quotes `\"` is a
+quote character and `\|` is a backslash and a pipe. `shellcmd.InsideQuotes` had
+honoured that since it was written, and says in a comment that two notions of
+"quoted" in one repository is what the package exists to prevent — while `Stages`
+and `Statements` next door closed the quoting at `\"` and then met a bare `|`.
+`InsideQuotes` had the complementary bug on the same byte: it **stepped over** the
+escaped character and answered *not quoted* about an offset it never visited,
+which is the one answer it must never give by accident.
+
+All three honour the backslash now, a `git grep` with an escaped quote is in the
+corpus as an `allow`, and a real `;` after a closing quote still separates — the
+half that keeps the fix from being a hole.
+
 ## A branch started from a ref nobody refreshed
 
 `git checkout -b work origin/main` reads as "branch from main". It branches from
