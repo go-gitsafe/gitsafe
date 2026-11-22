@@ -174,7 +174,42 @@ told. `ghmerge` therefore reads the pull request body **before any write**:
    merged pull request on exit 3, and then exits 1.
 
 An already-merged pull request is not re-gated. The parser is `issuegate`,
-fuzzed in CI (`FuzzParse`).
+fuzzed in CI (`FuzzParse`, `FuzzStripCodeSpansKeepsEveryLineBreak`).
+
+#### A code span may wrap a line break, and v0.59.0 is where it started to
+
+"Code spans are ignored" above was written for spans that fit on one line.
+CommonMark lets an inline code span contain a line ending, and until v0.59.0 the
+pattern here was `` "`[^`\n]*`" ``, whose character class refused exactly that
+newline — so both halves of a wrapped span were read as prose. Reflowing a
+paragraph to 80 columns moves line endings into spans constantly, and invisibly:
+the diff of a rewrapped paragraph does not show that a span now crosses a line.
+
+Measured on three bodies differing only in where the line broke: spans on one
+line excluded three backticked identifiers (1 reference); the **same three**, in
+one span that wrapped, were all read as issues to dispose of, in a repository
+that does not exist; and a wrapped span holding the only disposition had its
+merely **quoted** `Closes` counted as a real one.
+
+⛔ The third is the one with teeth. GitHub's own parser excludes a code span and
+closes nothing, so the gate would have allowed a merge on a decision the forge
+never carries out — leaving the issue open with a merged pull request pointing at
+it, which is the state this gate exists to prevent. The gate and the forge
+disagreeing about one body is the whole defect class.
+
+Since v0.59.0 a backtick **run** opens a span that only a run of the same length
+closes (that is how one writes a span containing a backtick, and RE2 has no
+backreferences, so this is a scanner rather than a pattern). An unclosed run is
+literal text, and a later run may still open a span. The line breaks a span
+covered are **kept**: `Parse` splits on them and a keyword binds only within its
+own line, so collapsing a wrapped span to one space would let a `Closes` at the
+end of one line reach a reference on the next — the same defect one level down.
+`FuzzStripCodeSpansKeepsEveryLineBreak` asserts that conservation in both
+directions: none lost, and none invented either, since an invented break would
+split a keyword from the reference it owns.
+
+⚠ Callers pinning an older `gitsafe` keep the old reading, so a body written
+against v0.59.0 is judged by whichever version the caller built with.
 
 ### `--wait`: a refusal that carries its own remedy
 
