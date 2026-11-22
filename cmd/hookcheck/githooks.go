@@ -357,7 +357,7 @@ func checkGit(install bool, hooksDir, from string, stdout, stderr io.Writer) int
 		case res == nil || reportGit(h.file, path, res, stdout, stderr) != 0:
 			code = 1
 		case reason != "":
-			fmt.Fprintf(stderr, "%s answers right on every row but is not known to be current (%s): no row can tell these builds apart, so this is UNDETERMINED, not a pass — `hookcheck -git -install` recopies it\n", path, reason)
+			fmt.Fprintf(stderr, "%s answers right on every row but is not known to be current (%s): no row can tell these builds apart, so this is UNDETERMINED, not a pass — `hookcheck -git -install` recopies it; how far behind it is, `staletools -releases` answers\n", path, reason)
 			if code == 0 {
 				code = exitUndetermined
 			}

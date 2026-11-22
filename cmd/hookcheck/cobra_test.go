@@ -17,7 +17,7 @@ func TestEverySpellingOfTheQuestionIsAnswered(t *testing.T) {
 		if code := cliflags.Run(cmd, []string{arg}); code != 0 {
 			t.Errorf("hookcheck %s exited %d\nstderr: %s", arg, code, errb.String())
 		}
-		for _, want := range []string{"--install", "--settings"} {
+		for _, want := range []string{"--install", "--settings", "--git", "staletools -releases", "NOT answered here"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("hookcheck %s does not name %s:\n%s", arg, want, out.String())
 			}

@@ -450,6 +450,16 @@ func RootCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "hookcheck [flags]",
 		Short: "Check that the Bash guard hooks in the settings refuse what they must (-git: the git hooks)",
+		Long: "Check that the Bash guard hooks in the settings refuse what they must.\n\n" +
+			"With -git, judge the ACTIVE git hooks (pre-push, post-checkout) by what they answer: " +
+			"each row asks the hook a question and compares its refusal with the one expected.\n\n" +
+			"Exit 0: every row right and the hook is the source's build. Exit 1: a row wrong, " +
+			"or a hook that cannot run. Exit 3: every row right but the build is not known to be " +
+			"current: the rows only separate builds whose rules differ, so they cannot tell " +
+			"identical-rule builds apart.\n\n" +
+			"\"Is it behind the latest release?\" is NOT answered here, on purpose: " +
+			"`staletools -releases` answers it, and already marks the hook git runs. " +
+			"hookcheck -git does not duplicate it.",
 		// Operands were never read and still are not: they are ignored, as before.
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

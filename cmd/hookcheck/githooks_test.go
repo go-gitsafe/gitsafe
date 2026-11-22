@@ -299,7 +299,7 @@ func TestAnOlderBuildThatAnswersTheSameIsUndeterminedNotGreen(t *testing.T) {
 	if !strings.Contains(out.String(), "is right on all 4") {
 		t.Errorf("the rows are still reported:\n%s", out.String())
 	}
-	for _, want := range []string{"UNDETERMINED", "v0.45.0", "v0.59.0", "not a pass"} {
+	for _, want := range []string{"UNDETERMINED", "v0.45.0", "v0.59.0", "not a pass", "staletools -releases"} {
 		if !strings.Contains(errb.String(), want) {
 			t.Errorf("stderr lacks %q:\n%s", want, errb.String())
 		}

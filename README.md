@@ -599,6 +599,11 @@ and useless, so the exit status says it:
 | 1 | a row answered wrong, a hook is missing, or nothing could be judged |
 | 3 | every row right, but the build differs from the source's (or either has no readable version): UNDETERMINED, not a pass; `-install` recopies it |
 
+"How many releases behind is it?" is deliberately not answered here:
+`staletools -releases` answers it, and already marks the hook git runs
+(`<core.hooksPath>/<hook-name>`). `hookcheck -git` judges behaviour only, and
+does not duplicate it.
+
 A copy older than v0.40.0 reads red (exit 1). The versions are printed beside the
 exit-3 statement as context, never as a verdict on behaviour. A new rule in a
 guard needs a row in `hookcheck`'s `gitCases` the day it ships.
