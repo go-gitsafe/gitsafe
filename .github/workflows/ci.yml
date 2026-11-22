@@ -67,7 +67,7 @@ jobs:
       # covblocks counts BLOCKS, because `go tool cover -func` rounds to one
       # decimal and passes at 99.95%, and it fails on an empty profile.
       # Keep the list equal to `go list -deps ./cmd/guard-bash` (in-module).
-      - name: guard-bash and its rule packages: every block entered
+      - name: "guard-bash and its rule packages, every block entered"
         shell: bash
         run: |
           m=github.com/go-gitsafe/gitsafe
