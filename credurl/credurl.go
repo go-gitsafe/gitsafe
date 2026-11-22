@@ -481,7 +481,7 @@ func entropy(s string) float64 {
 // Such a finding is reported for a person to fix, because a repair that might
 // mean two things is not a repair.
 func Strip(raw string) (string, bool) {
-	f := Inspect(raw)
+	f := inspectFn(raw)
 	if !f.Leak() || f.Scp {
 		return raw, false
 	}
@@ -502,8 +502,13 @@ func Strip(raw string) (string, bool) {
 	// Read the result back rather than trusting the arithmetic. A repair that
 	// reports success without looking is how 117 of these went unnoticed in the
 	// first place.
-	if Inspect(out).Leak() {
+	if inspectFn(out).Leak() {
 		return raw, false
 	}
 	return out, true
 }
+
+// inspectFn is [Inspect], as a variable so a test can feed [Strip] the verdicts
+// its three defensive returns guard against: the arithmetic below agrees with
+// Inspect's own parse, so no real URL reaches them.
+var inspectFn = Inspect

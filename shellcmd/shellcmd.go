@@ -145,9 +145,8 @@ func StatementsSep(cmd string) (stmts []string, seps []string) {
 // this answers false for every offset in one — a guard that is unsure must
 // refuse rather than allow.
 func InsideQuotes(s string, off int) bool {
-	if off < 0 || off >= len(s) {
-		return false
-	}
+	// An offset outside s is never reached by the loop, so `at` stays false: no
+	// bounds check is needed, and none can change the answer.
 	q, subst, at := byte(0), 0, false
 	for i := 0; i < len(s); i++ {
 		if i == off {

@@ -62,6 +62,19 @@ jobs:
       - run: go build ./...
       - run: go test -count=1 ./...
       - run: CGO_ENABLED=1 go test -race -count=1 ./...
+      # cmd/guard-bash and every package it links are the gate every command
+      # passes through; a block no test enters is a rule nobody has seen fire.
+      # covblocks counts BLOCKS, because `go tool cover -func` rounds to one
+      # decimal and passes at 99.95%, and it fails on an empty profile.
+      # Keep the list equal to `go list -deps ./cmd/guard-bash` (in-module).
+      - name: "guard-bash and its rule packages, every block entered"
+        shell: bash
+        run: |
+          m=github.com/go-gitsafe/gitsafe
+          pkgs=$m/cmd/guard-bash,$m/shellcmd,$m/amendmerged,$m/bypass,$m/chainedgate,$m/discard,$m/ghbyhand,$m/plain,$m/literaltick,$m/pipestatus,$m/bgstatus,$m/credurl,$m/secretarg,$m/shellwork,$m/sigpipe,$m/waiveenv,$m/sshweak,$m/stalebase,$m/testrun,$m/volatile
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/go-fleettools/fleettools/cmd/covblocks@v0.157.0
+          go test -count=1 -coverpkg="$pkgs" -coverprofile="$RUNNER_TEMP/cover.out" ./...
+          "$RUNNER_TEMP/bin/covblocks" "$RUNNER_TEMP/cover.out"
 
   docsym:
     name: the README against the code
