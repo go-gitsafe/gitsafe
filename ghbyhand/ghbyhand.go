@@ -171,7 +171,10 @@ var rules = []rule{
 		"ghrel <owner/repo> <tag> delete --confirm <tag>"},
 	{"repo fork", "fork a repository", "ghrepo <owner/repo> fork [--org O] [--name N]"},
 	{"repo edit", "edit a repository's settings",
-		"ghrepo <owner/repo> edit [--description D | --description-file F] [--homepage U] [--topic T]"},
+		"ghrepo <owner/repo> edit [--description D | --description-file F] [--homepage U] [--topic T]; " +
+			"for --enable-issues use ghrepo <owner/repo> issues enable|disable|status"},
+	{"workflow enable", "enable a GitHub Actions workflow",
+		"ghrepo <owner/repo> actions enable (also turns Actions on; a fork's workflows start disabled_fork)"},
 	{"repo rename", "rename a repository",
 		"ghrepo <owner/repo> rename <new-name> --confirm <owner/repo>"},
 	{"repo archive", "archive a repository",
@@ -472,6 +475,21 @@ func checkAPI(st string, words []string) Finding {
 			Act:     "enable or disable a repository's private vulnerability reporting",
 			Instead: "ghrepo <owner/repo> private-reporting enable|disable|status",
 		}
+	case isActionsEnablePath(path):
+		// PUT .../actions/permissions turns Actions on; PUT .../actions/workflows/{id}/enable
+		// enables a workflow a fork left disabled_fork.
+		return Finding{
+			Match:   short(st),
+			Act:     "enable GitHub Actions or one of a repository's workflows",
+			Instead: "ghrepo <owner/repo> actions enable|status",
+		}
+	case isRepoPath(path) && strings.Contains(st, "has_issues"):
+		// PATCH /repos/{o}/{r} -F has_issues=true: a fork starts with issues off.
+		return Finding{
+			Match:   short(st),
+			Act:     "switch a repository's issues tab on or off",
+			Instead: "ghrepo <owner/repo> issues enable|disable|status",
+		}
 	case isAdvisoryPath(path):
 		// POST creates a draft, PATCH publishes or edits one (fleettools ghadvisory).
 		return Finding{
@@ -481,6 +499,26 @@ func checkAPI(st string, words []string) Finding {
 		}
 	}
 	return missing(st, "write to the GitHub API")
+}
+
+// isActionsEnablePath reports whether the path is a repository's Actions
+// permissions switch or one workflow's enable endpoint.
+func isActionsEnablePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	switch len(parts) {
+	case 5:
+		return parts[0] == "repos" && parts[3] == "actions" && parts[4] == "permissions"
+	case 7:
+		return parts[0] == "repos" && parts[3] == "actions" && parts[4] == "workflows" && parts[6] == "enable"
+	}
+	return false
+}
+
+// isRepoPath reports whether the path is a repository itself, the endpoint its
+// settings are patched at.
+func isRepoPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 3 && parts[0] == "repos" && parts[1] != "" && parts[2] != ""
 }
 
 // isAdvisoryPath reports whether the path is a repository's security-advisory
