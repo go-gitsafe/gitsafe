@@ -67,9 +67,9 @@ func TestEachRuleDeniesThroughTheHook(t *testing.T) {
 	for name, tc := range map[string]struct{ cmd, want string }{
 		"bypass":     {`cd /tmp && git push --force origin main`, "Refused"},
 		"discard":    {`git checkout -- .`, "Refused"},
-		"pipestatus": {`go build ./... | head -5; echo status=$?`, "Refused"},
+		"pipestatus": {`go build ./... | head -5; echo status=$?`, "belongs to the last stage of a pipeline"},
 		"stalebase":  {`git checkout -b work origin/main`, "Refused"},
-		"sigpipe":    {`timeout 400 go mod tidy 2>&1 | head -5`, "Refused"},
+		"sigpipe":    {`timeout 400 go mod tidy 2>&1 | head -5`, "SIGPIPE"},
 		"testrun":    {`go test -run 'TestA|TestB' ./x`, "Use instead"},
 		"chainedgate": {`prbody /b.md --repo o/r; gh pr create --repo o/r --title t --body-file /b.md`,
 			"Use instead"},
