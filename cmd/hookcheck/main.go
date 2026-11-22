@@ -178,6 +178,15 @@ var corpus = []struct {
 	{"a skip behind env", "env MUTSWEEP_SKIP=1 gitpush -u origin topic", "refuse"},
 	{"a skip inside bash -c", "bash -c 'BUILDSCAN_SKIP=1 gitpush -u origin topic'", "refuse"},
 	{"a waiver named in a commit message", "git commit -m 'stop setting MODTIDY_WAIVE=1 on pushes'", "allow"},
+	// ⛔⛔ AN ssh WITH ITS CHECKS TURNED OFF ON THE COMMAND LINE (2026-11-22, the
+	// cfarm433 host: key differed from known_hosts, ours was rejected, ssh fell
+	// back to a password prompt, the agent was forwarded). A -o overrides the
+	// config file, so only this parse can refuse it. Keys only.
+	{"ssh with host checks off, the measured command", "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null delavennat@cfarm433.cfarm.net uptime", "refuse"},
+	{"ssh forwarding the agent", "cd /x && ssh -A linuxone uptime", "refuse"},
+	{"rsync over an ssh that asks for a password", "rsync -e \"ssh -o PasswordAuthentication=yes\" a h:b", "refuse"},
+	{"sshpass", "sshpass -p x ssh linuxone uptime", "refuse"},
+	{"plain ssh to a configured host", "ssh linuxone 'uptime'", "allow"},
 	{"an ordinary assignment before a build", "GOFLAGS=-count=1 go build ./...", "allow"},
 
 	// ⛔⛔ AND THIS TABLE ASKED ABOUT `ghbyhand` ON THE DAY IT SHIPPED, which

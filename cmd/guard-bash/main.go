@@ -43,6 +43,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
+	"github.com/go-gitsafe/gitsafe/sshweak"
 	"github.com/go-gitsafe/gitsafe/stalebase"
 	"github.com/go-gitsafe/gitsafe/testrun"
 	"github.com/go-gitsafe/gitsafe/volatile"
@@ -224,6 +225,15 @@ func run(stdin io.Reader, stdout io.Writer) int {
 		return deny(stdout, fmt.Sprintf(
 			"Refused: %s.\n\n%s\n\n%s",
 			f.Why(), f.String(), waiveenv.Advice))
+	}
+	// ⛔⛔ AN ssh THAT TURNS OFF WHAT ssh CHECKS. See [sshweak]. A -o on the
+	// command line overrides ~/.ssh/config, so only this parse can refuse it
+	// (2026-11-22: host key unverified, key rejected, password prompt, agent
+	// forwarded). NO ESCAPE: an unknown or changed key means stop and report.
+	if f := sshweak.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\n%s",
+			f.Why(), f.String(), sshweak.Advice))
 	}
 	// ⛔⛔ A FILTERED TEST RUN WHOSE FILTER NOBODY CHECKS. `ok` is about the
 	// tests that RAN: on 2026-11-09 `go test -run 'TestREADME|TestUsage|TestMain'`

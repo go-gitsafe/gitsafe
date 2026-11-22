@@ -178,6 +178,23 @@ func scan(ws []word) Finding {
 	return Finding{}
 }
 
+// Commands splits a command line into its simple commands, each as the list of
+// its words with the quotes removed. Comments and quoted heredoc bodies are
+// dropped. It is the parse [Check] uses, exported so that another rule reads
+// the line the same way instead of answering "what does this command run?" on
+// its own.
+func Commands(cmd string) [][]string {
+	var out [][]string
+	for _, ws := range commands(shellcmd.StripQuotedHeredocs(cmd)) {
+		texts := make([]string, len(ws))
+		for i, w := range ws {
+			texts[i] = w.text
+		}
+		out = append(out, texts)
+	}
+	return out
+}
+
 // commands splits cmd into simple commands at unquoted ; & | ( ) ` and newlines,
 // dropping comments, and cuts each into words that remember their quoting.
 func commands(cmd string) [][]word {
