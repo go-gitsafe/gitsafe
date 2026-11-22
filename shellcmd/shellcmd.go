@@ -48,8 +48,28 @@ func StripQuotedHeredocs(cmd string) string {
 // ⛔ `||` and `&&` have to be recognised BEFORE a bare `|`, or every `||` reads
 // as a pipeline and `a || b; echo $?` would be refused for nothing.
 func Statements(cmd string) []string {
-	var out []string
+	stmts, _ := StatementsSep(cmd)
+	return stmts
+}
+
+// StatementsSep is [Statements] and the separator that ENDED each one: seps[i]
+// is what joins stmts[i] to stmts[i+1], and is "" for the last statement.
+//
+// ⛔ WHICH SEPARATOR IT IS DECIDES WHOSE EXIT STATUS SURVIVES, which is why
+// this exists beside [Statements] rather than inside a second splitter. With
+// `&&` a failing command short-circuits, so the compound's status IS that
+// command's; with `;`, `||` or a newline the next statement runs regardless and
+// the compound's status is the LAST one's. [bgstatus] asks exactly that
+// question, and asking it of its own parse would be two notions of "statement"
+// in one repository — the thing this package exists to prevent (see
+// [InsideQuotes] for the measured case).
+func StatementsSep(cmd string) (stmts []string, seps []string) {
 	cur := &strings.Builder{}
+	end := func(sep string) {
+		stmts = append(stmts, cur.String())
+		seps = append(seps, sep)
+		cur.Reset()
+	}
 	q := byte(0)
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
@@ -65,12 +85,10 @@ func Statements(cmd string) []string {
 			q = c
 			cur.WriteByte(c)
 		case ';', '\n':
-			out = append(out, cur.String())
-			cur.Reset()
+			end(string(c))
 		case '&':
 			if i+1 < len(cmd) && cmd[i+1] == '&' {
-				out = append(out, cur.String())
-				cur.Reset()
+				end("&&")
 				i++
 				continue
 			}
@@ -78,8 +96,7 @@ func Statements(cmd string) []string {
 		case '|':
 			if i+1 < len(cmd) && cmd[i+1] == '|' {
 				// `||` ends a statement and is NOT a pipeline.
-				out = append(out, cur.String())
-				cur.Reset()
+				end("||")
 				i++
 				continue
 			}
@@ -88,8 +105,8 @@ func Statements(cmd string) []string {
 			cur.WriteByte(c)
 		}
 	}
-	out = append(out, cur.String())
-	return out
+	end("")
+	return stmts, seps
 }
 
 // InsideQuotes reports whether the byte at off is inside quoting that stops
