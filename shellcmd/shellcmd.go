@@ -73,6 +73,21 @@ func StatementsSep(cmd string) (stmts []string, seps []string) {
 	q := byte(0)
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
+		// ⛔ `\"` DOES NOT END THE QUOTING, and nor does `\\`. Measured
+		// 2026-11-22 at 21:29, on this session's own command:
+		// `git grep -n "a\"\|b\"" -- f` was refused as a pipeline, because the
+		// loop here closed the quote at `\"` and then met a bare `|`. The shell
+		// does not: the whole pattern is one argument. [InsideQuotes] has
+		// honoured the backslash since it was written, which is precisely the
+		// two-notions-of-quoted drift its own comment says this package exists
+		// to prevent. Inside SINGLE quotes a backslash is an ordinary
+		// character, so the skip is for `"` and for unquoted text only.
+		if c == '\\' && q != '\'' && i+1 < len(cmd) {
+			cur.WriteByte(c)
+			i++
+			cur.WriteByte(cmd[i])
+			continue
+		}
 		if q != 0 {
 			cur.WriteByte(c)
 			if c == q {
@@ -145,6 +160,17 @@ func InsideQuotes(s string, off int) bool {
 			}
 		case c == '\\' && q == '"':
 			// `\"` does not end the quoting; nor does `\\`.
+			//
+			// ⛔ AND THE BYTE IT ESCAPES IS STILL INSIDE THE QUOTES. Skipping it
+			// without answering about it reported the `|` in
+			// `git grep -n "a\"\|b\"" -- f` as NOT quoted, because the loop
+			// never visited that offset at all — the one answer this function
+			// must never give by accident, since "unsure" is meant to refuse.
+			// Measured 2026-11-22 against [Stages], which had the complementary
+			// bug on the same input.
+			if i+1 == off {
+				at = subst == 0
+			}
 			i++
 		case q == '"' && c == '$' && i+1 < len(s) && s[i+1] == '(':
 			subst++
@@ -183,13 +209,20 @@ func HasPipe(st string) bool {
 //
 // A statement with no pipe comes back as a single stage, so a caller can always
 // speak of stages[0] as the producer. `grep "a|b" f` is one stage: a pipe inside
-// quotes is an argument, not a pipeline.
+// quotes is an argument, not a pipeline — and so is `grep "a\"\|b\"" f`, which
+// is the shape this loop used to get wrong: see [StatementsSep].
 func Stages(st string) []string {
 	var out []string
 	cur := &strings.Builder{}
 	q := byte(0)
 	for i := 0; i < len(st); i++ {
 		c := st[i]
+		if c == '\\' && q != '\'' && i+1 < len(st) {
+			cur.WriteByte(c)
+			i++
+			cur.WriteByte(st[i])
+			continue
+		}
 		if q != 0 {
 			cur.WriteByte(c)
 			if c == q {

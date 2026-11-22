@@ -356,6 +356,13 @@ var corpus = []struct {
 	{"a quoted heredoc tag with a hyphen", "cat <<'END-MSG'\nuse " + tick + "x" + tick + "\nEND-MSG", "allow"},
 	{"a fake heredoc opener inside quotes", "echo \"<<'EOF'\"\necho " + tick + "date" + tick, "refuse"},
 	{"the escape covers its own statement only", "GITSAFE_ALLOW_BACKTICK=1 true; echo " + tick + "date" + tick, "refuse"},
+	// ⛔ A FALSE REFUSAL, MEASURED ON THIS BINARY AT 21:29 ON 2026-11-22, while
+	// the rule above was being added to it. zsh reads the whole pattern as ONE
+	// argument — inside double quotes `\"` is a quote and `\|` is a backslash
+	// and a pipe — but `shellcmd.Stages` closed the quoting at `\"` and then met
+	// a bare `|`, so a `git grep` was refused as a pipeline. `InsideQuotes` had
+	// honoured the backslash all along: the drift its own comment warns about.
+	{"a backslashed quote in a grep pattern is not a pipeline", `git grep -n "a\"\|b\"" -- f`, "allow"},
 	// ⛔ THE CONTROL FOR THE bgstatus ROWS, and the reason they mean anything: in
 	// the FOREGROUND this exact text must be allowed — the file is read, nothing
 	// is lost, and `shellwork` advises this very shape. If this row ever turns

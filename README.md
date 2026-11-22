@@ -1186,6 +1186,27 @@ which is the direction already recorded for `testrun` and `ghbyhand`.
 failure. `||` is refused, and for the sharpest reason of the lot — it runs the report
 exactly when the command **failed**, which is the case the status was wanted for.
 
+### A backslashed quote does not end the quoting
+
+Reading that rule off a command line needs one notion of *where a statement ends*,
+and the repository had two. Measured at 21:29 on 2026-11-22, while this very rule
+was being added:
+
+    git grep -n "a\"\|b\"" -- f        # refused as a pipeline
+
+zsh reads the whole pattern as **one argument**: inside double quotes `\"` is a
+quote character and `\|` is a backslash and a pipe. `shellcmd.InsideQuotes` had
+honoured that since it was written, and says in a comment that two notions of
+"quoted" in one repository is what the package exists to prevent — while `Stages`
+and `Statements` next door closed the quoting at `\"` and then met a bare `|`.
+`InsideQuotes` had the complementary bug on the same byte: it **stepped over** the
+escaped character and answered *not quoted* about an offset it never visited,
+which is the one answer it must never give by accident.
+
+All three honour the backslash now, a `git grep` with an escaped quote is in the
+corpus as an `allow`, and a real `;` after a closing quote still separates — the
+half that keeps the fix from being a hole.
+
 ## A branch started from a ref nobody refreshed
 
 `git checkout -b work origin/main` reads as "branch from main". It branches from
