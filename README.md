@@ -319,7 +319,7 @@ command" and exited 2 with the flag set never seeing it.
 of it.** `credscan` knew three of the four and missed `-help`, so `credscan
 -help` printed the same usage text as `credscan -h` and exited **2** instead of
 0; `gitpush` knew two, `-h` and `--help`; `ghpkg` and `ghscopes` knew none.
-`cliflags.IsHelpRequest` is the one list.
+`helparg.Is` is the one list.
 
 ### Moving to cobra without breaking every invocation ever written down
 
@@ -379,6 +379,8 @@ is a failure by elimination.
 | still on `flag` | none: `cliflags.ParseFlags` and `cliflags.IsHelpError`, the helpers for the `flag` package, were removed with the last of them |
 | **deliberately not cobra** | `gitpush` `guard-bash` `git-credential-tokenfile` `git-pre-push-guard` `git-post-checkout-guard` |
 
+<!-- docsym:allow cliflags.ParseFlags cliflags.IsHelpError -- the row names them to say they were REMOVED, so the code is right not to have them -->
+
 That last row is not laziness. `gitpush` forwards its whole argument list to
 `git push`, so `--force-with-lease` and `-u` are **operands it must not
 interpret**; the hooks are handed their arguments by git; `guard-bash` and the
@@ -420,7 +422,7 @@ answer no question at all — measured by reading every import of the package.
 them: one answers "is the part before the `@` a secret or a username" and holds
 the one table of issuer prefixes every guard here asks, one walks a machine and
 repairs what it finds, one hides
-secrets by their shape wherever they appear (`redact.Find` also says where
+secrets by their shape wherever they appear (`redact.Redactor.Find` also says where
 each one lies and what kind it is — a literal, an issuer's token, a URL's
 userinfo — without returning the value, for callers that mask a stream or must
 report what they masked; the go-llmflow gateway's `hide_secrets` guardrail is
