@@ -560,6 +560,35 @@ cp "$(go env GOPATH)/bin/git-pre-push-guard" ~/.config/git/hooks/pre-push
 cp "$(go env GOPATH)/bin/git-post-checkout-guard" ~/.config/git/hooks/post-checkout
 ```
 
+### Are the installed hooks still the current guards?
+
+Those two files are COPIES, and a copy that has fallen behind still works — it
+only judges with older rules, and nothing noticed. `hookcheck -git` judges them
+the way `hookcheck` judges the Bash guards, by what they ANSWER and not by a
+version string:
+
+```
+hookcheck -git             # run the ACTIVE pre-push and post-checkout, report
+hookcheck -git -install    # recopy the ones that answer wrongly, then report
+```
+
+It runs the file git itself would run — the one NAMED `pre-push` /
+`post-checkout` in the global `core.hooksPath` (or `-hooks-dir`), never a
+homonym elsewhere — in throwaway repositories under the user cache directory:
+a credential in the remote URL, a write to `main`, a commit holding a 1 MiB
+blob (the rule added in v0.40.0), and, as the half that keeps a guard from being
+worked around, an ordinary push and a clean checkout that must go through. The
+version the file was built from is printed as context, never as the verdict.
+
+`-install` copies from `PATH` (or `-from <dir>`), keeps the old file as
+`<name>.bak-<stamp>`, leaves a hook that already answers right untouched, and
+fails if the copy still answers wrong — a stale source is not a cure.
+
+Said plainly: a probe tells two builds apart only where their rules differ. The
+guards' code is identical from v0.40.0 on, so a copy of any of those answers the
+same as the current one and reads green; a copy older than v0.40.0 reads red. A
+new rule in a guard needs a row in `hookcheck`'s `gitCases` the day it ships.
+
 ## What the hook refuses, and what it deliberately allows
 
 **A URL that carries a credential.** The offending string is never printed —
