@@ -62,8 +62,48 @@ jobs:
       - run: go build ./...
       - run: go test -count=1 ./...
       - run: CGO_ENABLED=1 go test -race -count=1 ./...
-  # redact.Find is fed whatever a language model or its user writes, through
-  # the go-llmflow gateway's hide_secrets guard: untrusted input.
+
+  docsym:
+    name: the README against the code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - run: go version
+      # ⛔ --fail IS THE WHOLE LANE. docsym REPORTS by default and exits 0:
+      # main.go:200 is `case o.fail && missing > 0: return 1`, so without the
+      # flag a README naming API the code lost is a GREEN check that printed
+      # the defect. Measured on this repository, 2026-11-22, with the same
+      # pinned binary: the tree this lane lands on top of exited 1 with 4
+      # MISSING, and the fixed tree exits 0 with 0 MISSING and 2 allowed.
+      # Both halves of that A/B matter -- a gate nothing has ever refused is
+      # not known to refuse anything.
+      #
+      # It also exits 2 when a module cannot be read AT ALL, or when no module
+      # was read, so a scan that found nothing to look at cannot pass as a
+      # clean one.
+      #
+      # ⛔ WHY A LANE AND NOT A NOTE. Four stale identifiers had accumulated by
+      # v0.61.0, two of them for a helper this repository DELETED on purpose
+      # and documented deleting. Nobody introduced them in one careless commit:
+      # they are what a README does when the code moves and no check reads
+      # both. The deliberate ones are kept, with their reason, by a
+      # `docsym:allow` comment in the README -- docsym ignores an allow that
+      # carries no reason, so the reason is not optional.
+      #
+      # Pinned, and docsym has not changed since that tag
+      # (`git log v0.157.0..HEAD -- cmd/docsym` is empty), so this is the
+      # binary the figures above were measured with. Renovate's customManager
+      # for this org reads pins inside `run:` blocks.
+      - name: docsym --fail
+        run: |
+          set -eu
+          go install github.com/go-fleettools/fleettools/cmd/docsym@v0.157.0
+          "$(go env GOPATH)/bin/docsym" --fail .
+
+  # redact.Redactor.Find is fed whatever a language model or its user writes,
+  # through the go-llmflow gateway's hide_secrets guard: untrusted input.
   fuzz:
     name: fuzz smoke ${{ matrix.target }}
     runs-on: ubuntu-latest
