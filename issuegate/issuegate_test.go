@@ -10,6 +10,25 @@ import (
 
 const self = "go-gitsafe/gitsafe"
 
+// ⛔⛔ THE KIND MUST BE INSIDE THE COMPARISON. This table compared
+// `fmt.Sprint(got) != fmt.Sprint(want)`, and Ref.String() prints only
+// `owner/repo#N` -- the Kind is not in it. So every Closes/Refs/Bare expectation
+// in this file was unasserted: the rows that exist ONLY to pin a Kind ("closes
+// only the next one", "duplicate: closing wins", "duplicate: refs over bare",
+// the nine keywords) passed whatever Parse decided, and this is the gate that
+// answers "does merging this close the issue?".
+//
+// Found on 2026-11-22 while break-checking a different fix (#165): a deliberately
+// broken Strip made `Closes ...span... #5` come back as Closes, and the row
+// asserting Bare PASSED. A witness that cannot fail is not a witness.
+func withKind(rs []Ref) string {
+	parts := make([]string, 0, len(rs))
+	for _, r := range rs {
+		parts = append(parts, fmt.Sprintf("%s(%s)", r, r.Kind))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
+}
+
 func TestParse(t *testing.T) {
 	cases := []struct {
 		name, body string
@@ -34,6 +53,35 @@ func TestParse(t *testing.T) {
 		{"unterminated fence", "a #1\n```\n#2", []Ref{{self, 1, Bare}}},
 		{"tilde fence", "~~~\n#2\n~~~", nil},
 		{"code span", "use `#8` or `Closes #9` here", nil},
+		// ⛔ A CODE SPAN MAY WRAP A LINE BREAK (CommonMark), and reflowing a
+		// paragraph to 80 columns moves line breaks into spans invisibly -- the
+		// diff of a rewrapped paragraph does not show it. The pattern this
+		// replaced, "`[^`\n]*`", refused that newline, so both halves of a
+		// wrapped span were read as prose (#165).
+		{"code span wrapping a line break", "use `#8 and\n#9` here", nil},
+		// ⛔⛔ THE HALF WITH TEETH. A merely QUOTED closing keyword counted as a
+		// real decision, and GitHub's own parser excludes the span and closes
+		// nothing: the gate would have allowed a merge on a disposition the
+		// forge never carries out, leaving the issue open with a merged pull
+		// request pointing at it -- the state openfixed then reports as needing
+		// a human.
+		{"a quoted closing keyword inside a wrapped span decides nothing",
+			"see `a span, Closes #204\nand it keeps going` here", nil},
+		// ⛔⛔ AND THE LINE BREAKS A SPAN COVERED MUST SURVIVE IT. Parse splits
+		// on them and a keyword binds only within its own line, so collapsing a
+		// wrapped span to one space would let this `Closes` reach across to #5
+		// -- which is go-fleettools/fleettools#205 exactly (a heading bound to a
+		// reference two lines below). Bare is the whole point of this row.
+		{"a wrapped span keeps the lines it covered apart", "Closes `x\ny` #5", []Ref{{self, 5, Bare}}},
+		// An unclosed run is literal text, and a later run may still open a span.
+		{"an unclosed backtick is text, not a span", "a ` and #5 here", []Ref{{self, 5, Bare}}},
+		{"a run closes only on a run of its own length", "``a `b` c`` then #7", []Ref{{self, 7, Bare}}},
+		// A run pairs with the NEXT run of its own length, not the last one: the
+		// three backticks here make a span of " #4 and " and leave the third
+		// literal, so #4 is code and #5 is prose. Written expecting the
+		// opposite, and corrected by this row going red -- "unclosed" was a
+		// guess about a body that has an even pair in it.
+		{"a run pairs with the next run of its length, not the last", "` #4 and `#5` after", []Ref{{self, 5, Bare}}},
 		{"html comment", "<!-- Closes #1 -->\nbody", nil},
 		{"pull request url", "see https://github.com/o/r/pull/12#issuecomment-5 and http://x.y/#3", nil},
 		{"issue url after keyword", "Fixes https://github.com/o/r/issues/4", []Ref{{"o/r", 4, Closes}}},
@@ -47,8 +95,8 @@ func TestParse(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := Parse(c.body, self)
-			if fmt.Sprint(got) != fmt.Sprint(c.want) {
-				t.Errorf("Parse(%q)\n got %v\nwant %v", c.body, got, c.want)
+			if withKind(got) != withKind(c.want) {
+				t.Errorf("Parse(%q)\n got %s\nwant %s", c.body, withKind(got), withKind(c.want))
 			}
 		})
 	}
@@ -222,6 +270,9 @@ func FuzzParse(f *testing.F) {
 	for _, s := range []string{
 		"Closes #1", "Refs #2, #3 and #4", "```\n#1\n```", "`#1`", "<!-- #1", "Fixes o/r#9",
 		"https://github.com/o/r/issues/4", "\x00#1", "Closes ", "#", "~~~", "a/b#", "Fixes: o/r#1, resolves #2 & #3",
+		// Code-span shapes, which decide whether a reference is prose (#165).
+		"`#1 and\n#2`", "Closes `x\ny` #5", "``#1 `#2` #3``", "` #1 and `#2` after",
+		"`", "``", "```", "`#1", "#1`", "`\n`#2`\n`",
 	} {
 		f.Add(s)
 	}
@@ -245,8 +296,43 @@ func FuzzParse(f *testing.F) {
 				t.Fatalf("%s is in no way in %q", r, body)
 			}
 		}
-		if again := Parse(body, self); fmt.Sprint(again) != fmt.Sprint(refs) {
-			t.Fatalf("not deterministic")
+		// ⛔ The KIND is in this comparison, for the reason given above withKind:
+		// `fmt.Sprint` of a []Ref does not print it, so determinism was asserted
+		// about the numbers only -- a Parse that answered Closes and then Refs
+		// for the same body would have passed.
+		if again := Parse(body, self); withKind(again) != withKind(refs) {
+			t.Fatalf("not deterministic: %s then %s", withKind(refs), withKind(again))
+		}
+	})
+}
+
+// FuzzStripCodeSpansKeepsEveryLineBreak is the invariant the wrapped-span fix
+// turns on, and the one whose absence would be a silent regression of
+// go-fleettools/fleettools#205.
+//
+// Parse splits Strip's output on newlines and a closing keyword binds only
+// within its own line. So removing a span that WRAPPED a line break must leave
+// that break behind: collapse it and a `Closes` at the end of one line reaches a
+// reference on the next, which is a merge gate closing an issue nobody said to
+// close. Line endings are therefore conserved exactly -- none added either,
+// since an invented break would split a keyword from the reference it owns.
+//
+// It also says the scanner terminates and never panics on arbitrary runs of
+// backticks, which is the part a pattern used to guarantee for free.
+func FuzzStripCodeSpansKeepsEveryLineBreak(f *testing.F) {
+	for _, s := range []string{
+		"`#1 and\n#2`", "Closes `x\ny` #5", "``a `b` c``", "`", "``", "```\n```",
+		"`\n`\n`", "no backticks at all", "", "`a`b`c`", "\n\n`\n\n", "`\r\n`",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, body string) {
+		out := stripCodeSpans(body)
+		if got, want := strings.Count(out, "\n"), strings.Count(body, "\n"); got != want {
+			t.Fatalf("%d line break(s) out of %d in:\n%q\ngave:\n%q", got, want, body, out)
+		}
+		if again := stripCodeSpans(out); strings.Count(again, "\n") != strings.Count(out, "\n") {
+			t.Fatalf("a second pass moved the line breaks of %q", out)
 		}
 	})
 }
