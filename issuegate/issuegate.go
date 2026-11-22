@@ -66,7 +66,6 @@ const MaxRefs = 50
 var (
 	fence       = regexp.MustCompile("(?s)(```|~~~).*?(```|~~~|\\z)")
 	htmlComment = regexp.MustCompile(`(?s)<!--.*?(-->|\z)`)
-	codeSpan    = regexp.MustCompile("`[^`\n]*`")
 	// An issue URL is a reference with a long spelling; GitHub honours it after
 	// a keyword. Any other URL (a pull request, a commit, a page) is dropped,
 	// because `#12` inside it is an anchor or a PR number, not an issue.
@@ -83,10 +82,82 @@ var (
 func Strip(body string) string {
 	body = fence.ReplaceAllString(body, "\n")
 	body = htmlComment.ReplaceAllString(body, " ")
-	body = codeSpan.ReplaceAllString(body, " ")
+	body = stripCodeSpans(body)
 	body = issueURL.ReplaceAllString(body, "$1#$2")
 	// Keep the short spelling the line above produced: only URLs are removed.
 	return anyURL.ReplaceAllString(body, " ")
+}
+
+// stripCodeSpans removes inline code spans, INCLUDING THE ONES THAT WRAP A LINE
+// BREAK. CommonMark lets a code span contain a line ending, and reflowing a
+// paragraph to 80 columns moves line endings into spans all the time, invisibly:
+// the diff of a rewrapped paragraph does not show that a span now crosses a
+// line. This was a regexp, "`[^`\n]*`", whose character class refused the very
+// newline the spec allows, and both halves of a wrapped span were then read as
+// prose. Measured on 2026-11-22 with three bodies differing only in where the
+// line broke (go-gitsafe/gitsafe#165):
+//
+//   - one line:  three backticked identifiers excluded, 1 reference, rc 0;
+//   - wrapped:   the SAME three read as issues to dispose of, rc 1 -- and the
+//     author is asked about a repository that does not exist;
+//   - wrapped, holding the only disposition: a merely QUOTED `Closes #204`
+//     counted as a real one. That is the half with teeth, because GitHub's own
+//     parser excludes the span and closes nothing: the gate would allow a merge
+//     on a decision the forge never carries out.
+//
+// A backtick run opens a span that only a run of THE SAME LENGTH closes -- that
+// is how one writes a span containing a backtick -- which needs a scanner rather
+// than a pattern, since RE2 has no backreferences. An unclosed run is literal
+// text, and a later run may still open a span, so scanning resumes just after
+// it.
+//
+// ⛔ THE NEWLINES A SPAN COVERED ARE KEPT. Parse splits on them and a closing
+// keyword binds only to a reference on its OWN line, so collapsing a wrapped
+// span to one space would let a keyword at the end of one line reach a
+// reference on the next -- which is go-fleettools/fleettools#205 exactly, where
+// a heading bound to a reference two lines below. The replacement therefore
+// carries the same number of line endings as the span it removes.
+func stripCodeSpans(body string) string {
+	var b strings.Builder
+	b.Grow(len(body))
+	for i := 0; i < len(body); {
+		if body[i] != '`' {
+			b.WriteByte(body[i])
+			i++
+			continue
+		}
+		n := 1
+		for i+n < len(body) && body[i+n] == '`' {
+			n++
+		}
+		content := i + n
+		end, endLen := -1, 0
+		for j := content; j < len(body); {
+			if body[j] != '`' {
+				j++
+				continue
+			}
+			k := 1
+			for j+k < len(body) && body[j+k] == '`' {
+				k++
+			}
+			if k == n {
+				end, endLen = j, k
+				break
+			}
+			j += k
+		}
+		if end < 0 {
+			b.WriteString(body[i:content])
+			i = content
+			continue
+		}
+		b.WriteByte(' ')
+		b.WriteString(strings.Repeat("\n", strings.Count(body[content:end], "\n")))
+		b.WriteByte(' ')
+		i = end + endLen
+	}
+	return b.String()
 }
 
 // Parse returns the distinct issue references of body, in order of first
