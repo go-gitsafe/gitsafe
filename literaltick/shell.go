@@ -51,28 +51,7 @@ func CheckFor(shell, cmd string) Finding {
 		// A backtick the grammar says is evaluated. The escape covers it only when
 		// every backtick the older reading evaluates carries the prefix, and there
 		// is at least one.
-		off, evaluated := -1, 0
-		for i := 0; i < len(cmd); i++ {
-			if cmd[i] != '`' {
-				continue
-			}
-			switch cls[i] {
-			case shellcmd.ClassSingle, shellcmd.ClassComment,
-				shellcmd.ClassHeredocQuoted, shellcmd.ClassEscaped:
-				continue
-			}
-			evaluated++
-			if !escapedByPrefix(cmd, cls, i) && off < 0 {
-				off = i
-			}
-		}
-		if evaluated > 0 && off < 0 {
-			return Finding{}
-		}
-		if off < 0 {
-			off = first
-		}
-		return Finding{Off: off, Context: window(cmd, off), InDoubleQuotes: cls[off] == shellcmd.ClassDouble}
+		return refusedAt(cmd, cls, first)
 	}
 	// Uncertain: nothing about the classes can be trusted, so the escape must
 	// cover every backtick there is.
@@ -82,4 +61,34 @@ func CheckFor(shell, cmd string) Finding {
 		}
 	}
 	return Finding{}
+}
+
+// refusedAt judges a command the grammar refused, by the classes of the older
+// reading. It is a function of its own so that the case no known command
+// reaches -- the grammar refuses, yet the older reading finds no evaluated
+// backtick at all -- can be driven with classes written by hand. That case
+// refuses at the first backtick: the grammar's word stands.
+func refusedAt(cmd string, cls []byte, first int) Finding {
+	off, evaluated := -1, 0
+	for i := 0; i < len(cmd); i++ {
+		if cmd[i] != '`' {
+			continue
+		}
+		switch cls[i] {
+		case shellcmd.ClassSingle, shellcmd.ClassComment,
+			shellcmd.ClassHeredocQuoted, shellcmd.ClassEscaped:
+			continue
+		}
+		evaluated++
+		if !escapedByPrefix(cmd, cls, i) && off < 0 {
+			off = i
+		}
+	}
+	if evaluated > 0 && off < 0 {
+		return Finding{}
+	}
+	if off < 0 {
+		off = first
+	}
+	return Finding{Off: off, Context: window(cmd, off), InDoubleQuotes: cls[off] == shellcmd.ClassDouble}
 }

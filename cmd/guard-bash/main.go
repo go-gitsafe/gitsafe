@@ -70,7 +70,14 @@ type decision struct {
 	} `json:"hookSpecificOutput"`
 }
 
-func main() { os.Exit(run(os.Stdin, os.Stdout)) }
+// osExit and marshal are variables so a test can reach main's exit and deny's
+// marshal failure, which no real input produces.
+var (
+	osExit  = os.Exit
+	marshal = json.Marshal
+)
+
+func main() { osExit(run(os.Stdin, os.Stdout)) }
 
 // run always exits 0. A guard that fails closed on its own bug would block
 // every command on the machine; one that fails open lets through exactly the
@@ -340,7 +347,7 @@ func deny(stdout io.Writer, reason string) int {
 	d.HookSpecificOutput.HookEventName = "PreToolUse"
 	d.HookSpecificOutput.PermissionDecision = "deny"
 	d.HookSpecificOutput.PermissionDecisionReason = reason
-	out, err := json.Marshal(d)
+	out, err := marshal(d)
 	if err != nil {
 		return 0
 	}

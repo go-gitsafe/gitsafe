@@ -456,16 +456,6 @@ func Classify(cmd string) []byte {
 	return cls
 }
 
-// oddBackslashes reports whether the byte at k is preceded by an odd number of
-// backslashes, which makes it escaped and therefore literal.
-func oddBackslashes(s string, k int) bool {
-	n := 0
-	for j := k - 1; j >= 0 && s[j] == '\\'; j-- {
-		n++
-	}
-	return n%2 == 1
-}
-
 // wordBefore returns the shell word that ENDS at j and where it starts. A word
 // is a run of unquoted, unescaped bytes with no blank or operator in it, and it
 // must begin at a boundary; otherwise ("", j) says there is no word to judge.

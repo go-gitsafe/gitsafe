@@ -107,13 +107,9 @@ func check(cmd string) Finding {
 }
 
 func scan(ws []word) Finding {
-	afterEnv, skipNext, duration := false, false, false
+	afterEnv, duration := false, false
 	for i := 0; i < len(ws); i++ {
 		w := ws[i]
-		if skipNext {
-			skipNext = false
-			continue
-		}
 		if m := assignRe.FindStringSubmatch(w.raw); m != nil {
 			if IsWaiverName(m[1]) {
 				return Finding{Var: m[1], Match: w.raw}

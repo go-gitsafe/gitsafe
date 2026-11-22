@@ -285,10 +285,10 @@ func checkWith(cmd string, heredocs bool, skip string) Result {
 				}
 			}
 			pending = pending[:0]
+			// pos is at least i+2 here (a pending heredoc means a `<<` came before
+			// this newline, and each terminator scan advances pos past its line), so
+			// i never goes below the newline it started on.
 			i = pos - 2 // the loop's i++ lands on the newline that ended the last terminator
-			if i < 0 {
-				i = 0
-			}
 		case '<':
 			if heredocs && i+2 < len(cmd) && cmd[i+1] == '<' && cmd[i+2] == '<' {
 				i += 2 // here-string: an ordinary word follows
