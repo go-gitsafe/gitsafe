@@ -72,10 +72,10 @@ func aimProbes(t *testing.T) {
 // kind of wrong hook must fail — on the rows that tell it apart.
 func TestGitHooksAreJudgedByWhatTheyAnswer(t *testing.T) {
 	aimProbes(t)
-	hooks, _ := realGuards(t)
+	hooks, src := realGuards(t)
 
 	var out, errb bytes.Buffer
-	if code := run([]string{"-git", "-hooks-dir", hooks}, &out, &errb); code != 0 {
+	if code := run([]string{"-git", "-hooks-dir", hooks, "-from", src}, &out, &errb); code != 0 {
 		t.Fatalf("the current guards must be right, got %d\n%s%s", code, out.String(), errb.String())
 	}
 	if !strings.Contains(out.String(), "built from gitsafe") {
@@ -128,10 +128,10 @@ func TestAHookThatCannotStartIsNotARefusal(t *testing.T) {
 // including as a relative path (the fixture is the working directory).
 func TestARelativeHooksDirIsResolvedBeforeTheFixtureBecomesTheWorkingDirectory(t *testing.T) {
 	aimProbes(t)
-	hooks, _ := realGuards(t)
+	hooks, src := realGuards(t)
 	t.Chdir(filepath.Dir(hooks))
 	var out, errb bytes.Buffer
-	if code := run([]string{"-git", "-hooks-dir", filepath.Base(hooks)}, &out, &errb); code != 0 {
+	if code := run([]string{"-git", "-hooks-dir", filepath.Base(hooks), "-from", src}, &out, &errb); code != 0 {
 		t.Fatalf("code = %d\n%s%s", code, out.String(), errb.String())
 	}
 }
@@ -252,6 +252,101 @@ func TestGitWithoutAHooksPathIsAFailure(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "core.hooksPath is not set") {
 		t.Errorf("stderr: %s", errb.String())
+	}
+}
+
+// oldCopies makes a hooks directory whose two hooks answer exactly as the real
+// guards (they exec them) but are a different FILE, marked as an older build.
+func oldCopies(t *testing.T, src string) string {
+	t.Helper()
+	d := t.TempDir()
+	for _, h := range gitHookNames {
+		body := "#!/bin/sh\n# OLDBUILD\nexec " + filepath.Join(src, h.binary) + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(d, h.file), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
+// versionsByMark stands the marked copies in as v0.45.0 builds and everything
+// else as v0.59.0, as on 2026-11-22.
+func versionsByMark(t *testing.T) {
+	t.Helper()
+	old := buildVersion
+	buildVersion = func(path string) string {
+		b, _ := os.ReadFile(path)
+		if bytes.Contains(b, []byte("OLDBUILD")) {
+			return "v0.45.0"
+		}
+		return "v0.59.0"
+	}
+	t.Cleanup(func() { buildVersion = old })
+}
+
+// THE INCIDENT. The active hooks were v0.45.0 beside v0.59.0 binaries, and
+// every row passes for both because the guards' rules did not change. It must
+// not read as a pass: exit 3, the statement says why, the rows stay printed.
+func TestAnOlderBuildThatAnswersTheSameIsUndeterminedNotGreen(t *testing.T) {
+	aimProbes(t)
+	_, src := realGuards(t)
+	hooks := oldCopies(t, src)
+	versionsByMark(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-git", "-hooks-dir", hooks, "-from", src}, &out, &errb); code != exitUndetermined {
+		t.Fatalf("code = %d, want %d\n%s%s", code, exitUndetermined, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "is right on all 4") {
+		t.Errorf("the rows are still reported:\n%s", out.String())
+	}
+	for _, want := range []string{"UNDETERMINED", "v0.45.0", "v0.59.0", "not a pass"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errb.String())
+		}
+	}
+	if m, _ := filepath.Glob(filepath.Join(hooks, "*.bak-*")); len(m) != 0 {
+		t.Errorf("without -install nothing is written: %v", m)
+	}
+}
+
+// -install recopies what is undetermined too, and then it is decided.
+func TestInstallRecopiesAnUndeterminedBuildAndThenItIsGreen(t *testing.T) {
+	aimProbes(t)
+	_, src := realGuards(t)
+	hooks := oldCopies(t, src)
+	versionsByMark(t)
+	old := timeNow
+	timeNow = func() time.Time { return time.Date(2026, 11, 22, 21, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { timeNow = old })
+	var out, errb bytes.Buffer
+	if code := run([]string{"-git", "-install", "-hooks-dir", hooks, "-from", src}, &out, &errb); code != 0 {
+		t.Fatalf("code = %d\n%s%s", code, out.String(), errb.String())
+	}
+	if strings.Count(out.String(), "recopied") != 2 {
+		t.Errorf("both hooks are recopied:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(hooks, "pre-push.bak-20261122-210000")); err != nil {
+		t.Errorf("the old copy is kept: %v", err)
+	}
+	if strings.Contains(errb.String(), "UNDETERMINED") {
+		t.Errorf("after the recopy it is the source's build:\n%s", errb.String())
+	}
+}
+
+// A file with no build information cannot be vouched for either, and neither
+// can a missing source: both are undetermined, never green.
+func TestAnUnreadableVersionIsUndetermined(t *testing.T) {
+	aimProbes(t)
+	_, src := realGuards(t)
+	hooks := oldCopies(t, src)
+	for name, from := range map[string]string{"script hook": src, "source missing": t.TempDir()} {
+		var out, errb bytes.Buffer
+		if code := run([]string{"-git", "-hooks-dir", hooks, "-from", from}, &out, &errb); code != exitUndetermined {
+			t.Errorf("%s: code = %d, want %d\n%s%s", name, code, exitUndetermined, out.String(), errb.String())
+		}
+		if !strings.Contains(errb.String(), "version unreadable") {
+			t.Errorf("%s: the unreadable version is named:\n%s", name, errb.String())
+		}
 	}
 }
 

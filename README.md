@@ -581,13 +581,27 @@ worked around, an ordinary push and a clean checkout that must go through. The
 version the file was built from is printed as context, never as the verdict.
 
 `-install` copies from `PATH` (or `-from <dir>`), keeps the old file as
-`<name>.bak-<stamp>`, leaves a hook that already answers right untouched, and
-fails if the copy still answers wrong — a stale source is not a cure.
+`<name>.bak-<stamp>`, leaves a hook that answers right AND is the source's build
+untouched, and fails if the copy still answers wrong — a stale source is not a
+cure.
 
 Said plainly: a probe tells two builds apart only where their rules differ. The
-guards' code is identical from v0.40.0 on, so a copy of any of those answers the
-same as the current one and reads green; a copy older than v0.40.0 reads red. A
-new rule in a guard needs a row in `hookcheck`'s `gitCases` the day it ships.
+two guards and every package they import are byte-identical from v0.40.0 to
+v0.60.0 (the stale-base, empty-push and amend rules live in `gitpush`, `ghmerge`
+and `guard-bash`, not in a git hook), so a v0.45.0 copy answers exactly as the
+current one, which is how the fleet found its active hooks at v0.45.0 beside
+v0.59.0 binaries. No row can show that, and a green line for it would be true
+and useless, so the exit status says it:
+
+| exit | meaning |
+| ---- | ------- |
+| 0 | every row right, and the hook is the source's build |
+| 1 | a row answered wrong, a hook is missing, or nothing could be judged |
+| 3 | every row right, but the build differs from the source's (or either has no readable version): UNDETERMINED, not a pass; `-install` recopies it |
+
+A copy older than v0.40.0 reads red (exit 1). The versions are printed beside the
+exit-3 statement as context, never as a verdict on behaviour. A new rule in a
+guard needs a row in `hookcheck`'s `gitCases` the day it ships.
 
 ## What the hook refuses, and what it deliberately allows
 

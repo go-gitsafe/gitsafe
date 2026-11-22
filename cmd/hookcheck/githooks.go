@@ -24,13 +24,19 @@ package main
 // A probe distinguishes two builds only where their rules differ. The pre-push
 // guard's rules are: a credential in the URL, a write to the default branch, a
 // blob of bigblob.Limit or more in any commit pushed (since v0.40.0), a nested
-// repository nobody declared. The guards' code did not change between v0.40.0
-// and the release this was written in, so a copy from any of those answers
-// exactly as the current one: it is not "behind" in any way a verdict can show,
-// and this says so rather than inventing a difference. A copy older than
-// v0.40.0 refuses nothing big and goes red here. When a guard gains a rule,
-// the rule gets a row in [gitCases] on the day it ships — the same duty the
-// Bash corpus has — or this check goes blind to it.
+// repository nobody declared. MEASURED (git diff v0.45.0 v0.60.0 over the two
+// guards and every package they import: bigblob, credfix, credurl, gitlink,
+// protect, redact): not one line changed. emptypush, the stale-base and
+// amend rules live in gitpush, ghmerge and guard-bash, never in a git hook. So
+// a v0.45.0 copy answers exactly as the current one, no row can ever separate
+// them, and printing "right on all N" for it would be green on the very case
+// this exists for. It is therefore reported as UNDETERMINED (exit 3), not as a
+// pass, whenever the file's build differs from the source's or either is
+// unreadable; the versions are then printed beside that statement, still
+// never as a verdict on behaviour. A copy older than v0.40.0 refuses nothing
+// big and goes red. When a guard gains a rule, the rule gets a row in
+// [gitCases] on the day it ships — the same duty the Bash corpus has — or this
+// check goes blind to it.
 //
 // Both halves are asked: a hook that refuses everything is wrong on the rows
 // that must pass.
@@ -220,12 +226,61 @@ func judgeGitHook(file, hookPath, root string, round int) []gitResult {
 	return out
 }
 
+// buildVersion is the module version a Go binary was built from, "" when the
+// file has none (a script, a stripped build). A variable so tests can stand in
+// two different builds.
+var buildVersion = func(path string) string {
+	if bi, err := buildinfo.ReadFile(path); err == nil && bi != nil {
+		return bi.Main.Version
+	}
+	return ""
+}
+
 // builtFrom is CONTEXT, never the verdict.
 func builtFrom(path string) string {
-	if bi, err := buildinfo.ReadFile(path); err == nil && bi != nil {
-		return "built from gitsafe " + bi.Main.Version
+	if v := buildVersion(path); v != "" {
+		return "built from gitsafe " + v
 	}
 	return "version unreadable"
+}
+
+// guardSource is the file a hook is a copy of: in -from, or on PATH.
+func guardSource(binary, from string) (string, error) {
+	if from != "" {
+		return filepath.Join(from, binary), nil
+	}
+	p, err := exec.LookPath(binary)
+	if err != nil {
+		return "", fmt.Errorf("%s is not on PATH to copy from: %w", binary, err)
+	}
+	return p, nil
+}
+
+// undetermined says why a hook that answers RIGHT on every row still cannot be
+// vouched for, "" when it can. The rows only separate builds whose rules differ
+// (see the top of this file), so a copy older than the source but with the same
+// rules passes every row: that is the incident this check exists for, and
+// printing it green would be a true line, not a gate. Equal builds are decided;
+// different or unreadable ones are not.
+func undetermined(res []gitResult, path, src string) string {
+	if res == nil || anyWrong(res) {
+		return ""
+	}
+	hv, sv := buildVersion(path), ""
+	if src != "" {
+		sv = buildVersion(src)
+	}
+	if hv != "" && hv == sv {
+		return ""
+	}
+	return fmt.Sprintf("hook %s, source %s", orUnreadable(hv), orUnreadable(sv))
+}
+
+func orUnreadable(v string) string {
+	if v == "" {
+		return "version unreadable"
+	}
+	return v
 }
 
 func resolveHooksDir(flagDir string) (string, error) {
@@ -247,7 +302,8 @@ func resolveHooksDir(flagDir string) (string, error) {
 }
 
 // checkGit judges the active git hooks; with install it first recopies the
-// ones that answer wrongly, and never touches one that answers right.
+// ones that answer wrongly or whose build is not the source's, and never
+// touches one that answers right and IS the source's build.
 func checkGit(install bool, hooksDir, from string, stdout, stderr io.Writer) int {
 	dir, err := resolveHooksDir(hooksDir)
 	if err != nil {
@@ -286,20 +342,33 @@ func checkGit(install bool, hooksDir, from string, stdout, stderr io.Writer) int
 			// A missing file is git running NOTHING: not a pass.
 			fmt.Fprintf(stderr, "hookcheck: %s is not there — git runs no %s hook\n", path, h.file)
 		}
-		if install && (statErr != nil || anyWrong(res)) {
+		src, _ := guardSource(h.binary, from) // "" when there is none to compare with
+		reason := undetermined(res, path, src)
+		if install && (statErr != nil || anyWrong(res) || reason != "") {
 			if err := recopy(path, h.binary, from, stdout); err != nil {
 				fmt.Fprintln(stderr, "hookcheck:", err)
 				code = 1
 				continue
 			}
 			res = judgeGitHook(h.file, path, root, 1)
+			reason = undetermined(res, path, src)
 		}
-		if res == nil || reportGit(h.file, path, res, stdout, stderr) != 0 {
+		switch {
+		case res == nil || reportGit(h.file, path, res, stdout, stderr) != 0:
 			code = 1
+		case reason != "":
+			fmt.Fprintf(stderr, "%s answers right on every row but is not known to be current (%s): no row can tell these builds apart, so this is UNDETERMINED, not a pass — `hookcheck -git -install` recopies it\n", path, reason)
+			if code == 0 {
+				code = exitUndetermined
+			}
 		}
 	}
 	return code
 }
+
+// exitUndetermined is neither a pass (0) nor a wrong answer (1): every row was
+// answered right, and the rows cannot tell this build from the source's.
+const exitUndetermined = 3
 
 func anyWrong(res []gitResult) bool {
 	for _, r := range res {
@@ -334,13 +403,9 @@ func reportGit(file, path string, res []gitResult, stdout, stderr io.Writer) int
 // beside it. The new file is written whole and renamed in, so git never runs a
 // half-written hook.
 func recopy(dest, binary, from string, stdout io.Writer) error {
-	src := filepath.Join(from, binary)
-	if from == "" {
-		p, err := exec.LookPath(binary)
-		if err != nil {
-			return fmt.Errorf("%s is not on PATH to copy from: %w", binary, err)
-		}
-		src = p
+	src, err := guardSource(binary, from)
+	if err != nil {
+		return err
 	}
 	b, err := os.ReadFile(src)
 	if err != nil {
