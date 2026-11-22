@@ -43,9 +43,11 @@ import (
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
+	"github.com/go-gitsafe/gitsafe/sshweak"
 	"github.com/go-gitsafe/gitsafe/stalebase"
 	"github.com/go-gitsafe/gitsafe/testrun"
 	"github.com/go-gitsafe/gitsafe/volatile"
+	"github.com/go-gitsafe/gitsafe/waiveenv"
 )
 
 // payload is the part of the PreToolUse event this reads.
@@ -211,6 +213,27 @@ func run(stdin io.Reader, stdout io.Writer) int {
 		return deny(stdout, fmt.Sprintf(
 			"Refused: %s.\n\n%s\n\nUse instead: %s\n\n%s",
 			f.Why(), f.String(), f.Instead, ghbyhand.Advice))
+	}
+	// ⛔⛔ A FLEET GATE'S WAIVER OR SKIP VARIABLE, ASSIGNED IN ANY POSITION. See
+	// [waiveenv]. The operator's permissions.deny wildcard did not fire on
+	// `cd X && VAR=1 gitpush …` (2026-11-22, four commands, is_error:false):
+	// Claude Code strips leading assignments before matching.
+	//
+	// ⛔ NO ESCAPE and no os.Getenv wrapper, for the reason [ghbyhand] records
+	// above: an escape for "set a waiver" would be the waiver.
+	if f := waiveenv.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\n%s",
+			f.Why(), f.String(), waiveenv.Advice))
+	}
+	// ⛔⛔ AN ssh THAT TURNS OFF WHAT ssh CHECKS. See [sshweak]. A -o on the
+	// command line overrides ~/.ssh/config, so only this parse can refuse it
+	// (2026-11-22: host key unverified, key rejected, password prompt, agent
+	// forwarded). NO ESCAPE: an unknown or changed key means stop and report.
+	if f := sshweak.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\n%s",
+			f.Why(), f.String(), sshweak.Advice))
 	}
 	// ⛔⛔ A FILTERED TEST RUN WHOSE FILTER NOBODY CHECKS. `ok` is about the
 	// tests that RAN: on 2026-11-09 `go test -run 'TestREADME|TestUsage|TestMain'`

@@ -182,6 +182,50 @@ func TestPRCreateNeedsBothChecks(t *testing.T) {
 	}
 }
 
+// ⛔ The measured bypass (2026-11-22): a waiver assigned after `cd X &&`, which a
+// permissions.deny wildcard did not see. The refusal reaches the harness with the
+// variable named and no escape offered.
+func TestAWaiverAfterCdIsDenied(t *testing.T) {
+	cmd := "cd /Users/u/GIT/localhost/go-fft-docs && MODTIDY_WAIVE=\"x#1\" gitpush -u origin topic"
+	out, _ := drive(t, `{"tool_input":{"command":`+jsonString(cmd)+`}}`)
+	var d decision
+	if err := json.Unmarshal([]byte(out), &d); err != nil {
+		t.Fatalf("not the JSON the harness expects: %v\n%s", err, out)
+	}
+	if d.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("decision = %q, want deny", d.HookSpecificOutput.PermissionDecision)
+	}
+	reason := d.HookSpecificOutput.PermissionDecisionReason
+	for _, want := range []string{"MODTIDY_WAIVE", "waives or skips", "ghissue"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the reason does not mention %q:\n%s", want, reason)
+		}
+	}
+}
+
+// ⛔ The measured ssh (2026-11-22): host checks off, known_hosts to /dev/null. The
+// refusal says to STOP and report, and offers no escape.
+func TestAnSSHWithItsChecksOffIsDenied(t *testing.T) {
+	cmd := "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null delavennat@cfarm433.cfarm.net uptime"
+	out, _ := drive(t, `{"tool_input":{"command":`+jsonString(cmd)+`}}`)
+	var d decision
+	if err := json.Unmarshal([]byte(out), &d); err != nil {
+		t.Fatalf("not the JSON the harness expects: %v\n%s", err, out)
+	}
+	if d.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("decision = %q, want deny", d.HookSpecificOutput.PermissionDecision)
+	}
+	reason := d.HookSpecificOutput.PermissionDecisionReason
+	for _, want := range []string{"StrictHostKeyChecking", "STOP", "report"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the reason does not mention %q:\n%s", want, reason)
+		}
+	}
+	if out, _ := drive(t, `{"tool_input":{"command":"ssh linuxone uptime"}}`); strings.Contains(out, "deny") {
+		t.Errorf("plain ssh was denied:\n%s", out)
+	}
+}
+
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

@@ -17,7 +17,9 @@ import (
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
+	"github.com/go-gitsafe/gitsafe/sshweak"
 	"github.com/go-gitsafe/gitsafe/volatile"
+	"github.com/go-gitsafe/gitsafe/waiveenv"
 )
 
 // fakeHook writes a stub script that answers every payload the same way, so a
@@ -343,6 +345,8 @@ func TestEveryRuleGuardBashRunsFiresOnThisCorpus(t *testing.T) {
 		"shellwork":   func(c string) bool { return shellwork.Check(c).Found() },
 		"volatile":    func(c string) bool { return volatile.Check(c, cwd, home, tmpdir).Found() },
 		"literaltick": func(c string) bool { return literaltick.Check(c).Found() },
+		"waiveenv":    func(c string) bool { return waiveenv.Check(c).Found() },
+		"sshweak":     func(c string) bool { return sshweak.Check(c).Found() },
 		"chainedgate": func(c string) bool {
 			return chainedgate.Check(c).Found() || chainedgate.Require(c).Found()
 		},
