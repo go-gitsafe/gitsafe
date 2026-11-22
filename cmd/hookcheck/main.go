@@ -169,6 +169,17 @@ var corpus = []struct {
 	{"the escape, which is an act", "GITSAFE_ALLOW_VOLATILE=1 git clone https://github.com/go-gitsafe/gitsafe /tmp/throwaway", "allow"},
 	{"a status in a tree already there", "git -C /tmp/gitsafe status --short", "allow"},
 
+	// ⛔⛔ A FLEET WAIVER ASSIGNED IN A POSITION THE OPERATOR'S deny WILDCARD DOES
+	// NOT SEE (2026-11-22, go-fft docs round, four commands, is_error:false):
+	// Claude Code strips leading assignments from each sub-command before
+	// matching, so `Bash(*VAR=*)` never fired on `cd X && VAR=1 gitpush …`. The
+	// rule parses the command instead and has no escape.
+	{"a waiver after cd, before gitpush", "cd /Users/u/GIT/localhost/go-fft-docs && MODTIDY_WAIVE=\"fleettools#294\" gitpush -u origin topic", "refuse"},
+	{"a skip behind env", "env MUTSWEEP_SKIP=1 gitpush -u origin topic", "refuse"},
+	{"a skip inside bash -c", "bash -c 'BUILDSCAN_SKIP=1 gitpush -u origin topic'", "refuse"},
+	{"a waiver named in a commit message", "git commit -m 'stop setting MODTIDY_WAIVE=1 on pushes'", "allow"},
+	{"an ordinary assignment before a build", "GOFLAGS=-count=1 go build ./...", "allow"},
+
 	// ⛔⛔ AND THIS TABLE ASKED ABOUT `ghbyhand` ON THE DAY IT SHIPPED, which
 	// is the only reason the comment above is not about to be true again. The
 	// rule came from one comment on one issue costing two refusals and a round

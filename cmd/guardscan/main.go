@@ -40,6 +40,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/stalebase"
 	"github.com/go-gitsafe/gitsafe/testrun"
 	"github.com/go-gitsafe/gitsafe/volatile"
+	"github.com/go-gitsafe/gitsafe/waiveenv"
 	"github.com/spf13/cobra"
 )
 
@@ -88,7 +89,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, literaltick-legacy, ghbyhand, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, literaltick-legacy, ghbyhand, waiveenv, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -170,6 +171,10 @@ func rules(cwd, home, tmpdir string) map[string]func(string) refusal {
 		// guardscan cannot scan is a rule whose false refusals nobody would
 		// ever count. The act it names is the fleet program, so the kind is
 		// what to run instead.
+		"waiveenv": func(c string) refusal {
+			f := waiveenv.Check(c)
+			return kind(f, f.Found(), "a waiver or skip variable: "+f.Var)
+		},
 		"ghbyhand": func(c string) refusal {
 			f := ghbyhand.Check(c)
 			return kind(f, f.Found(), f.Act)

@@ -1937,3 +1937,14 @@ A refusal says which one it was: 401 is the token (revoked, expired, another
 instance), 403 a scope or a role, and 404 may be a private project the token's
 account cannot see — GitLab answers 404 rather than 403 there.
 
+
+### `waiveenv`: a waiver or skip variable, in any position
+
+Any assignment of an upper-case variable ending in `_SKIP`, `_WAIVE` or `_WAIVER`
+is refused by `guard-bash`, with no escape: after `cd X &&`, behind `env`, `sudo`,
+`timeout`, in a subshell, `bash -c`, `eval`, `$(...)`, or after `export`. A parse of
+the command does it, because `permissions.deny` wildcards are matched after Claude
+Code strips leading assignments, and did not fire on `cd X && VAR=1 gitpush ...`
+(measured 2026-11-22, four commands). Quoted mentions, comments, quoted heredocs and
+words after the command word (`echo VAR=1`) are not assignments. When a gate is
+wrong, fix it or file it with `ghissue`.
