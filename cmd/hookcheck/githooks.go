@@ -102,12 +102,11 @@ var probeRoot = func() (string, error) {
 }
 
 // gitGlobalHooksPath answers `git config --global core.hooksPath`.
-var gitGlobalHooksPath = func() (string, error) {
-	out, err := exec.Command("git", "config", "--global", "--get", "core.hooksPath").Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+// Empty when it is unset (git exits 1) or git cannot run: both mean no global
+// hook is guarding.
+var gitGlobalHooksPath = func() string {
+	out, _ := exec.Command("git", "config", "--global", "--get", "core.hooksPath").Output()
+	return strings.TrimSpace(string(out))
 }
 
 type gitResult struct {
@@ -140,39 +139,37 @@ func gitIn(dir string, args ...string) (string, error) {
 }
 
 // buildFixture makes one repository and returns its path and tip commit.
+//
+// The first failure is kept and the rest still run: every step is then
+// harmless (a command in a directory that does not exist fails too), and one
+// check at the end replaces a branch per step.
 func buildFixture(root, kind string) (dir, head string, err error) {
 	dir = filepath.Join(root, kind)
-	if err = os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	steps := [][]string{{"init", "-q", "-b", "probe"}}
-	for _, s := range steps {
-		if msg, e := gitIn(dir, s...); e != nil {
-			err = fmt.Errorf("git %s: %w: %s", s[0], e, msg)
-			return
+	keep := func(e error) {
+		if err == nil {
+			err = e
 		}
 	}
-	if err = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o644); err != nil {
-		return
+	git := func(args ...string) string {
+		out, e := gitIn(dir, args...)
+		keep(e)
+		return out
 	}
+	size := 2 // a.txt
 	if kind == "big" {
-		if err = os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, bigblob.Limit), 0o644); err != nil {
-			return
-		}
-	}
-	for _, s := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "probe"}} {
-		if _, err = gitIn(dir, s...); err != nil {
-			return
-		}
+		size = bigblob.Limit
 	}
 	url := "https://github.com/go-gitsafe/probe.git"
 	if kind == "cred" {
 		url = "https://" + ghp + "@github.com/go-gitsafe/probe.git"
 	}
-	if _, err = gitIn(dir, "remote", "add", "origin", url); err != nil {
-		return
-	}
-	head, err = gitIn(dir, "rev-parse", "HEAD")
+	keep(os.MkdirAll(dir, 0o755))
+	git("init", "-q", "-b", "probe")
+	keep(os.WriteFile(filepath.Join(dir, "a.txt"), make([]byte, size), 0o644))
+	git("add", "-A")
+	git("commit", "-q", "-m", "probe")
+	git("remote", "add", "origin", url)
+	head = git("rev-parse", "HEAD")
 	return
 }
 
@@ -201,60 +198,49 @@ func askGit(hook string, c gitCase, dir, head string) string {
 }
 
 // judgeGitHook runs every row for one hook file.
-func judgeGitHook(file, hookPath, root string) ([]gitResult, error) {
-	// A fresh directory per judgement: -install judges the same hook twice,
-	// and a fixture left from the first would have nothing to commit.
-	root, err := os.MkdirTemp(root, "judge-")
-	if err != nil {
-		return nil, err
-	}
-	type fx struct{ dir, head string }
-	fixtures := map[string]fx{}
+//
+// A fixture that cannot be built (no git, a full disk) is a row that reads
+// "unbuildable": never a pass, and never a refusal either.
+func judgeGitHook(file, hookPath, root string, round int) []gitResult {
 	var out []gitResult
 	for i, c := range gitCases {
 		if c.hook != file {
 			continue
 		}
-		// post-checkout REPAIRS the fixture it runs in, so each row gets its own.
-		key := fmt.Sprintf("%s-%d", c.fixture, i)
-		f, ok := fixtures[key]
-		if !ok {
-			sub := filepath.Join(root, key)
-			dir, head, err := buildFixture(sub, c.fixture)
-			if err != nil {
-				return nil, fmt.Errorf("building the %q fixture: %w", c.fixture, err)
-			}
-			f = fx{dir, head}
-			fixtures[key] = f
+		// post-checkout REPAIRS the fixture it runs in, so each row gets its own;
+		// and -install judges the same hook twice, so each round gets its own.
+		sub := filepath.Join(root, fmt.Sprintf("r%d-%d", round, i))
+		dir, head, err := buildFixture(sub, c.fixture)
+		got := "unbuildable"
+		if err == nil {
+			got = askGit(hookPath, c, dir, head)
 		}
-		out = append(out, gitResult{c, askGit(hookPath, c, f.dir, f.head)})
+		out = append(out, gitResult{c, got})
 	}
-	return out, nil
+	return out
 }
 
 // builtFrom is CONTEXT, never the verdict.
 func builtFrom(path string) string {
-	bi, err := buildinfo.ReadFile(path)
-	if err != nil {
-		return "version unreadable"
+	if bi, err := buildinfo.ReadFile(path); err == nil && bi != nil {
+		return "built from gitsafe " + bi.Main.Version
 	}
-	return "built from gitsafe " + bi.Main.Version
+	return "version unreadable"
 }
 
 func resolveHooksDir(flagDir string) (string, error) {
 	d := flagDir
 	if d == "" {
-		g, err := gitGlobalHooksPath()
-		if err != nil || g == "" {
+		g := gitGlobalHooksPath()
+		if g == "" {
 			return "", errors.New("core.hooksPath is not set globally: git runs no global hook, so none is guarding — `git config --global core.hooksPath ~/.config/git/hooks`")
 		}
 		d = g
 	}
 	if d == "~" || strings.HasPrefix(d, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
+		// No home directory leaves a relative path, which names a directory that
+		// is not there and is reported as such.
+		home, _ := os.UserHomeDir()
 		d = filepath.Join(home, strings.TrimPrefix(d, "~"))
 	}
 	return d, nil
@@ -273,10 +259,8 @@ func checkGit(install bool, hooksDir, from string, stdout, stderr io.Writer) int
 		fmt.Fprintln(stderr, "hookcheck:", err)
 		return 1
 	}
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		fmt.Fprintln(stderr, "hookcheck:", err)
-		return 1
-	}
+	// A MkdirAll that fails leaves MkdirTemp to fail on the same cause.
+	_ = os.MkdirAll(base, 0o755)
 	root, err := os.MkdirTemp(base, "probe-")
 	if err != nil {
 		fmt.Fprintln(stderr, "hookcheck:", err)
@@ -285,46 +269,32 @@ func checkGit(install bool, hooksDir, from string, stdout, stderr io.Writer) int
 	defer os.RemoveAll(root)
 
 	fmt.Fprintf(stdout, "git hooks directory: %s\n", dir)
-	code := 0
 	// Absolute, because a probe runs the hook with the fixture as its working
 	// directory and a relative path would be resolved against THAT.
-	if dir, err = filepath.Abs(dir); err != nil {
-		fmt.Fprintln(stderr, "hookcheck:", err)
-		return 1
+	if !filepath.IsAbs(dir) {
+		cwd, _ := os.Getwd()
+		dir = filepath.Join(cwd, dir)
 	}
+	code := 0
 	for _, h := range gitHookNames {
 		path := filepath.Join(dir, h.file)
-		if _, err := os.Stat(path); err != nil {
+		var res []gitResult
+		_, statErr := os.Stat(path)
+		if statErr == nil {
+			res = judgeGitHook(h.file, path, root, 0)
+		} else {
 			// A missing file is git running NOTHING: not a pass.
 			fmt.Fprintf(stderr, "hookcheck: %s is not there — git runs no %s hook\n", path, h.file)
-			if install {
-				if err := recopy(path, h.binary, from, stdout); err != nil {
-					fmt.Fprintln(stderr, "hookcheck:", err)
-					code = 1
-					continue
-				}
-			} else {
-				code = 1
-				continue
-			}
 		}
-		res, err := judgeGitHook(h.file, path, root)
-		if err != nil {
-			fmt.Fprintln(stderr, "hookcheck:", err)
-			return 1
-		}
-		if install && anyWrong(res) {
+		if install && (statErr != nil || anyWrong(res)) {
 			if err := recopy(path, h.binary, from, stdout); err != nil {
 				fmt.Fprintln(stderr, "hookcheck:", err)
 				code = 1
 				continue
 			}
-			if res, err = judgeGitHook(h.file, path, root); err != nil {
-				fmt.Fprintln(stderr, "hookcheck:", err)
-				return 1
-			}
+			res = judgeGitHook(h.file, path, root, 1)
 		}
-		if reportGit(h.file, path, res, stdout, stderr) != 0 {
+		if res == nil || reportGit(h.file, path, res, stdout, stderr) != 0 {
 			code = 1
 		}
 	}
@@ -364,10 +334,8 @@ func reportGit(file, path string, res []gitResult, stdout, stderr io.Writer) int
 // beside it. The new file is written whole and renamed in, so git never runs a
 // half-written hook.
 func recopy(dest, binary, from string, stdout io.Writer) error {
-	src := ""
-	if from != "" {
-		src = filepath.Join(from, binary)
-	} else {
+	src := filepath.Join(from, binary)
+	if from == "" {
 		p, err := exec.LookPath(binary)
 		if err != nil {
 			return fmt.Errorf("%s is not on PATH to copy from: %w", binary, err)
@@ -378,21 +346,24 @@ func recopy(dest, binary, from string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if old, err := os.ReadFile(dest); err == nil {
-		bak := dest + ".bak-" + timeNow().Format("20060102-150405")
-		if err := os.WriteFile(bak, old, 0o755); err != nil {
+	old, _ := os.ReadFile(dest) // absent is fine: nothing to keep
+	tmp := dest + ".new"
+	// In order, stopping at the first failure: the old file is kept BEFORE it is
+	// replaced, and nothing replaces it until the new one is fully written.
+	for _, step := range []func() error{
+		func() error {
+			if old == nil {
+				return nil
+			}
+			return os.WriteFile(dest+".bak-"+timeNow().Format("20060102-150405"), old, 0o755)
+		},
+		func() error { return os.MkdirAll(filepath.Dir(dest), 0o755) },
+		func() error { return os.WriteFile(tmp, b, 0o755) },
+		func() error { return os.Rename(tmp, dest) },
+	} {
+		if err := step(); err != nil {
 			return err
 		}
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
-	}
-	tmp := dest + ".new"
-	if err := os.WriteFile(tmp, b, 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		return err
 	}
 	fmt.Fprintf(stdout, "recopied %s from %s (%s)\n", dest, src, builtFrom(src))
 	return nil

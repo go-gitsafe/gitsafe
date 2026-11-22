@@ -45,6 +45,23 @@ func scriptHooks(t *testing.T, body string) string {
 func aimProbes(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
+	// The Go caches are pinned BEFORE HOME moves, so building the guards keeps
+	// using them.
+	for _, name := range []string{"GOCACHE", "GOMODCACHE"} {
+		out, err := exec.Command("go", "env", name).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(name, strings.TrimSpace(string(out)))
+	}
+	// HOME is a regular FILE: the Bash-guard path, which looks for
+	// ~/.claude/settings.json, then fails at once instead of reading the real
+	// one or wiring a new one and running its whole corpus.
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.WriteFile(home, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
 	old := probeRoot
 	probeRoot = func() (string, error) { return root, nil }
 	t.Cleanup(func() { probeRoot = old })
@@ -227,7 +244,7 @@ func TestAMissingHookIsAFailureAndInstallCreatesIt(t *testing.T) {
 func TestGitWithoutAHooksPathIsAFailure(t *testing.T) {
 	aimProbes(t)
 	old := gitGlobalHooksPath
-	gitGlobalHooksPath = func() (string, error) { return "", nil }
+	gitGlobalHooksPath = func() string { return "" }
 	t.Cleanup(func() { gitGlobalHooksPath = old })
 	var out, errb bytes.Buffer
 	if code := run([]string{"-git"}, &out, &errb); code != 1 {
@@ -250,5 +267,116 @@ func TestGitCorpusHasBothHalvesForEachHook(t *testing.T) {
 		if seen[h.file]["refuse"] == 0 || seen[h.file]["allow"] == 0 {
 			t.Errorf("%s needs at least one refuse row and one allow row: %v", h.file, seen[h.file])
 		}
+	}
+}
+
+// Without git on PATH no fixture can be built: every row says so and the exit
+// is 1 — never a pass. Under -install the source cannot be found either.
+func TestFixturesThatCannotBeBuiltAreNotAPass(t *testing.T) {
+	aimProbes(t)
+	hooks := scriptHooks(t, "cat >/dev/null; exit 1")
+	t.Setenv("PATH", "")
+	for _, tc := range []struct {
+		args []string
+		want string
+		in   func(out, errb string) string
+	}{
+		{[]string{"-git", "-hooks-dir", hooks}, "unbuildable", func(out, _ string) string { return out }},
+		{[]string{"-git", "-install", "-hooks-dir", hooks}, "not on PATH", func(_, errb string) string { return errb }},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(tc.args, &out, &errb); code != 1 {
+			t.Errorf("%v: code = %d, want 1\n%s%s", tc.args, code, out.String(), errb.String())
+		}
+		if !strings.Contains(tc.in(out.String(), errb.String()), tc.want) {
+			t.Errorf("%v: want %q:\n%s%s", tc.args, tc.want, out.String(), errb.String())
+		}
+	}
+}
+
+func TestAScriptHookHasNoReadableVersion(t *testing.T) {
+	aimProbes(t)
+	var out, errb bytes.Buffer
+	run([]string{"-git", "-hooks-dir", scriptHooks(t, "cat >/dev/null; exit 0")}, &out, &errb)
+	if !strings.Contains(out.String(), "version unreadable") {
+		t.Errorf("a script has no build info, and the report says so:\n%s", out.String())
+	}
+}
+
+// The hooks are RIGHT, so the only reason to fail is the probe root, and
+// nothing is reported as judged.
+func TestAProbeRootThatCannotBeUsedFails(t *testing.T) {
+	aimProbes(t)
+	hooks, _ := realGuards(t)
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, root := range map[string]func() (string, error){
+		"no cache dir":         func() (string, error) { return "", os.ErrPermission },
+		"under a regular file": func() (string, error) { return filepath.Join(file, "under"), nil },
+	} {
+		probeRoot = root
+		var out, errb bytes.Buffer
+		if code := run([]string{"-git", "-hooks-dir", hooks}, &out, &errb); code != 1 {
+			t.Errorf("%s: code = %d, want 1\n%s%s", name, code, out.String(), errb.String())
+		}
+		if strings.Contains(out.String(), "git hooks directory") || !strings.HasPrefix(errb.String(), "hookcheck: ") {
+			t.Errorf("%s: nothing may be judged, the reason must be said:\n%s%s", name, out.String(), errb.String())
+		}
+	}
+}
+
+func TestTheDefaultProbeRootNeedsACacheDirectory(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("LocalAppData", "")
+	if d, err := probeRoot(); err == nil {
+		t.Errorf("no cache directory is known, got %q", d)
+	}
+	t.Setenv("HOME", t.TempDir())
+	d, err := probeRoot()
+	if err != nil || filepath.Base(d) != "gitsafe-hookcheck" {
+		t.Errorf("probeRoot = %q, %v", d, err)
+	}
+}
+
+func TestInstallFromAnEmptySourceFails(t *testing.T) {
+	aimProbes(t)
+	hooks := scriptHooks(t, "cat >/dev/null; exit 0")
+	before, err := os.ReadFile(filepath.Join(hooks, "pre-push"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"-git", "-install", "-hooks-dir", hooks, "-from", t.TempDir()}, &out, &errb); code != 1 {
+		t.Errorf("code = %d, want 1\n%s%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), "no such file") {
+		t.Errorf("the reason must be said:\n%s", errb.String())
+	}
+	after, _ := os.ReadFile(filepath.Join(hooks, "pre-push"))
+	if !bytes.Equal(before, after) || strings.Contains(out.String(), "recopied") {
+		t.Errorf("an unreadable source must leave the hook as it was:\n%s", out.String())
+	}
+	if m, _ := filepath.Glob(filepath.Join(hooks, "*.bak-*")); len(m) != 0 {
+		t.Errorf("nothing was replaced, so nothing is kept: %v", m)
+	}
+}
+
+func TestInstallIntoAReadOnlyDirectoryFails(t *testing.T) {
+	aimProbes(t)
+	hooks := scriptHooks(t, "cat >/dev/null; exit 0")
+	_, src := realGuards(t)
+	if err := os.Chmod(hooks, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(hooks, 0o755) })
+	var out, errb bytes.Buffer
+	if code := run([]string{"-git", "-install", "-hooks-dir", hooks, "-from", src}, &out, &errb); code != 1 {
+		t.Errorf("code = %d, want 1\n%s%s", code, out.String(), errb.String())
+	}
+	if strings.Contains(out.String(), "recopied") || !strings.Contains(errb.String(), "permission denied") {
+		t.Errorf("a failed write is reported and never announced as done:\n%s%s", out.String(), errb.String())
 	}
 }
