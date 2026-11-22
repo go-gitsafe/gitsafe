@@ -356,6 +356,18 @@ var corpus = []struct {
 	{"a quoted heredoc tag with a hyphen", "cat <<'END-MSG'\nuse " + tick + "x" + tick + "\nEND-MSG", "allow"},
 	{"a fake heredoc opener inside quotes", "echo \"<<'EOF'\"\necho " + tick + "date" + tick, "refuse"},
 	{"the escape covers its own statement only", "GITSAFE_ALLOW_BACKTICK=1 true; echo " + tick + "date" + tick, "refuse"},
+	// ⛔ A FALSE REFUSAL, MEASURED ON THIS BINARY AT 21:29 ON 2026-11-22, while
+	// the rule above was being added to it. zsh reads the whole pattern as ONE
+	// argument — inside double quotes `\"` is a quote and `\|` is a backslash
+	// and a pipe — but `shellcmd.Stages` closed the quoting at `\"` and then met
+	// a bare `|`, so a `git grep` was refused as a pipeline. `InsideQuotes` had
+	// honoured the backslash all along: the drift its own comment warns about.
+	{"a backslashed quote in a grep pattern is not a pipeline", `git grep -n "a\"\|b\"" -- f`, "allow"},
+	// ⛔ THE CONTROL FOR THE bgstatus ROWS, and the reason they mean anything: in
+	// the FOREGROUND this exact text must be allowed — the file is read, nothing
+	// is lost, and `shellwork` advises this very shape. If this row ever turns
+	// red, the background rows below it are passing for another rule's reason.
+	{"the same trailing echo, in the foreground", durableLog + "; echo \"rc=$?\" >> " + durableFile, "allow"},
 }
 
 // backgroundCorpus is asked with run_in_background set, because the
@@ -371,7 +383,22 @@ var backgroundCorpus = []struct {
 	{"a background coverage profile in /tmp", "go test -coverprofile=/tmp/c.out ./...", "refuse"},
 	{"a background log in a durable directory", "gotest ./interp > ~/Library/Application\\ Support/x/probe.txt 2>&1", "allow"},
 	{"the escape, which is an act", "GITSAFE_ALLOW_VOLATILE=1 gotest ./interp > /tmp/probe.txt 2>&1", "allow"},
+	// ⛔ The `bgstatus` rows. Their attribution is the FOREGROUND row of the
+	// same text in the table above, which must ALLOW: a refusal here with an
+	// allow there can only have come from the one rule that reads the flag and
+	// is not about a volatile directory. Both logs below are durable.
+	{"a background trailing echo of the status", durableLog + "; echo \"rc=$?\" >> " + durableFile, "refuse"},
+	{"brief carries the status instead", "brief -n 20 -- mutsweep -dir . -- go test ./...", "allow"},
+	{"&& keeps the failure, so it stays allowed", durableLog + " && echo \"rc=$?\" >> " + durableFile, "allow"},
 }
+
+// durableFile and durableLog are shared by the bgstatus rows and by their
+// foreground control, so the two tables cannot drift apart into asking about
+// different commands.
+const (
+	durableFile = "~/Documents/VCS/GIT/localhost/logs/sweep.txt"
+	durableLog  = "mutsweep -dir . -- go test ./... > " + durableFile + " 2>&1"
+)
 
 // testCase is one row of either table, with how the command is started.
 type testCase struct {

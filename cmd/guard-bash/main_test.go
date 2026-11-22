@@ -81,6 +81,51 @@ func TestVolatileRedirectNeedsTheBackgroundFlag(t *testing.T) {
 	}
 }
 
+// ⛔ THE WIRING LINE, driven end to end. The two command lines below are the
+// ones whose background notifications said "exit code 0" on 2026-11-22 while
+// mutsweep exited 1 with two survivors and ratewait exited 1 on TIMEOUT.
+// Everything about them is durable, so the refusal cannot be the volatile
+// rule's, and `pipestatus` cannot see them at all — there is no pipeline.
+//
+// The foreground rows are the control: the same text, allowed, because the file
+// is read. A rule that answered from the text alone would have to get one of
+// the two wrong.
+func TestBGStatusIsWiredAndReadsTheBackgroundFlag(t *testing.T) {
+	const (
+		log   = `/Users/me/src/r/sweep.txt`
+		sweep = `mutsweep -dir . -- go test ./... > ` + log + ` 2>&1; echo \"mutsweep rc=$?\" >> ` + log
+	)
+	in := func(cmd, bg string) string {
+		return `{"cwd":"/Users/me/src/r","tool_input":{"command":"` + cmd + `"` + bg + `}}`
+	}
+	out, _ := drive(t, in(sweep, `,"run_in_background":true`))
+	for _, want := range []string{`"deny"`, "LAST statement", "brief -n 20", "mutsweep"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, out)
+		}
+	}
+	for name, cmd := range map[string]string{
+		"foreground, where the file is read": in(sweep, ``),
+		"explicit false":                     in(sweep, `,"run_in_background":false`),
+		"brief carries the status":           in(`brief -n 20 -- mutsweep -dir . -- go test ./...`, `,"run_in_background":true`),
+		"&& keeps the failure":               in(`mutsweep -dir . -- go test ./... > `+log+` 2>&1 && echo \"rc=$?\" >> `+log, `,"run_in_background":true`),
+	} {
+		if out, _ := drive(t, cmd); out != "" {
+			t.Errorf("%s was refused:\n%s", name, out)
+		}
+	}
+	// ⛔ AND NO ENVIRONMENT ESCAPE, unlike its neighbour above: `brief` takes the
+	// same command and returns the same output, so an escape would buy nothing
+	// but the defect. The assertion is here because an escape added later would
+	// silently reopen it.
+	for _, env := range []string{"GITSAFE_ALLOW_BGSTATUS", "GITSAFE_ALLOW_BG_STATUS", "GITSAFE_ALLOW_PIPE_STATUS"} {
+		t.Setenv(env, "1")
+		if out, _ := drive(t, in(sweep, `,"run_in_background":true`)); out == "" {
+			t.Errorf("%s opened a rule that has no escape", env)
+		}
+	}
+}
+
 // A GitHub write by hand is refused in two voices: naming the program when one
 // does the act, and asking for one when none does — never letting it through.
 func TestGHByHandNamesTheProgramOrAsksForOne(t *testing.T) {

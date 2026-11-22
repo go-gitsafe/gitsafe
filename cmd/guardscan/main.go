@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/go-gitsafe/gitsafe/amendmerged"
+	"github.com/go-gitsafe/gitsafe/bgstatus"
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/cliflags"
@@ -90,7 +91,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, sigpipe, literaltick, literaltick-legacy, ghbyhand, waiveenv, sshweak, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, bgstatus, sigpipe, literaltick, literaltick-legacy, ghbyhand, waiveenv, sshweak, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -244,6 +245,16 @@ func rules(cwd, home, tmpdir string) map[string]func(string) refusal {
 		"amendmerged": func(c string) refusal {
 			f := amendmerged.Check(c, cwd, home)
 			return kind(f, f.Found(), "an amend of a commit already on the default branch")
+		},
+		// Like the redirect half below: the transcripts do not record
+		// run_in_background, so this counts the commands that WOULD be refused
+		// if they had been backgrounded — an upper bound, which is what a
+		// false-refusal hunt wants. Every `cmd > f; echo "rc=$?" >> f` in the
+		// corpus is here, and the ones started in the foreground among them are
+		// not defects.
+		"bgstatus": func(c string) refusal {
+			f := bgstatus.Check(c, true)
+			return kind(f, f.Found(), "a status recorded in the output and dropped from the exit status (if backgrounded)")
 		},
 		"volatile": func(c string) refusal {
 			f := volatile.Check(c, cwd, home, tmpdir)

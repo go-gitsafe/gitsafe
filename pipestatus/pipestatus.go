@@ -95,6 +95,19 @@ var readsStatus = regexp.MustCompile(`\$\?|\$\{\?\}`)
 // pipefail is the escape: with it set, the status IS the pipeline's.
 var pipefail = regexp.MustCompile(`set\s+-[a-zA-Z]*o\s+pipefail|set\s+-o\s+pipefail`)
 
+// ReadsStatus reports whether st reads `$?` in a position the shell expands —
+// the question "does this statement claim to carry a status", asked without any
+// opinion about whose status it should be.
+//
+// ⛔ EXPORTED SO THERE IS ONE NOTION OF IT. [bgstatus] asks the same question
+// about a statement joined by `;` rather than by a pipe, and a second copy of
+// `readsStatus` plus [quotedOnly] would be a second answer: the `"status=$?"`
+// spelling is the one that was actually typed, and a copy that forgot that
+// double quotes expand would allow exactly it.
+func ReadsStatus(st string) bool {
+	return readsStatus.MatchString(st) && !quotedOnly(st)
+}
+
 // Check says whether cmd reads a status the pipeline before it did not produce.
 func Check(cmd string) Finding {
 	// ⛔ Quoting a forbidden form is not the forbidden form: a commit message, a
@@ -106,7 +119,7 @@ func Check(cmd string) Finding {
 	}
 	stmts := shellcmd.Statements(cmd)
 	for i, st := range stmts {
-		if !readsStatus.MatchString(st) || quotedOnly(st) {
+		if !ReadsStatus(st) {
 			continue
 		}
 		// The status belongs to the statement before this one.

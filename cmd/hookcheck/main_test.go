@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-gitsafe/gitsafe/bgstatus"
 	"github.com/go-gitsafe/gitsafe/bypass"
 	"github.com/go-gitsafe/gitsafe/chainedgate"
 	"github.com/go-gitsafe/gitsafe/discard"
@@ -404,26 +405,45 @@ func TestEveryRuleGuardBashRunsFiresOnThisCorpus(t *testing.T) {
 	}
 }
 
-// The background table asks the redirect half of `volatile`, which the
-// foreground table cannot: its refusals must come from CheckRedirect, and its
-// allows must not.
-func TestTheBackgroundCorpusAsksTheRedirectRule(t *testing.T) {
+// The background table asks the rules that READ the background flag, which the
+// foreground table cannot reach: the redirect half of `volatile`, and
+// `bgstatus`. Every refusal it wants must come from one of them, every allow
+// from neither, and each of them must be asked by at least one row.
+//
+// ⛔ THIS IS THE ATTRIBUTION FOR THOSE ROWS, and the reason it is per-rule
+// rather than "some background rule refused": the `bgstatus` rows redirect into
+// a DURABLE file on purpose, so that a refusal cannot be volatile's. Without
+// that, a row could go green on the neighbour's reason and stay green after its
+// own rule stopped firing — which is how a corpus row passes for the wrong
+// reason.
+func TestTheBackgroundCorpusAsksTheRulesThatReadTheFlag(t *testing.T) {
 	const cwd, home, tmpdir = "/Users/someone/src/r", "/Users/someone", "/var/folders/zz/t"
-	var refuse int
+	asks := map[string]func(string) bool{
+		"volatile.CheckRedirect": func(c string) bool {
+			return volatile.CheckRedirect(c, cwd, home, tmpdir, true).Found()
+		},
+		"bgstatus": func(c string) bool { return bgstatus.Check(c, true).Found() },
+	}
+	refuse := map[string]int{}
 	for _, c := range allCases() {
 		if !c.bg {
 			continue
 		}
-		got := volatile.CheckRedirect(c.cmd, cwd, home, tmpdir, true).Found()
-		if got != (c.want == "refuse") {
-			t.Errorf("%q: CheckRedirect = %v, the table wants %q", c.name, got, c.want)
+		var by []string
+		for name, ask := range asks {
+			if ask(c.cmd) {
+				by = append(by, name)
+				refuse[name]++
+			}
 		}
-		if got {
-			refuse++
+		if (len(by) > 0) != (c.want == "refuse") {
+			t.Errorf("%q: refused by %v, the table wants %q", c.name, by, c.want)
 		}
 	}
-	if refuse == 0 {
-		t.Fatal("no background row makes the redirect rule refuse: the table does not ask about it")
+	for name := range asks {
+		if refuse[name] == 0 {
+			t.Errorf("no background row makes %s refuse: the table does not ask about it", name)
+		}
 	}
 }
 
