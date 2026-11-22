@@ -239,6 +239,39 @@ func TestAMissingHookIsAFailureAndInstallCreatesIt(t *testing.T) {
 	if code := run([]string{"-git", "-install", "-hooks-dir", d, "-from", src}, &out, &errb); code != 0 {
 		t.Fatalf("install: code = %d\n%s%s", code, out.String(), errb.String())
 	}
+	// Nothing was there to keep, so no backup of nothing is written.
+	if m, _ := filepath.Glob(filepath.Join(d, "*.bak-*")); len(m) != 0 {
+		t.Errorf("a missing hook got a backup: %v", m)
+	}
+}
+
+// A hook that answers WRONG is recopied even when its build reads the same as
+// the source's: the version cannot be what decides, or a wrong guard of the
+// current version is left in place. Both builds are stood in as one version, so
+// only the answers can separate them.
+func TestInstallRecopiesAWrongHookWhoseBuildIsTheSources(t *testing.T) {
+	aimProbes(t)
+	_, src := realGuards(t)
+	old := buildVersion
+	buildVersion = func(string) string { return "v0.59.0" }
+	t.Cleanup(func() { buildVersion = old })
+	wrong := scriptHooks(t, "cat >/dev/null; exit 0")
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"-git", "-hooks-dir", wrong, "-from", src}, &out, &errb); code != 1 {
+		t.Fatalf("judging only: code = %d, want 1\n%s%s", code, out.String(), errb.String())
+	}
+	if strings.Contains(errb.String(), "UNDETERMINED") {
+		t.Errorf("a wrong hook is wrong, not undetermined:\n%s", errb.String())
+	}
+	out.Reset()
+	errb.Reset()
+	if code := run([]string{"-git", "-install", "-hooks-dir", wrong, "-from", src}, &out, &errb); code != 0 {
+		t.Fatalf("install: code = %d\n%s%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "recopied "+filepath.Join(wrong, "pre-push")) {
+		t.Errorf("the wrong pre-push must be recopied:\n%s", out.String())
+	}
 }
 
 func TestGitWithoutAHooksPathIsAFailure(t *testing.T) {

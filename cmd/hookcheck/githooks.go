@@ -261,11 +261,9 @@ func guardSource(binary, from string) (string, error) {
 // (see the top of this file), so a copy older than the source but with the same
 // rules passes every row: that is the incident this check exists for, and
 // printing it green would be a true line, not a gate. Equal builds are decided;
-// different or unreadable ones are not.
-func undetermined(res []gitResult, path, src string) string {
-	if res == nil || anyWrong(res) {
-		return ""
-	}
+// different or unreadable ones are not. It is only CONSULTED for a hook that
+// answered right: a wrong or missing one is judged before it is read.
+func undetermined(path, src string) string {
 	hv, sv := buildVersion(path), ""
 	if src != "" {
 		sv = buildVersion(src)
@@ -343,7 +341,7 @@ func checkGit(install bool, hooksDir, from string, stdout, stderr io.Writer) int
 			fmt.Fprintf(stderr, "hookcheck: %s is not there — git runs no %s hook\n", path, h.file)
 		}
 		src, _ := guardSource(h.binary, from) // "" when there is none to compare with
-		reason := undetermined(res, path, src)
+		reason := undetermined(path, src)
 		if install && (statErr != nil || anyWrong(res) || reason != "") {
 			if err := recopy(path, h.binary, from, stdout); err != nil {
 				fmt.Fprintln(stderr, "hookcheck:", err)
@@ -351,7 +349,7 @@ func checkGit(install bool, hooksDir, from string, stdout, stderr io.Writer) int
 				continue
 			}
 			res = judgeGitHook(h.file, path, root, 1)
-			reason = undetermined(res, path, src)
+			reason = undetermined(path, src)
 		}
 		switch {
 		case res == nil || reportGit(h.file, path, res, stdout, stderr) != 0:
