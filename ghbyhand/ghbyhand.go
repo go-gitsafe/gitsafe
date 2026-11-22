@@ -505,11 +505,13 @@ func checkAPI(st string, words []string) Finding {
 // permissions switch or one workflow's enable endpoint.
 func isActionsEnablePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 5 || parts[0] != "repos" || parts[3] != "actions" {
-		return false
+	switch len(parts) {
+	case 5:
+		return parts[0] == "repos" && parts[3] == "actions" && parts[4] == "permissions"
+	case 7:
+		return parts[0] == "repos" && parts[3] == "actions" && parts[4] == "workflows" && parts[6] == "enable"
 	}
-	return (len(parts) == 5 && parts[4] == "permissions") ||
-		(len(parts) == 7 && parts[4] == "workflows" && parts[6] == "enable")
+	return false
 }
 
 // isRepoPath reports whether the path is a repository itself, the endpoint its
