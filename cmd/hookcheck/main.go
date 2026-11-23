@@ -368,6 +368,19 @@ var corpus = []struct {
 	// is lost, and `shellwork` advises this very shape. If this row ever turns
 	// red, the background rows below it are passing for another rule's reason.
 	{"the same trailing echo, in the foreground", durableLog + "; echo \"rc=$?\" >> " + durableFile, "allow"},
+	// ⛔ THE `readback` ROWS (occurrence 4: priorart exited 2, the line read
+	// cat's `exit: 0`). Each refusal is asked of readback alone by
+	// TestTheReadbackRowsAreAttributedToReadback; the allows are the shapes the
+	// rule must not touch, and the one beside the bgstatus control below.
+	{"a file read back on the line that wrote it", "priorart x > " + durableFile + " 2>&1; brief -n 25 -- cat " + durableFile, "refuse"},
+	{"|| reads the file after a failure", "mutsweep > " + durableFile + " 2>&1 || cat " + durableFile, "refuse"},
+	{"&& keeps the failure of the writer", "mutsweep > " + durableFile + " 2>&1 && brief -n 20 -- cat " + durableFile, "allow"},
+	{"nothing is read back", "mutsweep > " + durableFile + " 2>&1", "allow"},
+	{"the later statement writes the file too", "a > " + durableFile + " 2>&1; b >> " + durableFile, "allow"},
+	{"setup and one plain command, in the foreground", "cd ~/Documents/VCS/GIT/localhost/go-gitsafe-gitsafe; git status", "allow"},
+	{"quoted text about the form", "echo 'write about cmd > f; cat f here'", "allow"},
+	// The foreground control for the bgstatus row below that no other rule shares.
+	{"a plain read after the command, in the foreground", "brief -n 40 -- go test ./...; wc -l go.mod", "allow"},
 }
 
 // backgroundCorpus is asked with run_in_background set, because the
@@ -390,6 +403,13 @@ var backgroundCorpus = []struct {
 	{"a background trailing echo of the status", durableLog + "; echo \"rc=$?\" >> " + durableFile, "refuse"},
 	{"brief carries the status instead", "brief -n 20 -- mutsweep -dir . -- go test ./...", "allow"},
 	{"&& keeps the failure, so it stays allowed", durableLog + " && echo \"rc=$?\" >> " + durableFile, "allow"},
+	// ⛔ Occurrence 3: a plain READ after the command, which is not the status
+	// idiom. The first is refused by bgstatus AND readback (it reads the file it
+	// wrote); the second by bgstatus alone, the one the foreground control above
+	// allows.
+	{"a background grep of the log it wrote", "brief -n 40 -- go test ./... > " + durableFile + " 2>&1; grep -c \"^ok\" " + durableFile, "refuse"},
+	{"a background plain read after the command", "brief -n 40 -- go test ./...; wc -l go.mod", "refuse"},
+	{"background setup, then one command", "cd ~/Documents/VCS/GIT/localhost/go-gitsafe-gitsafe; brief -n 40 -- go test ./...", "allow"},
 }
 
 // durableFile and durableLog are shared by the bgstatus rows and by their

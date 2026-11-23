@@ -41,6 +41,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/ghbyhand"
 	"github.com/go-gitsafe/gitsafe/literaltick"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
+	"github.com/go-gitsafe/gitsafe/readback"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
@@ -172,6 +173,16 @@ func run(stdin io.Reader, stdout io.Writer) int {
 		return deny(stdout, fmt.Sprintf(
 			"Refused: %s.\n\n%s\n\n%s",
 			f.Why(), f.String(), bgstatus.Advice))
+	}
+	// ⛔ The FOREGROUND half of the same defect (occurrence 4): `priorart … > f
+	// 2>&1; brief -n 25 -- cat f` read `exit: 0`, cat's, while priorart exited 2,
+	// and a false defect report was written from it. The status is the LAST
+	// statement's whatever the flag says, so this rule does not read it. No
+	// escape, for the reason above. See [readback].
+	if f := readback.Check(p.ToolInput.Command); f.Found() {
+		return deny(stdout, fmt.Sprintf(
+			"Refused: %s.\n\n%s\n\n%s",
+			f.Why(), f.String(), readback.Advice))
 	}
 	// ⛔ `git checkout -b work origin/main` reads as "branch from main" and
 	// branches from whatever this clone last fetched. On 2026-11-07 one session

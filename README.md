@@ -1228,8 +1228,28 @@ which is the direction already recorded for `testrun` and `ghbyhand`.
     brief -n 20 -- cmd > f 2>&1         # the status is the command's
     cmd && echo "rc=$?"                 # `&&` short-circuits: a failure survives
     cmd > f 2>&1                        # nothing was discarded
-    cmd > f; echo done                  # no status was claimed to be recorded
+    cd /d; export A=1; brief -n 9 -- cmd   # leading setup is not the command
     echo 'write about ; echo $? here'   # single quotes do not expand
+
+### Any statement after the command, a plain read included (v0.65.0)
+
+The first version refused only the status-recording idiom, and the hole was
+measured the next night. `brief -n 40 -- go test ./... > $L 2>&1; grep -c "^ok" $L`
+reported exit 0 while the suite was red: **any** later statement makes the line's
+status that statement's. In the background, `bgstatus` now allows leading
+environment setup (`export`, `cd`, `set`, `umask`, `VAR=...`), then exactly **one**
+command; `&&` after it stays legal, `;`, `||` and a newline do not.
+
+### `readback`: the same defect in the foreground
+
+    priorart … > f 2>&1; brief -n 25 -- cat f      # exit: 0 — cat's — while priorart exited 2
+
+That line manufactured a false defect report. `readback` refuses a statement that
+redirects to a file (`>`, `>>`, `&>`; not `/dev/null`, `/dev/stdout`, `/dev/stderr`,
+`&1`, `&2`) when a **later** statement on the same line names that file, unless that
+later statement writes to it too (`a > f; b >> f`). `&&` is allowed, and a quoted
+mention is not the form. Read the file on the **next** turn, or run the command under
+`brief -n N -- <cmd>`. Like `bgstatus` it has no escape.
 
 ⛔ `&&` has to stay allowed, or the rule has no correct form and gets routed around:
 `brief -n 5 -- a && brief -n 20 -- b` reports both statuses and stops at the first
