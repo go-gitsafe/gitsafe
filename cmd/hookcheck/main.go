@@ -558,13 +558,12 @@ func report(hooks []string, stdout, stderr io.Writer) int {
 // production. Reporting it as anything else would describe a machine other
 // than this one.
 func ask(hook, cmd string, background bool) string {
-	payload, err := json.Marshal(map[string]any{
+	// Marshal cannot fail on a map of strings and a bool, so its error is not
+	// handled: a branch no input reaches is a guard nothing can hold.
+	payload, _ := json.Marshal(map[string]any{
 		"tool_name":  "Bash",
 		"tool_input": map[string]any{"command": cmd, "run_in_background": background},
 	})
-	if err != nil {
-		return "?"
-	}
 	c := execCommand("/bin/sh", "-c", hook)
 	c.Stdin = strings.NewReader(string(payload))
 	out, _ := c.Output()
