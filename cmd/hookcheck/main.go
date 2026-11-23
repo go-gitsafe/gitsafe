@@ -445,13 +445,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
 func RootCmd() *cobra.Command {
 	var install bool
-	var settings string
+	var settings, hooksDir, from string
+	var git bool
 	c := &cobra.Command{
 		Use:   "hookcheck [flags]",
-		Short: "Check that the Bash guard hooks in the settings refuse what they must",
+		Short: "Check that the Bash guard hooks in the settings refuse what they must (-git: the git hooks)",
+		Long: "Check that the Bash guard hooks in the settings refuse what they must.\n\n" +
+			"With -git, judge the ACTIVE git hooks (pre-push, post-checkout) by what they answer: " +
+			"each row asks the hook a question and compares its refusal with the one expected.\n\n" +
+			"Exit 0: every row right and the hook is the source's build. Exit 1: a row wrong, " +
+			"or a hook that cannot run. Exit 3: every row right but the build is not known to be " +
+			"current: the rows only separate builds whose rules differ, so they cannot tell " +
+			"identical-rule builds apart.\n\n" +
+			"\"Is it behind the latest release?\" is NOT answered here, on purpose: " +
+			"`staletools -releases` answers it, and already marks the hook git runs. " +
+			"hookcheck -git does not duplicate it.",
 		// Operands were never read and still are not: they are ignored, as before.
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if git {
+				if code := checkGit(install, hooksDir, from, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
+					return cliflags.Status(code)
+				}
+				return nil
+			}
 			if code := check(install, settings, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
 				return cliflags.Status(code)
 			}
@@ -460,6 +477,9 @@ func RootCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&install, "install", false, "wire "+wantHook+" into the settings, backing them up first, then report")
 	c.Flags().StringVar(&settings, "settings", "", "the settings file to read (default ~/.claude/settings.json)")
+	c.Flags().BoolVar(&git, "git", false, "judge the ACTIVE git hooks (pre-push, post-checkout) by what they answer; with -install, recopy the ones that answer wrongly")
+	c.Flags().StringVar(&hooksDir, "hooks-dir", "", "with -git: the hooks directory (default: global core.hooksPath)")
+	c.Flags().StringVar(&from, "from", "", "with -git -install: the directory holding the current git-pre-push-guard and git-post-checkout-guard (default: PATH)")
 	return c
 }
 

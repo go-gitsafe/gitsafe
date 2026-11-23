@@ -560,6 +560,54 @@ cp "$(go env GOPATH)/bin/git-pre-push-guard" ~/.config/git/hooks/pre-push
 cp "$(go env GOPATH)/bin/git-post-checkout-guard" ~/.config/git/hooks/post-checkout
 ```
 
+### Are the installed hooks still the current guards?
+
+Those two files are COPIES, and a copy that has fallen behind still works — it
+only judges with older rules, and nothing noticed. `hookcheck -git` judges them
+the way `hookcheck` judges the Bash guards, by what they ANSWER and not by a
+version string:
+
+```
+hookcheck -git             # run the ACTIVE pre-push and post-checkout, report
+hookcheck -git -install    # recopy the ones that answer wrongly, then report
+```
+
+It runs the file git itself would run — the one NAMED `pre-push` /
+`post-checkout` in the global `core.hooksPath` (or `-hooks-dir`), never a
+homonym elsewhere — in throwaway repositories under the user cache directory:
+a credential in the remote URL, a write to `main`, a commit holding a 1 MiB
+blob (the rule added in v0.40.0), and, as the half that keeps a guard from being
+worked around, an ordinary push and a clean checkout that must go through. The
+version the file was built from is printed as context, never as the verdict.
+
+`-install` copies from `PATH` (or `-from <dir>`), keeps the old file as
+`<name>.bak-<stamp>`, leaves a hook that answers right AND is the source's build
+untouched, and fails if the copy still answers wrong — a stale source is not a
+cure.
+
+Said plainly: a probe tells two builds apart only where their rules differ. The
+two guards and every package they import are byte-identical from v0.40.0 to
+v0.60.0 (the stale-base, empty-push and amend rules live in `gitpush`, `ghmerge`
+and `guard-bash`, not in a git hook), so a v0.45.0 copy answers exactly as the
+current one, which is how the fleet found its active hooks at v0.45.0 beside
+v0.59.0 binaries. No row can show that, and a green line for it would be true
+and useless, so the exit status says it:
+
+| exit | meaning |
+| ---- | ------- |
+| 0 | every row right, and the hook is the source's build |
+| 1 | a row answered wrong, a hook is missing, or nothing could be judged |
+| 3 | every row right, but the build differs from the source's (or either has no readable version): UNDETERMINED, not a pass; `-install` recopies it |
+
+"How many releases behind is it?" is deliberately not answered here:
+`staletools -releases` answers it, and already marks the hook git runs
+(`<core.hooksPath>/<hook-name>`). `hookcheck -git` judges behaviour only, and
+does not duplicate it.
+
+A copy older than v0.40.0 reads red (exit 1). The versions are printed beside the
+exit-3 statement as context, never as a verdict on behaviour. A new rule in a
+guard needs a row in `hookcheck`'s `gitCases` the day it ships.
+
 ## What the hook refuses, and what it deliberately allows
 
 **A URL that carries a credential.** The offending string is never printed —
