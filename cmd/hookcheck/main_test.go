@@ -15,6 +15,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/discard"
 	"github.com/go-gitsafe/gitsafe/literaltick"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
+	"github.com/go-gitsafe/gitsafe/readback"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
 	"github.com/go-gitsafe/gitsafe/sigpipe"
@@ -344,6 +345,7 @@ func TestEveryRuleGuardBashRunsFiresOnThisCorpus(t *testing.T) {
 		"secretarg":   func(c string) bool { return secretarg.Check(c).Found() },
 		"discard":     func(c string) bool { return discard.Check(c).Found() },
 		"pipestatus":  func(c string) bool { return pipestatus.Check(c).Found() },
+		"readback":    func(c string) bool { return readback.Check(c).Found() },
 		"sigpipe":     func(c string) bool { return sigpipe.Check(c).Found() },
 		"shellwork":   func(c string) bool { return shellwork.Check(c).Found() },
 		"volatile":    func(c string) bool { return volatile.Check(c, cwd, home, tmpdir).Found() },
@@ -425,6 +427,7 @@ func TestTheBackgroundCorpusAsksTheRulesThatReadTheFlag(t *testing.T) {
 			return volatile.CheckRedirect(c, cwd, home, tmpdir, true).Found()
 		},
 		"bgstatus": func(c string) bool { return bgstatus.Check(c, true).Found() },
+		"readback": func(c string) bool { return readback.Check(c).Found() },
 	}
 	refuse := map[string]int{}
 	for _, c := range allCases() {
@@ -445,6 +448,37 @@ func TestTheBackgroundCorpusAsksTheRulesThatReadTheFlag(t *testing.T) {
 	for name := range asks {
 		if refuse[name] == 0 {
 			t.Errorf("no background row makes %s refuse: the table does not ask about it", name)
+		}
+	}
+}
+
+// ⛔ THE ATTRIBUTION FOR THE readback ROWS: a foreground row that mentions a
+// file read back must be refused by readback, and the allow rows must not be.
+// bgstatus is asked with the flag OFF, which is what the foreground is, so a
+// refusal cannot be its.
+func TestTheReadbackRowsAreAttributedToReadback(t *testing.T) {
+	n := 0
+	for _, c := range corpus {
+		if !strings.Contains(c.name, "read back") && !strings.Contains(c.name, "|| reads") {
+			continue
+		}
+		n++
+		if c.want != "refuse" {
+			continue
+		}
+		if !readback.Check(c.cmd).Found() {
+			t.Errorf("%q: the table wants a refusal and readback does not give it", c.name)
+		}
+		if bgstatus.Check(c.cmd, false).Found() {
+			t.Errorf("%q: bgstatus fired with the flag off", c.name)
+		}
+	}
+	if n < 2 {
+		t.Errorf("found %d readback rows by name; the table lost them", n)
+	}
+	for _, c := range corpus {
+		if c.want == "allow" && readback.Check(c.cmd).Found() {
+			t.Errorf("%q: allowed by the table, refused by readback", c.name)
 		}
 	}
 }

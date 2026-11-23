@@ -45,7 +45,11 @@ func TestTheShapesThisRuleIsNotAbout(t *testing.T) {
 	for name, cmd := range map[string]string{
 		"nothing discarded":                  `gotest ./... > /Users/x/Documents/log.txt 2>&1`,
 		"brief carries it":                   `brief -n 20 -- mutsweep -dir . -- go test ./...`,
-		"no status claimed":                  `go build ./... > f 2>&1; echo done >> f`,
+		"leading setup only":                 `cd /d; export A=1; B=2; umask 077; set -e; brief -n 9 -- go build ./...`,
+		"setup then && chain":                `cd /d && brief -n 5 -- a && brief -n 5 -- b`,
+		"trailing empty statement":           `brief -n 9 -- a;`,
+		"setup only":                         `cd /d; export A=1`,
+		"an empty line":                      ``,
 		"writing about the form":             `agentsync tell repo 'never write cmd > f; echo "rc=$?" >> f'`,
 		"a status with no subject before it": `echo "rc=$?"`,
 	} {
@@ -62,7 +66,7 @@ func TestDoubleQuotesAreTheFormAndSingleQuotesAreNot(t *testing.T) {
 	if f := Check(`a > f 2>&1; echo "rc=$?" >> f`, true); !f.Found() {
 		t.Error(`allowed the double-quoted spelling, which is the one that was typed`)
 	}
-	if f := Check(`a > f 2>&1; echo 'rc=$?' >> f`, true); f.Found() {
+	if f := Check(`a > f 2>&1 && echo 'rc=$?' >> f`, true); f.Found() {
 		t.Errorf("refused a single-quoted mention, which the shell does not expand: %s", f)
 	}
 }
@@ -135,5 +139,117 @@ func TestAQuotedHeredocBodyIsNotTheForm(t *testing.T) {
 	cmd := "cat <<'EOF' > msg.txt\nnever write: a > f; echo \"rc=$?\" >> f\nEOF"
 	if f := Check(cmd, true); f.Found() {
 		t.Errorf("refused a quoted heredoc that writes ABOUT the form: %s", f)
+	}
+}
+
+// ⛔ Occurrence 3: a plain READ after the command, not the status idiom.
+func TestAnyStatementAfterTheCommandIsRefused(t *testing.T) {
+	for name, c := range map[string]struct{ cmd, sep, stmt string }{
+		"the founding grep":      {`brief -n 40 -- go test ./... > $L 2>&1; grep -c "^ok" $L; grep -v "^ok" $L`, ";", `grep -c "^ok" $L`},
+		"after setup":            {`cd /d; export A=1; brief -n 9 -- a; cat f`, ";", "cat f"},
+		"a newline":              {"brief -n 9 -- a\ncat f", "\n", "cat f"},
+		"or":                     {`brief -n 9 -- a || cat f`, "||", "cat f"},
+		"after an && link":       {`a && b; cat f`, ";", "cat f"},
+		"an empty one skipped":   {`a ;; cat f`, ";", "cat f"},
+		"not an assignment word": {`A-B=1; echo x`, ";", "echo x"},
+		"a bare = is no setup":   {`=1; echo x`, ";", "echo x"},
+		"a digit-led name":       {`1A=1; echo x`, ";", "echo x"},
+	} {
+		f := Check(c.cmd, true)
+		if !f.Found() {
+			t.Errorf("%s: allowed\n  %s", name, c.cmd)
+			continue
+		}
+		if f.Sep != c.sep || f.Statement != c.stmt {
+			t.Errorf("%s: Sep=%q Statement=%q, want %q %q", name, f.Sep, f.Statement, c.sep, c.stmt)
+		}
+		if Check(c.cmd, false).Found() {
+			t.Errorf("%s: refused in the foreground", name)
+		}
+	}
+}
+
+func TestTheSubjectIsTheCommandNotTheSetup(t *testing.T) {
+	f := Check(`cd /d; MY_VAR=1; brief -n 9 -- a; cat f`, true)
+	if f.Subject != "brief -n 9 -- a" {
+		t.Errorf("Subject = %q", f.Subject)
+	}
+}
+
+func TestSetupRecognisesOnlyEnvironmentStatements(t *testing.T) {
+	for st, want := range map[string]bool{
+		"": true, "  ": true, "export A=1": true, "cd x": true, "set -e": true, "umask 1": true,
+		"A=1": true, "_a9=x": true, "Z=": true, "ls": false, "A-B=1": false, "=1": false, "1A=1": false,
+		"a=1 b": true, "echo A=1": false, "ZZ": false, "a/b=1": false, "x@=1": false,
+	} {
+		if got := safeSetup(t, st); got != want {
+			t.Errorf("setup(%q) = %v, want %v", st, got, want)
+		}
+	}
+}
+
+// A panic in a guard must read as an ASSERTION failure here, not as luck.
+func TestTheEdgesDoNotPanicAndSayWhatTheyAre(t *testing.T) {
+	try := func(name string, fn func()) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("%s: panicked: %v", name, r)
+			}
+		}()
+		fn()
+	}
+	try("setup of nothing", func() {
+		if !setup("") {
+			t.Error("an empty statement is not setup")
+		}
+	})
+	try("setup of =1", func() {
+		if setup("=1") {
+			t.Error("=1 is not an assignment")
+		}
+	})
+	try("setup only", func() {
+		if f := Check("cd /d; export A=1", true); f.Found() {
+			t.Errorf("refused a line with no command: %s", f)
+		}
+	})
+	try("empty", func() {
+		if f := Check("", true); f.Found() {
+			t.Errorf("refused nothing: %s", f)
+		}
+	})
+	try("the subject past an empty statement", func() {
+		f := Check(`a > f 2>&1 ;; echo "rc=$?" >> f`, true)
+		if f.Subject != "a > f 2>&1" {
+			t.Errorf("Subject = %q", f.Subject)
+		}
+	})
+}
+
+// safeSetup turns a panic into an assertion failure, so a mutant that breaks a
+// guard is caught by what the test SAYS and not by the binary dying.
+func safeSetup(t *testing.T, st string) (got bool) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("setup(%q) panicked: %v", st, r)
+		}
+	}()
+	return setup(st)
+}
+
+// The same for Check on the lines with no command at all.
+func TestNoCommandAtAllIsNotARefusalAndNotAPanic(t *testing.T) {
+	for _, cmd := range []string{"", "cd /d", "cd /d; export A=1", ";"} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Check(%q) panicked: %v", cmd, r)
+				}
+			}()
+			if f := Check(cmd, true); f.Found() {
+				t.Errorf("Check(%q) refused: %s", cmd, f)
+			}
+		}()
 	}
 }

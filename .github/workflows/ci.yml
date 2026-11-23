@@ -71,7 +71,7 @@ jobs:
         shell: bash
         run: |
           m=github.com/go-gitsafe/gitsafe
-          pkgs=$m/cmd/guard-bash,$m/shellcmd,$m/amendmerged,$m/bypass,$m/chainedgate,$m/discard,$m/ghbyhand,$m/plain,$m/literaltick,$m/pipestatus,$m/bgstatus,$m/credurl,$m/secretarg,$m/shellwork,$m/sigpipe,$m/waiveenv,$m/sshweak,$m/stalebase,$m/testrun,$m/volatile
+          pkgs=$m/cmd/guard-bash,$m/shellcmd,$m/amendmerged,$m/bypass,$m/chainedgate,$m/discard,$m/ghbyhand,$m/plain,$m/literaltick,$m/pipestatus,$m/bgstatus,$m/readback,$m/credurl,$m/secretarg,$m/shellwork,$m/sigpipe,$m/waiveenv,$m/sshweak,$m/stalebase,$m/testrun,$m/volatile
           GOBIN="$RUNNER_TEMP/bin" go install github.com/go-fleettools/fleettools/cmd/covblocks@v0.157.0
           go test -count=1 -coverpkg="$pkgs" -coverprofile="$RUNNER_TEMP/cover.out" ./...
           "$RUNNER_TEMP/bin/covblocks" "$RUNNER_TEMP/cover.out"

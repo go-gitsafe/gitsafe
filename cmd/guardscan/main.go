@@ -34,6 +34,7 @@ import (
 	"github.com/go-gitsafe/gitsafe/ghbyhand"
 	"github.com/go-gitsafe/gitsafe/literaltick"
 	"github.com/go-gitsafe/gitsafe/pipestatus"
+	"github.com/go-gitsafe/gitsafe/readback"
 	"github.com/go-gitsafe/gitsafe/redact"
 	"github.com/go-gitsafe/gitsafe/secretarg"
 	"github.com/go-gitsafe/gitsafe/shellwork"
@@ -91,7 +92,7 @@ are printed through the redactor, the same way the guards print.`,
 	home, _ := os.UserHomeDir()
 	c.Flags().StringVar(&dir, "transcripts", filepath.Join(home, ".claude", "projects"),
 		"directory of Claude Code transcripts to read")
-	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, bgstatus, sigpipe, literaltick, literaltick-legacy, ghbyhand, waiveenv, sshweak, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
+	c.Flags().StringVar(&rule, "rule", "", "only this rule (bypass, secretarg, discard, pipestatus, bgstatus, readback, sigpipe, literaltick, literaltick-legacy, ghbyhand, waiveenv, sshweak, testrun, chainedgate, shellwork, stalebase, amendmerged, volatile, and the counting-only eqword and eqword-intended)")
 	c.Flags().BoolVar(&escaped, "escaped", false,
 		"only the commands somebody ran with a GITSAFE_ALLOW_* prefix")
 	c.Flags().IntVar(&examples, "examples", 3, "distinct commands to show per refusal kind")
@@ -255,6 +256,10 @@ func rules(cwd, home, tmpdir string) map[string]func(string) refusal {
 		"bgstatus": func(c string) refusal {
 			f := bgstatus.Check(c, true)
 			return kind(f, f.Found(), "a status recorded in the output and dropped from the exit status (if backgrounded)")
+		},
+		"readback": func(c string) refusal {
+			f := readback.Check(c)
+			return kind(f, f.Found(), "a file read back on the line that wrote it")
 		},
 		"volatile": func(c string) refusal {
 			f := volatile.Check(c, cwd, home, tmpdir)

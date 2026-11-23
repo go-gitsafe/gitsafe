@@ -126,6 +126,39 @@ func TestBGStatusIsWiredAndReadsTheBackgroundFlag(t *testing.T) {
 	}
 }
 
+// ⛔ THE WIRING LINE for readback, driven end to end, in the FOREGROUND, where
+// occurrence 4 happened: priorart exited 2 and the line read cat's 0. The
+// target is durable so no other rule can be the one refusing.
+func TestReadbackIsWiredInTheForegroundAndHasNoEscape(t *testing.T) {
+	const f = `/Users/me/src/r/out.txt`
+	in := func(cmd, bg string) string {
+		return `{"cwd":"/Users/me/src/r","tool_input":{"command":"` + cmd + `"` + bg + `}}`
+	}
+	read := in(`priorart x > `+f+` 2>&1; brief -n 25 -- cat `+f, ``)
+	out, _ := drive(t, read)
+	for _, want := range []string{`"deny"`, "LAST statement", "NEXT turn", "brief -n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, out)
+		}
+	}
+	for name, cmd := range map[string]string{
+		"&& keeps the failure":      in(`priorart x > `+f+` 2>&1 && brief -n 25 -- cat `+f, ``),
+		"nothing read back":         in(`priorart x > `+f+` 2>&1`, ``),
+		"the later one writes too":  in(`a > `+f+`; b >> `+f, ``),
+		"a plain command and setup": in(`cd /Users/me/src/r; git status`, ``),
+	} {
+		if out, _ := drive(t, cmd); out != "" {
+			t.Errorf("%s was refused:\n%s", name, out)
+		}
+	}
+	for _, env := range []string{"GITSAFE_ALLOW_READBACK", "GITSAFE_ALLOW_BGSTATUS"} {
+		t.Setenv(env, "1")
+		if out, _ := drive(t, read); out == "" {
+			t.Errorf("%s opened a rule that has no escape", env)
+		}
+	}
+}
+
 // A GitHub write by hand is refused in two voices: naming the program when one
 // does the act, and asking for one when none does — never letting it through.
 func TestGHByHandNamesTheProgramOrAsksForOne(t *testing.T) {

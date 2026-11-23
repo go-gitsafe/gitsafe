@@ -50,8 +50,18 @@
 //	brief -n 20 -- cmd > f 2>&1         # the status is the command's
 //	cmd && echo "rc=$?"                 # `&&` short-circuits: a failure survives
 //	cmd > f 2>&1                        # nothing was discarded
-//	cmd > f; echo done                  # no status was claimed to be recorded
+//	cd /dir; export A=1; brief -n 9 -- cmd   # leading setup is not the command
 //	echo 'write about ; echo $? here'   # single quotes: writing about a form
+//
+// # What it ALSO refuses (occurrence 3, v0.65.0)
+//
+// ANY statement after the measured command, a plain read included:
+//
+//	brief -n 40 -- go test ./... > $L 2>&1; grep -c "^ok" $L; grep -v "^ok" $L
+//
+// reported exit 0 while the suite was red, because the line's status is the
+// last `grep`'s. After leading environment setup (`export`, `cd`, `set`,
+// `umask`, `VAR=...`) exactly ONE command may stand; `&&` after it stays legal.
 //
 // ⛔ `&&` is the correct spelling and must stay allowed, or the rule has no
 // correct form and gets routed around: `brief -n 5 -- a && brief -n 20 -- b`
@@ -138,6 +148,55 @@ func Check(cmd string, background bool) Finding {
 				break
 			}
 			return Finding{Statement: strings.TrimSpace(st), Subject: prev, Sep: seps[j]}
+		}
+	}
+	return afterTheCommand(stmts, seps)
+}
+
+// setup reports whether a statement only prepares the environment: it runs
+// nothing whose status anyone measures.
+func setup(st string) bool {
+	f := strings.Fields(st)
+	if len(f) == 0 {
+		return true
+	}
+	switch f[0] {
+	case "export", "cd", "set", "umask":
+		return true
+	}
+	i := strings.IndexByte(f[0], '=')
+	if i <= 0 {
+		return false
+	}
+	for n, r := range f[0][:i] {
+		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || n > 0 && r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// afterTheCommand refuses ANY statement after the measured command that a
+// non-`&&` separator joins to it, a plain read included: `brief -n 40 -- go
+// test ./... > $L 2>&1; grep -c "^ok" $L` reported exit 0 over a red suite
+// (occurrence 3). Leading environment setup is not the command.
+func afterTheCommand(stmts, seps []string) Finding {
+	k := 0
+	for k < len(stmts) && setup(stmts[k]) {
+		k++
+	}
+	if k >= len(stmts) {
+		return Finding{}
+	}
+	subject := strings.TrimSpace(stmts[k])
+	for j := k; j < len(stmts)-1; j++ {
+		if seps[j] == "&&" {
+			continue
+		}
+		for m := j + 1; m < len(stmts); m++ {
+			if next := strings.TrimSpace(stmts[m]); next != "" {
+				return Finding{Statement: next, Subject: subject, Sep: seps[j]}
+			}
 		}
 	}
 	return Finding{}
