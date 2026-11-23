@@ -7,8 +7,11 @@
 //
 // S = words, blanks, ; & | && || newline, < > redirections (not <<, <(, >( ),
 // '…', "…", \x, $name / $special, and $( … ) nested to any depth with the same
-// grammar inside. Anything else in code or double-quote context — an unquoted
-// #, <<, $', $", ${, $[, $((, ((, a bare ( or ) , the words case/esac, an
+// grammar inside. A # that opens a word at the top level is a comment, read to
+// the end of the line; $'…' is read with its own rule (a backslash escapes, so
+// \' does not close it) over the escapes whose extent is known. Anything else in
+// code or double-quote context — a # inside a word or inside $( ), <<, a $' with
+// another escape, $", ${, $[, $((, ((, a bare ( or ) , the words case/esac, an
 // unclosed quote or substitution — makes the command UNCERTAIN.
 //
 // S+ adds QUOTED heredocs ([CheckHeredoc]).
@@ -113,6 +116,69 @@ func heredocOpener(cmd string, i int) (word string, end int, ok bool) {
 
 func isDelim(c byte) bool {
 	return c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+// startsComment reports whether the # at cmd[i] begins a comment: it opens a word
+// (the start, a blank or a newline before it) and that blank or newline is not
+// escaped (echo a\ #x is one word; a backslash before it refuses). A #
+// inside a word (a#b) is an ordinary character, so it is NOT a comment and stays
+// outside the grammar.
+func startsComment(cmd string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	switch cmd[i-1] {
+	case ' ', '\t':
+		return !(i >= 2 && cmd[i-2] == '\\') // an escaped blank is part of the word
+	case '\n':
+		return !(i >= 2 && cmd[i-2] == '\\') // a continued line joins the words
+	}
+	return false
+}
+
+// ansiC scans the body of $'…' from cmd[i] (just after the opening quote). Inside
+// it a backslash escapes, so \' does not close the quote -- the opposite of '…',
+// where nothing does. It returns the index of the closing quote, or a reason the
+// grammar cannot place it. Only escapes whose extent is known are accepted: \c, \C-,
+// \M-, \x, \u, \U and a trailing or newline backslash consume a count or a
+// following character that the shells do not agree on, so they are refused rather
+// than guessed at.
+func ansiC(cmd string, i int) (end int, why string) {
+	for j := i; j < len(cmd); j++ {
+		switch c := cmd[j]; {
+		case c == '\'':
+			return j, ""
+		case c == '\\':
+			if j+1 >= len(cmd) || !strings.ContainsRune(`\'"abeEfnrtv01234567`, rune(cmd[j+1])) {
+				return 0, "$' with an escape the grammar does not place"
+			}
+			j++
+		}
+	}
+	return 0, "$' unclosed"
+}
+
+// dupWord reports whether the > or < at cmd[i] is a >& or <& whose target is
+// anything but a file descriptor number or - ended by a delimiter. Bash 3.2
+// expands such a target word a second time: a backtick quoted inside it, with
+// '…' or with $'…', ran (found by FuzzS, 2026-11-23), so a quote does not make it
+// literal there.
+func dupWord(cmd string, i int) bool {
+	if i+1 >= len(cmd) || cmd[i+1] != '&' {
+		return false
+	}
+	j := i + 2
+	if j < len(cmd) && cmd[j] == '-' {
+		j++
+	} else {
+		for j < len(cmd) && cmd[j] >= '0' && cmd[j] <= '9' {
+			j++
+		}
+		if j == i+2 {
+			return true
+		}
+	}
+	return j < len(cmd) && !strings.ContainsRune(" \t\n;&|)", rune(cmd[j]))
 }
 
 // skipped is the verdict unc answers with for the one refusal a test switched
@@ -238,7 +304,25 @@ func checkWith(cmd string, heredocs bool, skip string) Result {
 					}
 					stack = append(stack, code)
 					i++
-				case n == '{' || n == '[' || n == '\'' || n == '"':
+				case n == '\'':
+					end, why := ansiC(cmd, i+2)
+					if why != "" {
+						if r := unc(why); r.V != skipped {
+							return r
+						}
+						continue
+					}
+					if len(pending) > 0 {
+						for k := i; k < end; k++ {
+							if cmd[k] == '\n' {
+								if r := unc("newline in quotes with a heredoc pending"); r.V != skipped {
+									return r
+								}
+							}
+						}
+					}
+					i = end
+				case n == '{' || n == '[' || n == '"':
 					if r := unc("$" + string(n)); r.V != skipped {
 						return r
 					}
@@ -247,6 +331,17 @@ func checkWith(cmd string, heredocs bool, skip string) Result {
 				}
 			}
 		case '#':
+			if startsComment(cmd, i) && len(stack) == 1 {
+				// The shell reads to the end of the line and nothing in it runs. The
+				// newline itself is left for the newline case (a heredoc body may
+				// begin there).
+				if e := strings.IndexByte(cmd[i:], '\n'); e < 0 {
+					i = len(cmd)
+				} else {
+					i += e - 1
+				}
+				continue
+			}
 			if r := unc("unquoted #"); r.V != skipped {
 				return r
 			}
@@ -315,9 +410,19 @@ func checkWith(cmd string, heredocs bool, skip string) Result {
 					return r
 				}
 			}
+			if dupWord(cmd, i) {
+				if r := unc("&-redirection to a word"); r.V != skipped {
+					return r
+				}
+			}
 		case '>':
 			if i+1 < len(cmd) && cmd[i+1] == '(' {
 				if r := unc(">("); r.V != skipped {
+					return r
+				}
+			}
+			if dupWord(cmd, i) {
+				if r := unc("&-redirection to a word"); r.V != skipped {
 					return r
 				}
 			}

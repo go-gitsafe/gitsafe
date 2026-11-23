@@ -26,7 +26,10 @@ func TestCheckForChoosesTheGrammarFromTheShell(t *testing.T) {
 		{"bash, in grammar", "/bin/bash", "echo '" + T + "'", false, ""},
 		{"an unknown shell", "/bin/fish", "echo '" + T + "'", true, "fish"},
 		{"an unset shell", "", "echo '" + T + "'", true, "unset"},
-		{"a comment holding a backtick", "/bin/zsh", "echo a # " + T, true, "#"},
+		{"a comment holding a backtick", "/bin/zsh", "echo a # " + T, false, ""},
+		{"a # inside a word is not a comment", "/bin/zsh", "echo a#b " + T, true, "#"},
+		{"ANSI-C quoting with an escaped quote", "/bin/zsh", "echo $'a\\'" + T + "'", false, ""},
+		{"a backtick after the close of ANSI-C quoting", "/bin/zsh", "echo $'a' " + T, true, ""},
 		{"a parenthesis", "/bin/zsh", "(echo '" + T + "')", true, "bare ("},
 		{"an unquoted heredoc", "/bin/zsh", "cat <<EOF\n" + T + "\nEOF\n", true, "unquoted"},
 		{"no backtick, unknown shell", "/bin/fish", "echo (x) # y", false, ""},
@@ -58,8 +61,8 @@ func TestCheckForHonoursTheEscapePrefix(t *testing.T) {
 		{"in grammar, prefixed", Escape + "=1 echo " + T, false},
 		{"in grammar, prefix =0", Escape + "=0 echo " + T, true},
 		{"in grammar, the next statement is not covered", Escape + "=1 true; echo " + T, true},
-		{"outside the grammar, prefixed", Escape + "=1 echo " + T + " # c", false},
-		{"outside the grammar, a second backtick uncovered", Escape + "=1 echo " + T + " # c\necho " + T, true},
+		{"outside the grammar, prefixed", Escape + "=1 echo " + T + " a#c", false},
+		{"outside the grammar, a second backtick uncovered", Escape + "=1 echo " + T + " a#c\necho " + T, true},
 	} {
 		if got := CheckFor("/bin/zsh", tc.cmd).Found(); got != tc.refuse {
 			t.Errorf("%s: refuses = %v, want %v\n  %q", tc.name, got, tc.refuse, tc.cmd)
