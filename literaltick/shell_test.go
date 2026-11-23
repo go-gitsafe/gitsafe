@@ -61,8 +61,8 @@ func TestCheckForHonoursTheEscapePrefix(t *testing.T) {
 		{"in grammar, prefixed", Escape + "=1 echo " + T, false},
 		{"in grammar, prefix =0", Escape + "=0 echo " + T, true},
 		{"in grammar, the next statement is not covered", Escape + "=1 true; echo " + T, true},
-		{"outside the grammar, prefixed", Escape + "=1 echo " + T + " # c", false},
-		{"outside the grammar, a second backtick uncovered", Escape + "=1 echo " + T + " # c\necho " + T, true},
+		{"outside the grammar, prefixed", Escape + "=1 echo " + T + " a#c", false},
+		{"outside the grammar, a second backtick uncovered", Escape + "=1 echo " + T + " a#c\necho " + T, true},
 	} {
 		if got := CheckFor("/bin/zsh", tc.cmd).Found(); got != tc.refuse {
 			t.Errorf("%s: refuses = %v, want %v\n  %q", tc.name, got, tc.refuse, tc.cmd)
