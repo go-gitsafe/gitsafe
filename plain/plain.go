@@ -158,6 +158,29 @@ func ansiC(cmd string, i int) (end int, why string) {
 	return 0, "$' unclosed"
 }
 
+// dupWord reports whether the > or < at cmd[i] is a >& or <& whose target is
+// anything but a file descriptor number or - ended by a delimiter. Bash 3.2
+// expands such a target word a second time: a backtick quoted inside it, with
+// '…' or with $'…', ran (found by FuzzS, 2026-11-23), so a quote does not make it
+// literal there.
+func dupWord(cmd string, i int) bool {
+	if i+1 >= len(cmd) || cmd[i+1] != '&' {
+		return false
+	}
+	j := i + 2
+	if j < len(cmd) && cmd[j] == '-' {
+		j++
+	} else {
+		for j < len(cmd) && cmd[j] >= '0' && cmd[j] <= '9' {
+			j++
+		}
+		if j == i+2 {
+			return true
+		}
+	}
+	return j < len(cmd) && !strings.ContainsRune(" \t\n;&|)", rune(cmd[j]))
+}
+
 // skipped is the verdict unc answers with for the one refusal a test switched
 // off (see checkSkipping): the scan then goes on as if the construct were
 // ordinary code, which is what a deleted refusal would do.
@@ -387,9 +410,19 @@ func checkWith(cmd string, heredocs bool, skip string) Result {
 					return r
 				}
 			}
+			if dupWord(cmd, i) {
+				if r := unc("&-redirection to a word"); r.V != skipped {
+					return r
+				}
+			}
 		case '>':
 			if i+1 < len(cmd) && cmd[i+1] == '(' {
 				if r := unc(">("); r.V != skipped {
+					return r
+				}
+			}
+			if dupWord(cmd, i) {
+				if r := unc("&-redirection to a word"); r.V != skipped {
 					return r
 				}
 			}
