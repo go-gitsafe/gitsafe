@@ -12,6 +12,19 @@ const (
 	twoStep = `ratewait --rest 400 --timeout 55m > $L 2>&1; echo "ratewait rc=$?" >> $L; prwait -repo o/r 11 >> $L 2>&1; echo "prwait rc=$?" >> $L`
 )
 
+// ⛔ THE EDGES RUN FIRST, on purpose. Go runs tests in source order and a
+// panicking mutant kills the binary, so the test that RECOVERS and reports the
+// panic with t.Errorf has to be the first one run: mutsweep then reads an
+// assertion failure for bgstatus.go's indexing guards (len(f) == 0, i <= 0,
+// k >= len(stmts)) instead of "caught by PANIC", which is luck, not proof.
+func TestAAEdgesAreAssertedBeforeAnythingCanPanic(t *testing.T) {
+	edgesDoNotPanicAndSayWhatTheyAre(t)
+	noCommandAtAllIsNotARefusalAndNotAPanic(t)
+	for _, st := range []string{"ls", "cd x", "A=1", "=1"} {
+		safeSetup(t, st)
+	}
+}
+
 // ⛔ The founding case AND its control in one test: the SAME text is a defect in
 // the background and correct in the foreground, so a rule that read only the
 // text would have to choose one of them wrongly.
@@ -189,7 +202,7 @@ func TestSetupRecognisesOnlyEnvironmentStatements(t *testing.T) {
 }
 
 // A panic in a guard must read as an ASSERTION failure here, not as luck.
-func TestTheEdgesDoNotPanicAndSayWhatTheyAre(t *testing.T) {
+func edgesDoNotPanicAndSayWhatTheyAre(t *testing.T) {
 	try := func(name string, fn func()) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -239,7 +252,7 @@ func safeSetup(t *testing.T, st string) (got bool) {
 }
 
 // The same for Check on the lines with no command at all.
-func TestNoCommandAtAllIsNotARefusalAndNotAPanic(t *testing.T) {
+func noCommandAtAllIsNotARefusalAndNotAPanic(t *testing.T) {
 	for _, cmd := range []string{"", "cd /d", "cd /d; export A=1", ";"} {
 		func() {
 			defer func() {
