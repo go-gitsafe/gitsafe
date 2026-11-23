@@ -289,9 +289,11 @@ func TestShort(t *testing.T) {
 		"/usr/local/bin/g --flag":       "g",
 		"":                              "",
 	} {
-		if got := short(in); got != want {
-			t.Errorf("short(%q) = %q, want %q", in, got, want)
-		}
+		noPanic(t, "short("+in+")", func() {
+			if got := short(in); got != want {
+				t.Errorf("short(%q) = %q, want %q", in, got, want)
+			}
+		})
 	}
 }
 
