@@ -30,12 +30,12 @@ func TestEachRefusalIsIsolatedFromTheBacktickRule(t *testing.T) {
 		ran      bool   // the production zsh runs the backtick
 		twin     string // the nearest command the grammar allows
 	}{
-		{"unquoted #", "E\n#<<-'E'\n*" + T + "}a<<-E\nE\n", true, true, "echo '# " + T + "'"},
+		{"unquoted #", "echo a#b " + T, false, true, "echo 'a#b " + T + "'"},
 		{"bare (", "echo (x '\n" + T + "'", true, false, "echo '(x' '" + T + "'"},
 		{"${", "echo ${x:-'" + T + "'}", true, false, "echo '${x:-" + T + "}'"},
 		{"case", "echo esac '" + T + "'", true, false, "echo 'esac' '" + T + "'"},
 		{"$((", "echo $(('" + T + "'))", false, true, "echo '$((" + T + "))'"},
-		{"$'", "echo $'a\\'" + T + "'", false, false, "echo 'a$'" + " '" + T + "'"},
+		{"$'", "echo $'\\cx' " + T, false, true, "echo 'a$'" + " '" + T + "'"},
 		{"<< unquoted", "cat <<E\n" + T + "\nE\n", false, true, "cat <<'E'\n" + T + "\nE\n"},
 	} {
 		got := CheckHeredoc(tc.cmd)

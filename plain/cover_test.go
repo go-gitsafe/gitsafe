@@ -2,6 +2,14 @@ package plain
 
 import "testing"
 
+// With the $' refusal switched off the scan goes on as if the $ were ordinary, so
+// the bare backtick after the quote is what the grammar then refuses.
+func TestASkippedAnsiCRefusalLeavesTheScanRunning(t *testing.T) {
+	if got := checkSkipping("echo $'\\cx' "+T, true, "$'").V; got != Refuse {
+		t.Errorf("with the $' refusal off: %v, want Refuse", got)
+	}
+}
+
 // Each construct the grammar cannot place is Uncertain, with its own reason, in
 // the contexts where it can hide: a heredoc waiting for its body while a quote
 // is open, `$((` inside double quotes, `>(`, a `)` with a heredoc pending and a
