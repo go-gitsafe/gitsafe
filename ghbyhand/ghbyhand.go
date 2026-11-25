@@ -293,6 +293,10 @@ type Finding struct {
 	Instead string
 	// Missing is true when no fleet program does the act yet.
 	Missing bool
+	// CodeSearch is true when the refusal is GitHub code search, a read whose
+	// zero is an answer not obtained (see codesearch.go): Instead is then a
+	// replacement for a READ, not a fleet program.
+	CodeSearch bool
 }
 
 // Found reports whether this finding is a refusal.
@@ -300,6 +304,9 @@ func (f Finding) Found() bool { return f.Instead != "" }
 
 // Why names the act, for a caller that prints it.
 func (f Finding) Why() string {
+	if f.CodeSearch {
+		return "it would " + f.Act
+	}
 	if f.Missing {
 		return "it would " + f.Act + " by hand, and no fleet program does that act yet"
 	}
@@ -334,6 +341,9 @@ func Check(cmd string) Finding {
 // checkStatement asks about one simple command.
 func checkStatement(st string) Finding {
 	words := command(st)
+	if codeSearchFetcher(words) {
+		return codeSearchFinding(st)
+	}
 	if len(words) < 2 || !isGH(words[0]) {
 		return Finding{}
 	}
@@ -350,6 +360,13 @@ func checkStatement(st string) Finding {
 	words = dropGlobalRepo(words)
 	if len(words) < 2 {
 		return Finding{}
+	}
+	// Before the read list: `search` is a read noun and `gh api` without a
+	// field is a read, and code search is the read this refuses (codesearch.go).
+	// Before the read list: `search` is a read noun and `gh api` without a
+	// field is a read, and code search is the read this refuses (codesearch.go).
+	if codeSearchGH(words) || (words[1] == "api" && isCodeSearchPath(apiEndpoint(words))) {
+		return codeSearchFinding(st)
 	}
 	if words[1] == "api" {
 		return checkAPI(st, words)
