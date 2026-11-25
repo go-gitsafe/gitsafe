@@ -370,6 +370,37 @@ func TestRefusesAMutationTempFileAndLetsACleanPushThrough(t *testing.T) {
 	}
 }
 
+// The judge is wired into the hook itself, not only callable.
+func TestRunRefusesAMutationTempFile(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "README.md")
+	gitIn(t, dir, "commit", "-qm", "first")
+	base := gitIn(t, dir, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(dir, ".f.go.atomicwrite-7"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "oops")
+	tip := gitIn(t, dir, "rev-parse", "HEAD")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	refs := "refs/heads/work " + tip + " refs/heads/work " + base + "\n"
+	var out, errb bytes.Buffer
+	if code := run([]string{"origin", "https://github.com/o/r.git"}, strings.NewReader(refs), &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1:\n%s", code, errb.String())
+	}
+}
+
 func TestMutationTempPattern(t *testing.T) {
 	in := []string{
 		".file.go.atomicwrite-1",
