@@ -245,6 +245,14 @@ func run(stdin io.Reader, stdout io.Writer) int {
 	// pass, so `gh issue create` was typed by hand three times. The refusal
 	// then asks for the missing tool rather than naming one.
 	if f := ghbyhand.Check(p.ToolInput.Command); f.Found() {
+		// ⛔ A READ, refused: GitHub code search is an index, and its zero reads as
+		// "absent" (2026-11-24: total_count 0 for a symbol on main). See ghbyhand's
+		// codesearch.go. NO ESCAPE, like the rest of this rule.
+		if f.CodeSearch {
+			return deny(stdout, fmt.Sprintf(
+				"Refused: %s.\n\n%s\n\nUse instead: %s",
+				f.Why(), f.String(), f.Instead))
+		}
 		if f.Missing {
 			return deny(stdout, fmt.Sprintf(
 				"Refused: %s.\n\n%s\n\nThere is no program to use instead: %s",

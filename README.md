@@ -2055,6 +2055,20 @@ never fire — the hook runs before any shell, so the prefix reaches it as text 
 and it was removed rather than repaired (#93). A refusal here means the program
 is what to run, or the program is what to write.
 
+### `ghbyhand` also refuses GitHub code search, a read
+
+`gh search code`, `gh api search/code` (with or without a leading slash, `-X GET`,
+`-f q=…`, or the query in the URL) and `curl`/`wget` to
+`api.github.com/search/code` are refused. It is the one read refused here,
+because its empty answer cannot be told from a negative: on 2026-11-24
+`gh api search/code -f q="A11yElements repo:o/r"` returned `total_count 0` for a
+symbol that was on `main` at `view.go:889`. Code search answers about an **index**
+that lags and promises no coverage, so its zero is an answer not obtained. The
+refusal names the replacement: `git fetch`, then `git grep -n <pattern>
+origin/main` in a clone under `~/Documents/VCS/GIT/localhost` (a shallow clone
+there if none exists). `gh search issues|prs|repos|commits` and
+`gh api search/issues` stay allowed: they read the tracker. No escape.
+
 
 ## GitLab: `glscopes` and `glci`
 

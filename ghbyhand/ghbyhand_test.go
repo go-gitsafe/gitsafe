@@ -214,7 +214,7 @@ func TestAllows(t *testing.T) {
 		"gh release download v0.1.0 -p '*.tar.gz'",
 		"gh workflow list",
 		"gh search issues veracrypt --owner go-fde",
-		"gh search code --owner go-fde Detect",
+		"gh search issues --owner go-fde Detect", // `search code` is refused since codesearch.go: its zero is an answer not obtained
 		"gh label list",
 		"gh secret list",
 		"gh variable get NAME",
