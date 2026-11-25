@@ -308,6 +308,84 @@ func TestRefusesALargeFileEvenWhenALaterCommitDeletesIt(t *testing.T) {
 	}
 }
 
+// go-filesystems/smb v0.17.2: `.file.go.atomicwrite-2262724758` was committed.
+func TestRefusesAMutationTempFileAndLetsACleanPushThrough(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "README.md")
+	gitIn(t, dir, "commit", "-qm", "first")
+	base := gitIn(t, dir, "rev-parse", "HEAD")
+
+	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pkg", ".file.go.atomicwrite-2262724758"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "work (with the temp by mistake)")
+	withTemp := gitIn(t, dir, "rev-parse", "HEAD")
+	gitIn(t, dir, "rm", "-q", "pkg/.file.go.atomicwrite-2262724758")
+	gitIn(t, dir, "commit", "-qm", "remove the temp")
+	tip := gitIn(t, dir, "rev-parse", "HEAD")
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Refused even though the tip no longer holds it, naming the path.
+	refs := "refs/heads/work " + tip + " refs/heads/work " + base + "\n"
+	var errb bytes.Buffer
+	if code := judgeMutationTemps([]string{"origin"}, []byte(refs), &errb); code != 1 {
+		t.Fatalf("exit %d, want 1:\n%s", code, errb.String())
+	}
+	for _, want := range []string{"pkg/.file.go.atomicwrite-2262724758", "GITSAFE_ALLOW_ATOMICWRITE"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, errb.String())
+		}
+	}
+
+	// A clean push: only the removal is sent.
+	clean := "refs/heads/work " + tip + " refs/heads/work " + withTemp + "\n"
+	var errc bytes.Buffer
+	if code := judgeMutationTemps([]string{"origin"}, []byte(clean), &errc); code != 0 {
+		t.Errorf("a clean push: exit %d:\n%s", code, errc.String())
+	}
+
+	t.Setenv("GITSAFE_ALLOW_ATOMICWRITE", "1")
+	var errd bytes.Buffer
+	if code := judgeMutationTemps([]string{"origin"}, []byte(refs), &errd); code != 0 {
+		t.Errorf("the escape did not let it through: %s", errd.String())
+	}
+}
+
+func TestMutationTempPattern(t *testing.T) {
+	in := []string{
+		".file.go.atomicwrite-1",
+		"a/b/.x.go.atomicwrite-22",
+		"a/x.atomicwrite-3",    // no leading dot
+		".x.atomicwrite-",      // no digits
+		".x.atomicwrite-5.bak", // trailing text
+		"docs/atomicwrite-notes.md",
+	}
+	got := mutationTempPaths(in)
+	want := []string{".file.go.atomicwrite-1", "a/b/.x.go.atomicwrite-22"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
 // What git cannot read, and a deletion, are not refused by this judge.
 func TestBigBlobGuardIgnoresWhatItShould(t *testing.T) {
 	const zero = "0000000000000000000000000000000000000000"

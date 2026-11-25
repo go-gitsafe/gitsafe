@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-gitsafe/gitsafe/bigblob"
@@ -59,7 +60,99 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if code := judgeBigBlobs(args, refs, stderr); code != 0 {
 		return code
 	}
+	if code := judgeMutationTemps(args, refs, stderr); code != 0 {
+		return code
+	}
 	return chain(args, bytes.NewReader(refs), stdout, stderr)
+}
+
+// mutationTemp matches the temp copy mutsweep (go-fleettools/mutate) leaves
+// beside a source file: `.file.go.atomicwrite-2262724758`.
+var mutationTemp = regexp.MustCompile(`(^|/)\.[^/]+\.atomicwrite-[0-9]+$`)
+
+// judgeMutationTemps refuses a push whose new commits ADD a mutation-testing
+// temp file. One was committed and released twice (go-fde/veracrypt v0.8.0,
+// go-filesystems/smb v0.17.2); mutsweep now refuses to start with one present,
+// and nothing stopped it being committed. Like the big-blob judge it reads
+// every object the push sends, so a file added and deleted later still counts.
+func judgeMutationTemps(args []string, refs []byte, stderr io.Writer) int {
+	if os.Getenv("GITSAFE_ALLOW_ATOMICWRITE") != "" {
+		return 0
+	}
+	remote := "origin"
+	if len(args) >= 1 && args[0] != "" {
+		remote = args[0]
+	}
+	var found []string
+	seen := map[string]bool{}
+	for _, u := range protect.Parse(bytes.NewReader(refs)) {
+		if u.Deleting() {
+			continue
+		}
+		revArgs := []string{"rev-list", "--objects", u.LocalSHA, "--not", "--remotes=" + remote}
+		if !u.Creating() {
+			revArgs = append(revArgs, u.RemoteSHA)
+		}
+		out, err := gitOutput(revArgs...)
+		if err != nil {
+			continue // git cannot say: the other judges and the server still stand
+		}
+		// rev-list prints a blob once, under one path: a temp holding the same
+		// bytes as another file would hide behind it. The log names every path
+		// each commit ADDS, so both are read.
+		logArgs := []string{"log", "-z", "--format=", "--name-only", "--diff-filter=A", u.LocalSHA, "--not", "--remotes=" + remote}
+		if !u.Creating() {
+			logArgs = append(logArgs, u.RemoteSHA)
+		}
+		paths := revListPaths(out)
+		if added, lerr := gitOutput(logArgs...); lerr == nil {
+			paths = append(paths, strings.Split(added, "\x00")...)
+		}
+		for _, p := range mutationTempPaths(paths) {
+			if !seen[p] {
+				seen[p] = true
+				found = append(found, p)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return 0
+	}
+	fmt.Fprintf(stderr, "\ngit: refusing to push — it would publish %d mutation-testing temp file(s):\n\n", len(found))
+	for _, p := range found {
+		fmt.Fprintf(stderr, "      %s\n", p)
+	}
+	fmt.Fprintf(stderr, "\n  mutsweep leaves these next to a source file when it is interrupted; one\n")
+	fmt.Fprintf(stderr, "  shipped in two releases. Take it out of every commit of the push, then\n")
+	fmt.Fprintf(stderr, "  add `.*.atomicwrite-*` to .gitignore.\n\n")
+	fmt.Fprintf(stderr, "  If this really is meant:\n")
+	fmt.Fprintf(stderr, "      GITSAFE_ALLOW_ATOMICWRITE=1 gitpush %s ...\n\n", remote)
+	return 1
+}
+
+// revListPaths returns the paths named in `git rev-list --objects` output.
+func revListPaths(revListObjects string) []string {
+	var paths []string
+	for _, line := range strings.Split(revListObjects, "\n") {
+		if _, p, ok := strings.Cut(line, " "); ok {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
+// mutationTempPaths returns those of paths that look like a mutsweep temp
+// file, in order, without duplicates.
+func mutationTempPaths(paths []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range paths {
+		if mutationTemp.MatchString(p) && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // judgeBigBlobs refuses a push that would publish a file of [bigblob.Limit]
