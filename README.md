@@ -272,6 +272,8 @@ which is why `ghauth.RetryAt` reads those and nothing else.
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
 | `ghpkg` | Lists and deletes the versions of a published package. Refuses to delete without `--yes`, printing what it would remove; refuses a tag that names no version or two; and **names the other tags on the manifest it is about to delete**, because several can point at one. |
 | `guard-bash` | Refuses a shell command that would put a secret on a command line, **before it runs**. An agent harness hook: it reads the command on stdin and answers with a deny. The rule it enforces was written down in three places and broken anyway — see below. |
+| `guard-read` | A PreToolUse hook for the **Read** and **Bash** tools: refuses a call that would DISPLAY a file holding a credential, judged by opening the file and scanning its content (JWT, PEM private keys, GitHub/GitLab/AWS/Slack tokens, `password`/`secret`/`token` keys in TOML, YAML, JSON, INI). Never echoes the value; names the file, the kind and `secretpeek`. See below. |
+| `secretpeek` | Shows a config or credential file by PROPERTIES: mode, size, format, and its keys with each value replaced by a class (`<secret jwt, 412 bytes>`, `<url https://host:port>`). `--key K` prints one value only for a known non-secret key whose value has no secret shape. |
 | `credscan` | Finds credentials embedded in git remote URLs across a whole machine, and strips them. Tells a secret from a username by SHAPE, so `ssh://git@github.com/…` is not a finding — and reports a credential's properties, never its value. Exits non-zero when it finds one, and exits 3 rather than 0 when it could not read what it walked. |
 | `git-post-checkout-guard` | The **global** post-checkout hook. A clone is where a credentialed URL gets WRITTEN, and git has no hook before one, so this is the earliest a hook can run: it takes the credential out of .git/config before the next fetch echoes it, and says so while you are still looking. It cannot stop the clone — see what it does not cover, below. |
 | `glscopes` | `ghscopes` for **GitLab**: which account a token belongs to, its scopes and when it expires — asked of the instance with the token in a header, never read out of the file. Exits non-zero if a demanded scope is missing, and knows GitLab's containments (`api` ⊃ `read_api`, `write_repository` ⊃ `read_repository`, but **not** `write_registry` ⊃ `read_registry`). |
@@ -536,6 +538,8 @@ go install github.com/go-gitsafe/gitsafe/cmd/ghrunner@latest
 go install github.com/go-gitsafe/gitsafe/cmd/credscan@latest
 go install github.com/go-gitsafe/gitsafe/cmd/reauthor@latest
 go install github.com/go-gitsafe/gitsafe/cmd/guard-bash@latest
+go install github.com/go-gitsafe/gitsafe/cmd/guard-read@latest
+go install github.com/go-gitsafe/gitsafe/cmd/secretpeek@latest
 go install github.com/go-gitsafe/gitsafe/cmd/hookcheck@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glscopes@latest
 go install github.com/go-gitsafe/gitsafe/cmd/glci@latest
@@ -2069,6 +2073,45 @@ origin/main` in a clone under `~/Documents/VCS/GIT/localhost` (a shallow clone
 there if none exists). `gh search issues|prs|repos|commits` and
 `gh api search/issues` stay allowed: they read the tracker. No escape.
 
+
+## `guard-read` and `secretpeek`: a file's name says nothing about its content
+
+`guard-bash` rule 5 (`secretarg`) is NAME-based: it fires on a command
+substitution over a file called token, secret or `.pem`. On 2026-11-26 a
+subagent wanted a URL, ran a plain `cat` on a harmlessly named GARM
+`cli-config.toml`, and printed an admin JWT into the transcript; on 2026-10-04
+a token file had gone out through `awk`. Neither name looked like a secret.
+
+`guard-read` opens the file itself (regular files only, the first 1 MiB), scans
+the content, and refuses when it finds a secret. It judges two tools:
+
+- **Read**: the `file_path`.
+- **Bash**: the file operands of a program that displays content (`cat`, `head`,
+  `tail`, `less`, `bat`, `grep`/`rg` unless `-c -q -l -L`, `sed` unless `-i`,
+  `awk`, `jq`, `yq`, `strings`, `xxd`, `od`, `base64`, `diff`, …) and a `< file`
+  redirect. Globs are expanded (64 files at most).
+
+Known credential paths are refused whatever the content (`~/.config/garm-ci/`,
+`clouds.yaml`, a `.pem` that holds a private key, `~/.github-token`, `~/.ssh/id_*`).
+The refusal names the file and the KIND, never the value, and points to the
+safe alternative:
+
+    secretpeek ~/.config/garm-ci/cli-config.toml            # keys, classes, no values
+    secretpeek --key base_url ~/.config/garm-ci/cli-config.toml
+
+Install in `~/.claude/settings.json` as a PreToolUse hook with matcher
+`Read|Bash` and command `guard-read`.
+
+### It fails open, and says so
+
+A file it cannot read is allowed, with a line on stderr (`content NOT checked`):
+a refusal is not a verdict about a file never seen. What it does NOT cover:
+`ssh host cat file` (the file is not here to open), a path built at run time
+(`cat $(…)`), a pager started interactively, and the Grep tool.
+
+[Fuzzed](secretread/secretread_test.go): the content scanner, the format readers
+and the shell-operand reader. Every test secret is assembled from fragments, so
+the test files are not refused when a session reads them.
 
 ## GitLab: `glscopes` and `glci`
 
