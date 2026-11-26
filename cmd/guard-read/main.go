@@ -38,7 +38,12 @@ type decision struct {
 	} `json:"hookSpecificOutput"`
 }
 
-var osExit = os.Exit
+// osExit and marshal are variables so a test can reach main's exit and the
+// marshal failure, which no real input produces.
+var (
+	osExit  = os.Exit
+	marshal = json.Marshal
+)
 
 func main() {
 	home, _ := os.UserHomeDir()
@@ -48,10 +53,8 @@ func main() {
 // run always exits 0: the answer is in the JSON, and a guard that failed
 // closed on its own bug would block every read on the machine.
 func run(stdin io.Reader, stdout, stderr io.Writer, home string) int {
-	b, err := io.ReadAll(stdin)
-	if err != nil {
-		return 0
-	}
+	// A read error leaves what was read, which does not parse: no opinion.
+	b, _ := io.ReadAll(stdin)
 	var p payload
 	if json.Unmarshal(b, &p) != nil {
 		return 0
@@ -60,9 +63,6 @@ func run(stdin io.Reader, stdout, stderr io.Writer, home string) int {
 	var unreadable []secretread.Verdict
 	switch p.ToolName {
 	case "Read":
-		if p.ToolInput.FilePath == "" {
-			return 0
-		}
 		v := secretread.CheckFile(secretread.Expand(p.ToolInput.FilePath, home, p.Cwd), home)
 		if v.Err != nil {
 			unreadable = append(unreadable, v)
@@ -71,9 +71,6 @@ func run(stdin io.Reader, stdout, stderr io.Writer, home string) int {
 			refused = &v
 		}
 	case "Bash":
-		if p.ToolInput.Command == "" {
-			return 0
-		}
 		refused, unreadable = secretread.CheckCommand(p.ToolInput.Command, p.Cwd, home)
 	default:
 		return 0
@@ -88,7 +85,7 @@ func run(stdin io.Reader, stdout, stderr io.Writer, home string) int {
 	d.HookSpecificOutput.HookEventName = "PreToolUse"
 	d.HookSpecificOutput.PermissionDecision = "deny"
 	d.HookSpecificOutput.PermissionDecisionReason = Reason(*refused)
-	out, err := json.Marshal(d)
+	out, err := marshal(d)
 	if err != nil {
 		return 0
 	}

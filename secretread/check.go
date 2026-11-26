@@ -3,7 +3,6 @@ package secretread
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,13 +84,7 @@ func CheckFile(path, home string) Verdict {
 	if !st.Mode().IsRegular() {
 		return v
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		v.Err = err
-		return v
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, MaxBytes))
+	data, err := readBounded(path)
 	if err != nil {
 		v.Err = err
 		return v

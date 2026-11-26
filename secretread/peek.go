@@ -88,7 +88,7 @@ func Peek(w io.Writer, path string) error {
 // AND the value has no secret shape.
 func Key(path, key string) (string, error) {
 	last := strings.ToLower(lastSegment(key))
-	if !NonSecretKeys[last] || SecretKey(key) {
+	if !NonSecretKeys[last] {
 		return "", fmt.Errorf("key %q is not on the non-secret list; refusing to print it", key)
 	}
 	data, err := readBounded(path)

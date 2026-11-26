@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,32 @@ func TestHookFailsOpenAndSaysSo(t *testing.T) {
 	out, errs := call(t, `{"tool_name":"Read","tool_input":{"file_path":"`+p+`"}}`)
 	if out != "" || !strings.Contains(errs, "content NOT checked") {
 		t.Fatalf("out=%q err=%q", out, errs)
+	}
+}
+
+type badReader struct{}
+
+func (badReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
+
+func TestUnreadableInputAndMarshalFailureAllow(t *testing.T) {
+	var out, errb bytes.Buffer
+	if run(badReader{}, &out, &errb, "/h") != 0 || out.Len() != 0 {
+		t.Fatal("unreadable stdin must allow")
+	}
+	p := filepath.Join(t.TempDir(), "s")
+	os.WriteFile(p, []byte("token = \""+tok+"\"\n"), 0o600)
+	old := marshal
+	marshal = func(any) ([]byte, error) { return nil, errors.New("boom") }
+	defer func() { marshal = old }()
+	run(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"`+p+`"}}`), &out, &errb, "/h")
+	if out.Len() != 0 {
+		t.Fatal("a marshal failure must allow, not print half an answer")
+	}
+	// An empty path or command is nothing to display.
+	for _, s := range []string{`{"tool_name":"Read","tool_input":{}}`, `{"tool_name":"Bash","tool_input":{}}`} {
+		if o, _ := call(t, s); o != "" {
+			t.Fatalf("%s: %s", s, o)
+		}
 	}
 }
 
