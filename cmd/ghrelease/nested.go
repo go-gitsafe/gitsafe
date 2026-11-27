@@ -41,30 +41,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-)
 
-// splitTag separates a tag into its module subdirectory ("" for the root
-// module) and the version part, which must start with v. ok is false for a tag
-// with no v or with an empty, "." or ".." directory element.
-func splitTag(tag string) (dir, ver string, ok bool) {
-	i := strings.LastIndex(tag, "/")
-	if i < 0 {
-		if !strings.HasPrefix(tag, "v") {
-			return "", "", false
-		}
-		return "", tag, true
-	}
-	dir, ver = tag[:i], tag[i+1:]
-	if !strings.HasPrefix(ver, "v") {
-		return "", "", false
-	}
-	for _, seg := range strings.Split(dir, "/") {
-		if seg == "" || seg == "." || seg == ".." || strings.ContainsAny(seg, " \t\\:?*[~^@{") {
-			return "", "", false
-		}
-	}
-	return dir, ver, true
-}
+	"github.com/go-gitsafe/gitsafe/relver"
+)
 
 // moduleDirPath reads the module path from a go.mod: the first module
 // directive, plain, quoted, or in a block.
@@ -185,8 +164,8 @@ func readGoMod(token, repo, path, sha string) (string, bool, error) {
 // checkNestedModule is asked at the merge commit. A non-empty refusal names what
 // was found; err is a failure to ask.
 func checkNestedModule(token, repo, tag, sha string) (refusal string, err error) {
-	dir, ver, _ := splitTag(tag)
-	v, perr := parseStrict(ver)
+	dir, ver, _ := relver.SplitTag(tag)
+	v, perr := relver.ParseStrict(ver)
 	if perr != nil {
 		return perr.Error(), nil
 	}

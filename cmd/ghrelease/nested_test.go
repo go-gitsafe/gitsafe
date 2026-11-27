@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-gitsafe/gitsafe/relver"
 )
 
 // contentsReply is GitHub's "Get repository content" answer for a file.
@@ -334,7 +336,7 @@ func TestSplitTag(t *testing.T) {
 		{"a/../v1.0.0", "", "", false},
 		{"a/./v1.0.0", "", "", false},
 	} {
-		dir, ver, ok := splitTag(c.tag)
+		dir, ver, ok := relver.SplitTag(c.tag)
 		if dir != c.dir || ver != c.ver || ok != c.ok {
 			t.Errorf("splitTag(%q) = %q %q %v, want %q %q %v", c.tag, dir, ver, ok, c.dir, c.ver, c.ok)
 		}
