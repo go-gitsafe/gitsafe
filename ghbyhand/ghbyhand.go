@@ -235,6 +235,21 @@ var waitRules = []struct {
 			"never a pass"},
 }
 
+// flagRules are writes whose program differs by FLAG. They are consulted before
+// rules, because `gh pr ready --undo` matches the `pr ready` row and would
+// otherwise be told to run `ghpr … ready`, which is the opposite act.
+// `gh pr ready --undo` converts a pull request back to a draft (GraphQL
+// convertPullRequestToDraft); ghpr has a verb for it since fleettools v0.181.0.
+var flagRules = []struct {
+	verb    string
+	flag    string
+	act     string
+	instead string
+}{
+	{"pr ready", "--undo", "convert a pull request back to a draft",
+		"ghpr <owner/repo> <number> draft"},
+}
+
 // MissingTool is what a refusal says when no fleet program does the act. It
 // asks for the tool: the act is not to be typed by hand, and not to be dropped
 // silently either.
@@ -384,6 +399,11 @@ func checkStatement(st string) Finding {
 				continue
 			}
 			if w.flag == "" || hasFlag(words, w.flag) {
+				return Finding{Match: short(st), Act: w.act, Instead: w.instead}
+			}
+		}
+		for _, w := range flagRules {
+			if w.verb == pair && hasFlag(words, w.flag) {
 				return Finding{Match: short(st), Act: w.act, Instead: w.instead}
 			}
 		}
