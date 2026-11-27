@@ -53,6 +53,7 @@ func TestRefuses(t *testing.T) {
 		{"pr close", "gh pr close 77 -R go-fft/fft", "ghpr"},
 		{"pr reopen", "gh pr reopen 17 --repo usbarmory/tamago-go", "ghpr"},
 		{"pr ready", "gh pr ready 1 -R go-wasmcontainers/relay", "ghpr"},
+		{"pr ready --undo (draft)", "gh pr ready 1 --undo -R go-wasmcontainers/relay", "ghpr <owner/repo> <number> draft"},
 		{"pr update-branch", "gh pr update-branch 815", "ghpr"},
 		{"pr review", "gh pr review 105 --approve --body-file b.md", "ghpr"},
 		{"workflow run", "gh workflow run build.yml -f recipes=x", "ghrun <owner/repo> dispatch"},
