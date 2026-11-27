@@ -40,8 +40,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
+
+	"github.com/go-gitsafe/gitsafe/relver"
 )
 
 // maxTagBytes bounds the one response listTags reads. 8 MiB is roughly 90 000
@@ -52,74 +53,9 @@ const maxTagBytes = 8 << 20
 // orderCheck is a seam, so a test can put the old behaviour back (a planted control).
 var orderCheck = checkOrder
 
-// version is a stable semantic version.
-type version [3]uint64
-
-func (v version) String() string { return fmt.Sprintf("v%d.%d.%d", v[0], v[1], v[2]) }
-
-func (v version) cmp(o version) int {
-	for i := range v {
-		switch {
-		case v[i] < o[i]:
-			return -1
-		case v[i] > o[i]:
-			return 1
-		}
-	}
-	return 0
-}
-
-// parseCore reads "vX.Y.Z" with no leading zeros. rest is what follows Z
-// ("" or "-pre" or "+build").
-func parseCore(tag string) (v version, rest string, ok bool) {
-	s, found := strings.CutPrefix(tag, "v")
-	if !found {
-		return v, "", false
-	}
-	i := strings.IndexAny(s, "-+")
-	core := s
-	if i >= 0 {
-		core, rest = s[:i], s[i:]
-	}
-	parts := strings.Split(core, ".")
-	if len(parts) != 3 {
-		return v, "", false
-	}
-	for k, p := range parts {
-		if p == "" || len(p) > 9 || (len(p) > 1 && p[0] == '0') {
-			return v, "", false
-		}
-		n, err := strconv.ParseUint(p, 10, 64)
-		if err != nil {
-			return v, "", false
-		}
-		v[k] = n
-	}
-	return v, rest, true
-}
-
-// parseStrict accepts only vMAJOR.MINOR.PATCH.
-func parseStrict(tag string) (version, error) {
-	v, rest, ok := parseCore(tag)
-	if !ok || rest != "" {
-		return v, fmt.Errorf("%q is not vMAJOR.MINOR.PATCH (semver.org items 2 and 9: numbers without leading zeros, no pre-release or build)", tag)
-	}
-	return v, nil
-}
-
-// highestRelease is the highest stable tag among names, and whether there is one.
-func highestRelease(names []string) (best version, found bool) {
-	for _, n := range names {
-		v, rest, ok := parseCore(n)
-		if !ok || strings.HasPrefix(rest, "-") { // not semver, or a pre-release
-			continue
-		}
-		if !found || v.cmp(best) > 0 {
-			best, found = v, true
-		}
-	}
-	return best, found
-}
+// The version type, its parse and its ordering are package relver, shared with
+// ghmerge's release gate.
+type version = relver.Version
 
 // listTags returns the names of the repository's <prefix>v* tags (prefix is ""
 // or "<dir>/"), full names, prefix included.
@@ -173,8 +109,8 @@ func listTags(token, repo, prefix string, b *budget) ([]string, error) {
 // prev is the highest existing tag of the same line below the new one (with its
 // <dir>/ prefix), for the release notes of a nested module.
 func checkOrder(token, repo, tag string, allowLower bool, b *budget) (lower bool, prev string, refusal string, err error) {
-	dir, ver, _ := splitTag(tag)
-	nv, perr := parseStrict(ver)
+	dir, ver, _ := relver.SplitTag(tag)
+	nv, perr := relver.ParseStrict(ver)
 	if perr != nil {
 		return false, "", perr.Error(), nil
 	}
@@ -186,17 +122,11 @@ func checkOrder(token, repo, tag string, allowLower bool, b *budget) (lower bool
 	if err != nil {
 		return false, "", "", err
 	}
-	line := make([]string, 0, len(names))
-	for _, n := range names {
-		if s, ok := strings.CutPrefix(n, prefix); ok {
-			line = append(line, s)
-		}
-	}
-	hi, found := highestRelease(line)
+	hi, found := relver.Highest(relver.Line(names, prefix))
 	if !found {
 		return false, "", "", nil
 	}
-	if nv.cmp(hi) > 0 {
+	if nv.Cmp(hi) > 0 {
 		return false, prefix + hi.String(), "", nil
 	}
 	if allowLower {
@@ -206,7 +136,7 @@ func checkOrder(token, repo, tag string, allowLower bool, b *budget) (lower bool
 		repo += " (" + prefix + "v* tags)"
 	}
 	rel := "lower than"
-	if nv.cmp(hi) == 0 {
+	if nv.Cmp(hi) == 0 {
 		rel = "equal to"
 	}
 	next := func(v version) string { return prefix + v.String() }
@@ -215,5 +145,5 @@ func checkOrder(token, repo, tag string, allowLower bool, b *budget) (lower bool
 		"next versions: PATCH %s, MINOR %s, MAJOR %s\n"+
 		"(a deliberate backport on a release branch: -allow-lower; it is then not marked Latest)",
 		tag, rel, repo, prefix+hi.String(), prefix+hi.String(),
-		next(version{hi[0], hi[1], hi[2] + 1}), next(version{hi[0], hi[1] + 1, 0}), next(version{hi[0] + 1, 0, 0})), nil
+		next(hi.NextPatch()), next(hi.NextMinor()), next(hi.NextMajor())), nil
 }

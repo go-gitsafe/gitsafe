@@ -70,6 +70,7 @@ import (
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
 	"github.com/go-gitsafe/gitsafe/ghauth"
+	"github.com/go-gitsafe/gitsafe/relver"
 	"github.com/go-gitsafe/gitsafe/waiver"
 	"github.com/spf13/cobra"
 )
@@ -205,7 +206,7 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "usage: ghrelease [flags] [owner/repo] <pr-number> <tag>\n")
 		return 2
 	}
-	dir, _, _ := splitTag(tag) // "" for the root module; target has checked the shape
+	dir, _, _ := relver.SplitTag(tag) // "" for the root module; target has checked the shape
 	if o.issuesWaiverSet {
 		if strings.TrimSpace(o.issuesWaiver) == "" {
 			fmt.Fprintf(stderr, "ghrelease: --issues-waiver needs a reason; there is no default and an empty one is refused\n")
@@ -428,7 +429,7 @@ func resumeRelease(args []string, tokenFile string, notes *string, makeLatest bo
 	default:
 		err = errors.New("-release-only takes [owner/repo] <tag>")
 	}
-	dir, _, shaped := splitTag(tag)
+	dir, _, shaped := relver.SplitTag(tag)
 	if err == nil && !shaped {
 		err = fmt.Errorf("%q is not a version tag; Go modules want a leading v (a nested module's tag is <dir>/vX.Y.Z)", tag)
 	}
@@ -550,7 +551,7 @@ func target(args []string) (repo string, number int, tag string, err error) {
 	if err != nil {
 		return "", 0, "", fmt.Errorf("%q is not a pull request number", args[len(args)-2])
 	}
-	if _, _, ok := splitTag(tag); !ok {
+	if _, _, ok := relver.SplitTag(tag); !ok {
 		return "", 0, "", fmt.Errorf("%q is not a version tag; Go modules want a leading v (a nested module's tag is <dir>/vX.Y.Z)", tag)
 	}
 	return repo, number, tag, nil

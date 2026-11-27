@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/go-gitsafe/gitsafe/cliflags"
+	"github.com/go-gitsafe/gitsafe/relver"
 	"github.com/spf13/cobra"
 )
 
@@ -183,7 +184,7 @@ func readState(token, repo string, b *budget) (repoState, error) {
 func (st repoState) missing(skip string, since time.Time) []tagInfo {
 	var out []tagInfo
 	for _, t := range st.tags {
-		if _, _, ok := splitTag(t.Name); !ok || t.Name == skip || st.released[t.Name] {
+		if _, _, ok := relver.SplitTag(t.Name); !ok || t.Name == skip || st.released[t.Name] {
 			continue
 		}
 		if st.truncated && t.Date.Before(st.oldestRelease) {
@@ -205,9 +206,9 @@ func (st repoState) missing(skip string, since time.Time) []tagInfo {
 func (st repoState) previous(t tagInfo) string {
 	best := ""
 	var bestDate time.Time
-	tdir, _, _ := splitTag(t.Name)
+	tdir, _, _ := relver.SplitTag(t.Name)
 	for _, o := range st.tags {
-		odir, _, ok := splitTag(o.Name)
+		odir, _, ok := relver.SplitTag(o.Name)
 		if !ok || odir != tdir {
 			continue
 		}
