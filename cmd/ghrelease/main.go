@@ -590,7 +590,7 @@ func originRepo() (string, error) {
 // ends with one of them being wrong. The exit status is taken from the process,
 // where nothing can eat it.
 func execMerge(repo string, number int, flags []string, stdout, stderr io.Writer) error {
-	cmd := exec.Command("ghmerge", append(flags, repo, strconv.Itoa(number))...)
+	cmd := exec.Command("ghmerge", mergeArgs(flags, repo, number)...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	var ee *exec.ExitError
@@ -598,6 +598,15 @@ func execMerge(repo string, number int, flags []string, stdout, stderr io.Writer
 		return errMergedIssuesOpen
 	}
 	return err
+}
+
+// mergeArgs is ghmerge's whole command line. ghrelease IS the release: the tag
+// follows this merge, so ghmerge's release gate (which refuses a merge that
+// nothing tags) must not refuse its own caller, and --no-release says so. The
+// flags are copied, never appended to in place.
+func mergeArgs(flags []string, repo string, number int) []string {
+	args := append([]string{}, flags...)
+	return append(args, "--no-release", "ghrelease tags this merge", repo, strconv.Itoa(number))
 }
 
 // mergeFlags is what ghrelease passes on to ghmerge: the waiver and its

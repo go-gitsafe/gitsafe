@@ -108,6 +108,12 @@ type options struct {
 	// can be refused rather than read as "no waiver". See package issuegate.
 	issuesWaiver    string
 	issuesWaiverSet bool
+	// noRelease lets a pull request that changes Go code in a tagged module be
+	// merged without a tag (a series whose later pull request carries it, or
+	// ghrelease, which tags); noReleaseSet says the flag was given, so an EMPTY
+	// reason is refused. See release.go.
+	noRelease    string
+	noReleaseSet bool
 }
 
 // RootCmd returns the command, for tests to drive with SetArgs/SetOut/SetErr.
@@ -119,6 +125,7 @@ func RootCmd() *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.issuesWaiverSet = cmd.Flags().Changed("issues-waiver")
+			o.noReleaseSet = cmd.Flags().Changed("no-release")
 			if code := execute(args, o, cmd.OutOrStdout(), cmd.ErrOrStderr()); code != 0 {
 				return cliflags.Status(code)
 			}
@@ -138,6 +145,9 @@ func RootCmd() *cobra.Command {
 		"judged: the record of the local run that stands in for the waived check (required with --waive)")
 	f.StringVar(&o.issuesWaiver, "issues-waiver", "", "merge although the body mentions an open issue without `Closes`/`Fixes`/`Resolves` or `Refs` in front of it; "+
 		"the reason is posted as a comment on the pull request. There is no default and an empty reason is refused")
+	f.StringVar(&o.noRelease, "no-release", "", "merge although this pull request changes Go code (a non-test .go file, go.mod, go.sum) in a module that has vX.Y.Z tags, "+
+		"which `ghrelease OWNER/REPO N vX.Y.Z` would merge AND tag; for a series whose later pull request carries the tag. "+
+		"The reason is printed. There is no default and an empty reason is refused")
 	return c
 }
 
@@ -154,6 +164,10 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	}
 	if o.issuesWaiverSet && strings.TrimSpace(o.issuesWaiver) == "" {
 		fmt.Fprintf(stderr, "ghmerge: --issues-waiver needs a reason; there is no default and an empty one is refused\n")
+		return 2
+	}
+	if o.noReleaseSet && strings.TrimSpace(o.noRelease) == "" {
+		fmt.Fprintf(stderr, "ghmerge: --no-release needs a reason; there is no default and an empty one is refused\n")
 		return 2
 	}
 	if err := waiver.Names(o.waive); err != nil {
@@ -192,6 +206,13 @@ func execute(args []string, o options, stdout, stderr io.Writer) int {
 	}
 	if pr.State != "open" {
 		fmt.Fprintf(stderr, "ghmerge: %s#%d is %s\n", repo, number, pr.State)
+		return 1
+	}
+	// ⛔ THE RELEASE GATE, read-only and before anything is written. See release.go.
+	if o.noReleaseSet {
+		fmt.Fprintf(stdout, "%s#%d: --no-release: %s\n", repo, number, strings.TrimSpace(o.noRelease))
+	} else if why := checkRelease(token, repo, pr, number); why != "" {
+		fmt.Fprintf(stderr, "ghmerge: refusing to merge %s#%d — %s\n", repo, number, why)
 		return 1
 	}
 
@@ -553,11 +574,14 @@ func repoFromRemote(url string) (string, error) {
 }
 
 type pr struct {
-	State     string `json:"state"`
-	Merged    bool   `json:"merged"`
-	Draft     bool   `json:"draft"`
-	Body      string `json:"body"`
-	Mergeable *bool  `json:"mergeable"`
+	State  string `json:"state"`
+	Merged bool   `json:"merged"`
+	Draft  bool   `json:"draft"`
+	Body   string `json:"body"`
+	// ChangedFiles is how many files the pull request changes, to tell a file
+	// list read in full from one cut short (see release.go).
+	ChangedFiles int   `json:"changed_files"`
+	Mergeable    *bool `json:"mergeable"`
 	// MergeableState answers a different question from Mergeable, on the same
 	// object this tool already fetches. Mergeable is "does it apply cleanly";
 	// MergeableState is "may it be merged right now". A pull request behind a
