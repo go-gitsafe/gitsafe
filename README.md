@@ -211,6 +211,39 @@ split a keyword from the reference it owns.
 ⚠ Callers pinning an older `gitsafe` keep the old reading, so a body written
 against v0.59.0 is judged by whichever version the caller built with.
 
+### The release gate: a Go change in a tagged module is merged with a tag, or not at all
+
+`ghmerge` alone puts the code on `main` and leaves it invisible to `go get`:
+the module proxy resolves `@latest` to the **highest semver tag** of the
+repository ([Go modules reference, "Versions"](https://go.dev/ref/mod#versions)),
+and a module version in a VCS repository is its tag
+([§ "Mapping versions to commits"](https://go.dev/ref/mod#vcs-version)); an
+untagged commit is only a pseudo-version, which nothing downstream picks while a
+tag exists. It happened eight times (the last two on 2026-11-27, by sub-agents
+told to "ghmerge, then ghrelease"), so the rule is a gate, not a note.
+
+`ghmerge OWNER/REPO N` **refuses before merging** when all of these hold: the
+repository has at least one stable `vX.Y.Z` tag, has a `go.mod` at its root or
+below, and the pull request changes a non-`_test.go` `.go` file, a `go.mod` or a
+`go.sum` (a rename out of one counts). It names the exact command, with the next
+PATCH computed by semver over **every** tag (GitHub's tag listing is not in
+semver order):
+
+    ghmerge: refusing to merge go-numerics/special#106 — go-numerics/special is a
+    tagged Go module (highest release v0.22.0) and this pull request changes Go
+    code (go.mod, x.go). Merged without a tag, `go get` and the module proxy keep
+    resolving @latest to v0.22.0 and never see it (…).
+    ghmerge: merge AND tag it in one command: ghrelease go-numerics/special 106 v0.22.1
+    ghmerge: if a LATER pull request of a series carries the tag: ghmerge --no-release '<why>' go-numerics/special 106
+
+What the gate cannot read is **not** "no Go change": a failed tag, file or tree
+read, a file list shorter than the pull request's `changed_files`, or a
+truncated tree with no `go.mod` in it refuses, naming the cause.
+`--no-release '<why>'` merges anyway for a series whose later pull request
+carries the tag; the reason is printed, there is no default and an empty one is
+refused (exit 2). `ghrelease` passes it to the `ghmerge` it runs, since it is
+the release; it needs a `ghmerge` of the same version or newer on `PATH`.
+
 ### `--wait`: a refusal that carries its own remedy
 
 GitHub refuses a merge with a 403 that **names the instant the window reopens**.
@@ -267,7 +300,7 @@ which is why `ghauth.RetryAt` reads those and nothing else.
 | `git-pre-push-guard` | The **global** pre-push hook. Refuses a URL that carries a credential, a write to the branch pull requests land on, and a push that publishes an undeclared nested repository — whoever runs git, and whatever they run it with. |
 | `gitpush` | Pushes without a token ever reaching a command line: it **names** a credential helper rather than reading the secret, refuses a remote URL that carries one, and redacts what it prints by shape. Takes the same arguments as the command it replaces. |
 | `git-credential-tokenfile` | A minimal credential helper: serves a token file to git over a pipe. Answers only `get`, only for one host, and refuses to write when stdout is a terminal. Rename it for your own account — git finds helpers by the `git-credential-` prefix. |
-| `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. It refuses a body that mentions an open issue without `Closes`/`Refs`, and closes what GitHub left open after the merge (`--issues-waiver` to override). **Stacked pull requests:** before it deletes the merged head branch (also under `ghrelease`, which merges through it) it retargets every OPEN pull request of the same repository whose base is that branch onto the merged pull request's base, reading each one back to verify, because GitHub otherwise CLOSES them (go-avkit/avkit#102, go-avkit/decode#31). If any retarget fails the branch is kept, the pull request is named, and it exits 4 after saying the merge itself happened. With `--wait 30m` it also waits out a 403 that names the instant the window reopens, instead of handing that clock to a person. |
+| `ghmerge` | Merges one pull request, and only on evidence: a check actually ran, every check that ran passed, and GitHub says it is mergeable. "Nothing failing" is not "everything passed" -- a pull request with no merge ref never runs a workflow, and the silence reads as green. It refuses a body that mentions an open issue without `Closes`/`Refs`, and closes what GitHub left open after the merge (`--issues-waiver` to override). It refuses a Go change in a tagged module that no tag will carry and names `ghrelease OWNER/REPO N vX.Y.Z` (`--no-release '<why>'` to override). **Stacked pull requests:** before it deletes the merged head branch (also under `ghrelease`, which merges through it) it retargets every OPEN pull request of the same repository whose base is that branch onto the merged pull request's base, reading each one back to verify, because GitHub otherwise CLOSES them (go-avkit/avkit#102, go-avkit/decode#31). If any retarget fails the branch is kept, the pull request is named, and it exits 4 after saying the merge itself happened. With `--wait 30m` it also waits out a 403 that names the instant the window reopens, instead of handing that clock to a person. |
 | `ghnew` | Creates a repository that **already has a default branch**, so no commit of yours ever has to land on it unreviewed. An empty repository has no branches, `gh pr create` has no base, and the way out that presents itself is pushing straight to the default branch — four repositories were bootstrapped that way here in one afternoon. It asks GitHub to write the first commit, then **looks** to confirm the branch is there before saying it worked. There is no flag to skip that. |
 | `ghscopes` | Says which account a token belongs to and what it may do, exiting non-zero if a demanded scope is missing. Check a token's scopes with this, **never** by printing it. |
 | `ghpkg` | Lists and deletes the versions of a published package. Refuses to delete without `--yes`, printing what it would remove; refuses a tag that names no version or two; and **names the other tags on the manifest it is about to delete**, because several can point at one. |
