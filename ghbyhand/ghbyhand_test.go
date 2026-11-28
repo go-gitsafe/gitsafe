@@ -42,6 +42,8 @@ func TestRefuses(t *testing.T) {
 		{"api PUT of a pages site", "gh api -X PUT repos/go-slides-usercontent/go-slides-usercontent.github.io/pages -f build_type=workflow", "ghrepo <owner/repo> pages workflow"},
 		{"api POST creating a pages site", "gh api repos/o/r/pages -f build_type=workflow", "ghrepo <owner/repo> pages workflow"},
 		{"api PUT enabling private vulnerability reporting", "gh api -X PUT repos/go-turn/turn/private-vulnerability-reporting", "ghrepo <owner/repo> private-reporting"},
+		{"api DELETE of a branch ref", "gh api -X DELETE repos/o/r/git/refs/heads/x", "ghbranch <owner/repo> delete <branch>"},
+		{"api DELETE of a slashed branch ref", "gh api --method DELETE repos/o/r/git/refs/heads/ab/none", "ghbranch <owner/repo> delete <branch>"},
 		{"api DELETE disabling private vulnerability reporting", "gh api --method DELETE repos/o/r/private-vulnerability-reporting", "private-reporting enable|disable|status"},
 		{"api PUT turning Actions on", "gh api -X PUT repos/go-simd/highway/actions/permissions -F enabled=true", "ghrepo <owner/repo> actions enable"},
 		{"api PUT enabling a workflow", "gh api -X PUT repos/o/r/actions/workflows/123/enable", "actions enable|status"},
@@ -140,7 +142,6 @@ func TestRefusesWhatNoProgramDoes(t *testing.T) {
 		"gh issue transfer 9 o/other",
 		"gh run delete 42480491136",
 		"gh secret delete NAME",
-		"gh api -X DELETE repos/o/r/git/refs/heads/x",
 		"gh api repos/o/r/pulls -f title=t -f head=x -f base=main",
 		"gh api rate_limit -F a=b",
 		`gh api graphql -f query='mutation { addStar(input:{starrableId:"x"}) { clientMutationId } }'`,
@@ -456,6 +457,34 @@ func TestCheckAPIWithoutAPath(t *testing.T) {
 	} {
 		if f := Check(cmd); f.Found() {
 			t.Errorf("Check(%q) refused it: %s", cmd, f.Instead)
+		}
+	}
+}
+
+func TestIsBranchRefPath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"repos/o/r/git/refs/heads/x":      true,
+		"repos/o/r/git/refs/heads/ab/x":   true,
+		"/repos/o/r/git/refs/heads/x/":    true,
+		"repos/o/r/git/refs/heads":        false,
+		"repos/o/r/git/refs/tags/v1":      false,
+		"repos/o/r/git/trees/heads/x":     false,
+		"orgs/o/r/git/refs/heads/x":       false,
+		"repos/o/r/branches/x/protection": false,
+	} {
+		if got := isBranchRefPath(path); got != want {
+			t.Errorf("isBranchRefPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestReadingABranchRefIsAllowed(t *testing.T) {
+	for _, cmd := range []string{
+		"gh api repos/o/r/git/refs/heads/x",
+		"gh api -X GET repos/o/r/git/refs/heads/x",
+	} {
+		if f := Check(cmd); f.Found() {
+			t.Errorf("Check(%q) refused a read: %s", cmd, f)
 		}
 	}
 }

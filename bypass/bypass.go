@@ -125,6 +125,9 @@ func checkGit(args []string) Finding {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") {
 			if a == "push" {
+				if deletesBranch(args[i+1:]) {
+					return deleteFinding()
+				}
 				return pushFinding()
 			}
 			return Finding{} // the subcommand, and it is not push
@@ -205,6 +208,37 @@ func pushFinding() Finding {
 		Advice: "Push with gitpush, which takes the same arguments. It names a credential helper\n" +
 			"rather than reading the token, refuses a remote URL that carries a credential,\n" +
 			"and redacts what it prints.\n\n    gitpush origin main",
+	}
+}
+
+// deletesBranch reports whether the arguments after `push` delete a remote
+// ref: --delete, -d (alone or in a cluster such as -fd), or a refspec with
+// nothing before its colon (`:topic`, `+:topic`).
+func deletesBranch(args []string) bool {
+	for _, a := range args {
+		switch {
+		case a == "--delete":
+			return true
+		case strings.HasPrefix(a, "--"):
+		case strings.HasPrefix(a, "-") && len(a) > 1 && !strings.ContainsAny(a, "=") && strings.Contains(a[1:], "d"):
+			return true
+		case strings.HasPrefix(a, ":") || strings.HasPrefix(a, "+:"):
+			return true
+		}
+	}
+	return false
+}
+
+func deleteFinding() Finding {
+	return Finding{
+		Rule:  "push",
+		Match: "git push --delete",
+		Why: "this deletes a remote branch by hand, with no check that it is not the default branch, " +
+			"protected, open in a pull request or unlanded",
+		Advice: "Use ghbranch, which checks every branch before it deletes any, and reads each\n" +
+			"deletion back.\n\n" +
+			"    ghbranch owner/repo delete topic-a topic-b\n" +
+			"    ghbranch owner/repo delete topic-a --dry-run",
 	}
 }
 

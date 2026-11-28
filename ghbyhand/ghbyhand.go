@@ -527,6 +527,14 @@ func checkAPI(st string, words []string) Finding {
 			Act:     "switch a repository's issues tab on or off",
 			Instead: "ghrepo <owner/repo> issues enable|disable|status",
 		}
+	case isBranchRefPath(path):
+		// DELETE /repos/{o}/{r}/git/refs/heads/{branch}: ghbranch refuses the
+		// default, a protected, an open and an unlanded branch before deleting.
+		return Finding{
+			Match:   short(st),
+			Act:     "delete or move a remote branch",
+			Instead: "ghbranch <owner/repo> delete <branch>... [--dry-run] [--force-unlanded]",
+		}
 	case isAdvisoryPath(path):
 		// POST creates a draft, PATCH publishes or edits one (fleettools ghadvisory).
 		return Finding{
@@ -536,6 +544,13 @@ func checkAPI(st string, words []string) Finding {
 		}
 	}
 	return missing(st, "write to the GitHub API")
+}
+
+// isBranchRefPath reports whether the path is one branch's git ref,
+// repos/{o}/{r}/git/refs/heads/{branch...}.
+func isBranchRefPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) >= 7 && parts[0] == "repos" && parts[3] == "git" && parts[4] == "refs" && parts[5] == "heads"
 }
 
 // isActionsEnablePath reports whether the path is a repository's Actions
